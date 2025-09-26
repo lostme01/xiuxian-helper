@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  game-helper:
+    build: .
+    container_name: tg-game-helper
+    restart: unless-stopped
+    environment:
+      # --- 核心Telegram设置 ---
+      # 从 my.telegram.org 获取
+      - API_ID=1234567
+      - API_HASH='your_api_hash_here'
+
+      # --- 管理员与游戏设置 ---
+      # 你的管理账号的数字 User ID
+      - ADMIN_USER_ID=7654321
+      # 游戏群组的数字 Group ID (必须是负数)
+      - GAME_GROUP_ID=-1001234567890
+
+      # --- 时区设置 ---
+      # 确保容器和日志时间都是北京时间
+      - TZ=Asia/Shanghai
+
+    volumes:
+      # 挂载data目录，用于持久化session文件和定时任务数据库
+      - ./app/data:/app/data
+      # 挂载logs目录，用于持久化日志
+      - ./logs:/app/logs

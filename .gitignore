@@ -1,0 +1,23 @@
+# 忽略 Python 虚拟环境
+/venv/
+
+# 忽略 Python 缓存文件
+__pycache__/
+*.py[cod]
+*.so
+
+# 忽略运行时产生的日志目录
+/logs/
+
+# 忽略运行时产生的数据目录 (极其重要！)
+# 包含 session 文件、数据库、状态文件和缓存
+/data/
+
+# 忽略生产环境的配置文件 (极其重要！)
+# 包含 API ID, HASH 等密钥
+/config/prod.yaml
+
+# 忽略 IDE (如 VSCode, PyCharm) 的配置文件
+.vscode/
+.idea/
+.DS_Store
