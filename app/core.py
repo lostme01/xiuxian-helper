@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import logging
+import logging.handlers
 import pytz
 import importlib
 import os
@@ -8,7 +9,11 @@ from datetime import datetime
 from config import settings
 from app.task_scheduler import scheduler, shutdown
 from app.telegram_client import TelegramClient
-from app.plugins import common_tasks, huangfeng_valley, taiyi_sect, learning_tasks
+# *** 新增导入 ***
+from app.plugins import (
+    common_tasks, huangfeng_valley, taiyi_sect, 
+    learning_tasks, exam_solver, tianji_exam_solver
+)
 from app.logger import format_and_log
 
 class Application:
@@ -22,33 +27,29 @@ class Application:
 
     def setup_logging(self):
         log_format = '%(message)s'
-        # 移除日志级别设置，恢复为默认 INFO
         log_level = logging.INFO
-        
         root_logger = logging.getLogger()
         if root_logger.hasHandlers(): root_logger.handlers.clear()
-        
         formatter = logging.Formatter(fmt=log_format)
-        
-        file_handler = logging.FileHandler(settings.LOG_FILE, encoding='utf-8')
+        file_handler = logging.handlers.RotatingFileHandler(
+            settings.LOG_FILE, maxBytes=settings.LOG_ROTATION_CONFIG['max_bytes'], 
+            backupCount=settings.LOG_ROTATION_CONFIG['backup_count'], encoding='utf-8')
         file_handler.setFormatter(formatter)
-        
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
-        
         root_logger.addHandler(file_handler)
         root_logger.addHandler(stream_handler)
         root_logger.setLevel(log_level)
-        
         logging.getLogger('apscheduler').setLevel(logging.ERROR)
         logging.getLogger('telethon').setLevel(logging.WARNING)
         logging.getLogger('asyncio').setLevel(logging.WARNING)
-        
         raw_logger = logging.getLogger('raw_messages')
         raw_logger.setLevel(logging.INFO)
         raw_logger.propagate = False
         if raw_logger.hasHandlers(): raw_logger.handlers.clear()
-        raw_handler = logging.FileHandler(settings.RAW_LOG_FILE, encoding='utf-8')
+        raw_handler = logging.handlers.RotatingFileHandler(
+            settings.RAW_LOG_FILE, maxBytes=settings.LOG_ROTATION_CONFIG['max_bytes'], 
+            backupCount=settings.LOG_ROTATION_CONFIG['backup_count'], encoding='utf-8')
         raw_formatter = logging.Formatter('%(asctime)s\n%(message)s\n' + '-'*50, datefmt='%Y-%m-%d %H:%M:%S')
         raw_handler.setFormatter(raw_formatter)
         raw_logger.addHandler(raw_handler)
@@ -82,8 +83,13 @@ class Application:
             scheduler.start()
             format_and_log("SYSTEM", "核心服务", {'状态': '任务调度器已启动。'})
             await self.client.start()
+
+            # 在 client 启动后再初始化需要 me 对象的插件
+            exam_solver.initialize_plugin(self.client)
+            # *** 新增：初始化天机考验插件 ***
+            tianji_exam_solver.initialize_plugin(self.client)
+
             format_and_log("SYSTEM", "核心服务", {'状态': '正在执行启动后任务检查...'})
-            
             try:
                 await asyncio.gather(*(check() for check in self.startup_checks))
             except LookupError:

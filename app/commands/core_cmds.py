@@ -24,7 +24,8 @@ async def _cmd_help(client, event, parts):
             await event.reply(f"找不到指令 `{parts[1]}` 的详细帮助。")
     else:
         groups = {"任务触发指令": [], "系统配置指令": []}
-        trigger_keywords = ["修炼", "点卯", "引道", "药园", "背包", "学习"]
+        # *** 更新：增加关键词 ***
+        trigger_keywords = ["修炼", "点卯", "引道", "药园", "背包", "学习", "闯塔"]
         
         for cmd in known_commands:
             formatted_cmd = f"`{prefix}{cmd}`"
@@ -56,7 +57,10 @@ async def _cmd_task_list(client, event, parts):
         'taiyi_yindao_task': '太一门·引道',
         'huangfeng_garden_task': '黄枫谷·小药园检查',
         'inventory_refresh_task': '黄枫谷·背包刷新',
-        'learn_recipes_task': '学习图纸丹方'
+        'learn_recipes_task': '学习图纸丹方',
+        # *** 新增：闯塔任务的名称映射 ***
+        'chuang_ta_task_1': '自动闯塔 (第1次)',
+        'chuang_ta_task_2': '自动闯塔 (第2次)',
     }
     beijing_tz = pytz.timezone(settings.TZ)
     reply_text = "*当前计划任务列表:*\n"

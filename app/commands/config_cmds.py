@@ -5,7 +5,7 @@ from app.config_manager import update_setting
 HELP_DETAILS = {
     "宗门设置": "设置或查看当前配置的宗门。\n用法: `,宗门设置 [<宗门名>]`",
     "药园种子": "设置或查看小药园优先播种的种子。\n用法: `,药园种子 [<种子名>]`",
-    "自动删除": "开启或关闭消息自动删除功能。\n用法: `,自动删除 <开|关>`",
+    "自动删除": "开启、关闭或查看消息自动删除功能。\n用法: `,自动删除 [开|关]`",
 }
 
 async def _cmd_sect_config(client, event, parts):
@@ -41,6 +41,12 @@ async def _cmd_garden_seed_config(client, event, parts):
     )
 
 async def _cmd_auto_delete_toggle(client, event, parts):
+    # *** 优化：当不带参数时，显示当前状态 ***
+    if len(parts) == 1:
+        current_status = "开启" if settings.AUTO_DELETE.get('enabled') else "关闭"
+        await event.reply(f"当前 **自动删除** 功能状态: **{current_status}**", parse_mode='md')
+        return
+
     help_text = client.admin_commands[parts[0]]['help']
     if len(parts) != 2 or parts[1] not in ["开", "关"]:
         await event.reply(help_text, parse_mode='md')
@@ -59,4 +65,3 @@ def initialize_commands(client):
     client.register_admin_command("宗门设置", _cmd_sect_config, HELP_DETAILS["宗门设置"])
     client.register_admin_command("药园种子", _cmd_garden_seed_config, HELP_DETAILS["药园种子"])
     client.register_admin_command("自动删除", _cmd_auto_delete_toggle, HELP_DETAILS["自动删除"])
-

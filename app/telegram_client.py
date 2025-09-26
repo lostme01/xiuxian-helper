@@ -10,7 +10,6 @@ from telethon.tl.types import Message
 from telethon.utils import get_display_name
 from config import settings
 from app.logger import format_and_log
-from app.task_scheduler import scheduler
 
 LOG_TYPE_MAP_ZH_TO_EN = {
     "系统": "system_activity", "任务": "task_activity",
@@ -84,7 +83,7 @@ class TelegramClient:
                 format_and_log("CMD_SENT", "指令发送", log_data)
             except Exception as e:
                 format_and_log("CMD_SENT", "指令发送", {'错误': f"发送 '{command}' 时失败: {e}"}, level=logging.ERROR)
-                if future: future.set_exception(e)
+                if future and not future.done(): future.set_exception(e)
             delay = random.uniform(settings.SEND_DELAY_MIN, settings.SEND_DELAY_MAX)
             await asyncio.sleep(delay)
 
@@ -111,7 +110,7 @@ class TelegramClient:
 
     async def _message_handler(self, event: events.NewMessage.Event):
         message = event.message
-        is_reply_to_us = message.is_reply and message.reply_to_msg_id in self.sent_messages_log_tracking
+        is_reply_to_us = message.is_reply and message.reply_to_msg_id in self.pending_requests
         sender = await message.get_sender()
         beijing_tz = pytz.timezone(settings.TZ)
         sender_name = get_display_name(sender) if sender else "未知来源"
@@ -122,14 +121,15 @@ class TelegramClient:
             reply_to_id = message.reply_to_msg_id
             if reply_to_id in self.pending_requests:
                 sent_message, future = self.pending_requests.pop(reply_to_id)
-                if future: future.set_result((sent_message, message))
+                # *** BUG 修复处：增加保护性检查，防止对已完成的 future 设置结果 ***
+                if future and not future.done():
+                    future.set_result((sent_message, message))
             log_data['回复给'] = f"消息ID: {reply_to_id}"
             format_and_log("REPLY_RECV", "收到回复", log_data)
             if settings.LOGGING_SWITCHES.get('original_log_enabled') and settings.LOGGING_SWITCHES.get('reply_recv'):
                 self.raw_logger.info(f"[收到回复 from {from_str}]\n{message.text}")
         else:
             format_and_log("MSG_RECV", "收到消息", log_data)
-            # *** BUG 修复处：补全“收到消息”的原始日志记录 ***
             if settings.LOGGING_SWITCHES.get('original_log_enabled') and settings.LOGGING_SWITCHES.get('msg_recv'):
                 self.raw_logger.info(f"[收到消息 from {from_str}]\n{message.text}")
                 
@@ -137,7 +137,6 @@ class TelegramClient:
         beijing_tz = pytz.timezone(settings.TZ)
         log_data = {'时间': datetime.now(beijing_tz).strftime('%Y-%m-%d %H:%M:%S'), '消息ID': event.id, '原内容': event.original_update.message.message if hasattr(event.original_update, 'message') and event.original_update.message else "[无法获取]", '新内容': event.message.message}
         format_and_log("MSG_EDIT", "消息被编辑", log_data)
-        # *** BUG 修复处：新增“消息被编辑”的原始日志记录 ***
         if settings.LOGGING_SWITCHES.get('original_log_enabled') and settings.LOGGING_SWITCHES.get('log_edits'):
             raw_text = f"[消息编辑]\n- 消息ID: {event.id}\n- 原内容: {log_data['原内容']}\n- 新内容: {log_data['新内容']}"
             self.raw_logger.info(raw_text)

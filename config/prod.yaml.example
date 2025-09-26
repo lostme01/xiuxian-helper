@@ -1,6 +1,5 @@
 # 配置文件模板
-# 为保证程序兼容性，所有配置项的“键”（如 api_id）请保持英文。
-# 请将此文件复制为 prod.yaml，并填写你的真实信息。
+# 请将此文件命名为 prod.yaml 并放置在 config/ 目录下，然后填写你的真实信息。
 # !!! 重要: prod.yaml 文件已被 .gitignore 忽略，不会被提交到代码库。
 
 # --- 核心Telegram设置 ---
@@ -12,7 +11,6 @@ admin_user_id: 7654321
 game_group_id: -1001234567890
 
 # --- 助手行为配置 ---
-# 管理员指令前缀
 command_prefixes: [',', '，']
 
 # --- 角色配置 ---
@@ -20,19 +18,38 @@ sect_name: '黄枫谷'
 
 # --- 黄枫谷专属配置 ---
 huangfeng_valley:
-  # 小药园自动播种的种子名称
   garden_sow_seed: '凝血草种子'
 
 # --- 自动删除配置 ---
 auto_delete:
-  enabled: false # 功能总开关，默认为关闭
-  delay_after_reply: 60 # 收到回复或超时后，再等多少秒删除（单位：秒）
-  delay_fire_and_forget: 120 # “发后不管”的消息，发送后等多少秒删除
+  enabled: false
+  delay_after_reply: 60
+  delay_fire_and_forget: 120
+
+# --- 后台任务总开关 ---
+task_switches:
+  biguan: true          # 闭关修炼
+  dianmao: true         # 宗门点卯
+  learn_recipes: true   # 自动学习图纸
+  garden_check: true    # 自动药园(黄枫谷)
+  inventory_refresh: true # 自动刷新背包(黄枫谷)
+
+# --- 答题功能开关 ---
+exam_solver: # 玄骨校考
+  enabled: true
+  gemini_api_key: 'your_google_ai_studio_api_key_here'
+tianji_exam_solver: # 天机考验
+  enabled: true
+
+# --- 日志文件配置 ---
+log_rotation:
+  max_bytes: 10485760
+  backup_count: 5
 
 # --- 时区设置 ---
 timezone: 'Asia/Shanghai'
 
-# --- 日志开关 (true 表示默认开启, false 表示默认关闭) ---
+# --- 日志开关 ---
 logging_switches:
   system_activity: true
   task_activity: true
