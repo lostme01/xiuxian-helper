@@ -28,20 +28,35 @@ SECT_NAME = config.get('sect_name', None)
 HUANGFENG_VALLEY_CONFIG = config.get('huangfeng_valley', {})
 GARDEN_SOW_SEED = HUANGFENG_VALLEY_CONFIG.get('garden_sow_seed', None)
 
-AUTO_DELETE = config.get('auto_delete', {'enabled': False})
+AUTO_DELETE = config.get('auto_delete', {'enabled': False, 'delay_after_reply': 60, 'delay_fire_and_forget': 120})
 
 TASK_SWITCHES = config.get('task_switches', {'biguan': True, 'dianmao': True, 'learn_recipes': True, 'garden_check': True, 'inventory_refresh': True, 'chuang_ta': True})
 
 EXAM_SOLVER_CONFIG = config.get('exam_solver', {'enabled': False, 'gemini_api_key': None})
 TIANJI_EXAM_CONFIG = config.get('tianji_exam_solver', {'enabled': False})
 
-# *** 优化：Redis 配置加载逻辑 ***
-if 'redis' in config:
-    REDIS_CONFIG = config.get('redis')
-    REDIS_CONFIG['enabled'] = True # 标记为已启用
+# *** 优化：确保 REDIS_CONFIG 始终是一个结构完整的字典 ***
+# 1. 定义一个包含所有键的完整默认字典
+default_redis_config = {
+    'enabled': False,  # 默认禁用
+    'host': 'localhost',
+    'port': 6379,
+    'password': None,
+    'db': 0,
+    'xuangu_db_name': 'xuangu_qa',
+    'tianji_db_name': 'tianji_qa'
+}
+
+# 2. 如果用户在 prod.yaml 中提供了 redis 配置，则用它来更新默认值
+if 'redis' in config and config['redis']:
+    default_redis_config.update(config['redis'])
+    default_redis_config['enabled'] = True # 只要提供了配置块，就视为启用
 else:
-    print("警告: 在 config/prod.yaml 中未找到 [redis] 配置块。所有依赖Redis的功能（如自动答题）将被禁用。")
-    REDIS_CONFIG = {'enabled': False} # 标记为未启用
+    # 如果用户没有提供 redis 配置，打印警告
+    print(f"警告: 在 {CONFIG_FILE_PATH} 中未找到 [redis] 配置块。所有依赖Redis的功能（如自动答题）将被禁用。")
+
+REDIS_CONFIG = default_redis_config
+
 
 SEND_DELAY_MIN = 12
 SEND_DELAY_MAX = 16
