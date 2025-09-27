@@ -21,7 +21,6 @@ def initialize_plugin(tg_client):
     """初始化并注册插件"""
     global client, me, model
     
-    # 如果未启用或未配置API密钥，则不加载此插件
     if not settings.EXAM_SOLVER_CONFIG.get('enabled'):
         format_and_log("SYSTEM", "插件跳过", {'模块': '玄骨校考作答', '原因': '功能未启用'})
         return
@@ -30,9 +29,8 @@ def initialize_plugin(tg_client):
         return
 
     client = tg_client
-    me = client.me # 获取当前登录用户的信息
+    me = client.me
     
-    # 配置并初始化 Gemini AI 模型
     try:
         genai.configure(api_key=settings.EXAM_SOLVER_CONFIG['gemini_api_key'])
         model = genai.GenerativeModel('gemini-pro')
@@ -41,7 +39,6 @@ def initialize_plugin(tg_client):
         format_and_log("SYSTEM", "插件加载", {'模块': '玄骨校考作答', '状态': f'Gemini AI 初始化失败: {e}'}, level=logging.ERROR)
         return
 
-    # 注册消息处理器
     client.client.on(events.NewMessage(chats=settings.GAME_GROUP_ID))(exam_handler)
 
 def _parse_exam_message(text: str):
@@ -73,7 +70,6 @@ async def _ask_gemini(question: str, options: dict) -> str | None:
     """
     try:
         response = await model.generate_content_async(prompt)
-        # 清理AI可能返回的多余字符
         answer = re.sub(r'[^A-D]', '', response.text)
         return answer if answer in options else None
     except Exception as e:
@@ -94,41 +90,43 @@ def _save_answer_to_db(question: str, answer_text: str):
     qa_db = read_json_state(QA_DATABASE_PATH) or {}
     qa_db[question] = answer_text
     write_json_state(QA_DATABASE_PATH, qa_db)
+    format_and_log("TASK", "知识库更新", {'来源': '玄骨校考', '问题': question, '答案': answer_text})
 
 async def exam_handler(event):
-    """消息处理器，用于检测并回答玄骨校考"""
+    """消息处理器，用于检测、学习并回答玄骨校考"""
     text = event.message.text
     
-    # 检查消息是否为玄骨校考，并且是针对自己的
-    if not all(keyword in text for keyword in EXAM_KEYWORDS) or f"@{me.username}" not in text:
+    # 1. 初步检查：是否为考题消息
+    if not all(keyword in text for keyword in EXAM_KEYWORDS):
         return
         
-    format_and_log("TASK", "玄骨校考", {'状态': '检测到考试题目'})
+    # 2. 身份识别：判断是否轮到自己作答
+    is_our_turn = f"@{me.username}" in text
     
+    # 3. 解析题目
     question, options = _parse_exam_message(text)
     if not (question and options):
-        format_and_log("TASK", "玄骨校考", {'状态': '题目解析失败'}, level=logging.WARNING)
         return
 
-    log_data = {'问题': question, '选项': ' | '.join(f"{k}:{v}" for k, v in options.items())}
-    format_and_log("TASK", "题目解析", log_data)
-
+    # 4. 无论是否轮到自己，都开始解题流程以充实题库
+    format_and_log("TASK", "玄骨校考", {'状态': '检测到题目', '是否轮到我': is_our_turn})
+    
     answer_letter = _find_answer_in_db(question, options)
     source = "本地知识库"
     
+    # 如果本地题库没有，则求助AI
     if not answer_letter:
         source = "Gemini AI"
         answer_letter = await _ask_gemini(question, options)
+        # 如果AI给出了答案，则更新题库
+        if answer_letter:
+            _save_answer_to_db(question, options[answer_letter])
 
-    if answer_letter:
-        format_and_log("TASK", "答案已确定", {'答案': f"{answer_letter} ({options[answer_letter]})", '来源': source})
-        # 增加一个小的随机延迟，模拟思考
+    # 5. 决策与行动：只有轮到自己，并且成功获取到答案时，才公开回复
+    if is_our_turn and answer_letter:
+        format_and_log("TASK", "答案已确定", {'来源': '玄骨校考', '答案': f"{answer_letter} ({options[answer_letter]})", '来源': source})
         await asyncio.sleep(random.randint(5, 15))
         await event.message.reply(f".作答 {answer_letter}")
-        
-        # 如果答案来自AI，则存入知识库
-        if source == "Gemini AI":
-            _save_answer_to_db(question, options[answer_letter])
-            format_and_log("TASK", "知识库更新", {'问题': question, '答案': options[answer_letter]})
-    else:
-        format_and_log("TASK", "作答失败", {'原因': '无法从任何来源获取答案'}, level=logging.ERROR)
+    elif is_our_turn and not answer_letter:
+        format_and_log("TASK", "作答失败", {'来源': '玄骨校考', '原因': '无法从任何来源获取答案'}, level=logging.ERROR)
+    # 如果不是轮到自己，则在后台学习完毕后静默结束
