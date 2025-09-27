@@ -16,4 +16,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 容器启动时执行的命令
-CMD ["python", "main.py"]
+CMD ["python", "-u", "main.py"]
