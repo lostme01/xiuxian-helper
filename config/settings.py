@@ -18,6 +18,8 @@ except Exception as e:
 API_ID = config.get('api_id', 0)
 API_HASH = config.get('api_hash', '')
 ADMIN_USER_ID = config.get('admin_user_id', 0)
+# *** 新增：加载角色身份配置 ***
+IS_MAIN_ADMIN_ACCOUNT = config.get('is_main_admin_account', False)
 GAME_GROUP_ID = config.get('game_group_id', 0)
 COMMAND_PREFIXES = config.get('command_prefixes', [',', '，'])
 SECT_NAME = config.get('sect_name', None)
@@ -29,13 +31,13 @@ AUTO_DELETE = config.get('auto_delete', {
     'enabled': False, 'delay_after_reply': 60, 'delay_fire_and_forget': 120,
 })
 
-# *** 新增：加载后台任务总开关 ***
 TASK_SWITCHES = config.get('task_switches', {
     'biguan': True,
     'dianmao': True,
     'learn_recipes': True,
     'garden_check': True,
     'inventory_refresh': True,
+    'chuang_ta': True,
 })
 
 EXAM_SOLVER_CONFIG = config.get('exam_solver', {

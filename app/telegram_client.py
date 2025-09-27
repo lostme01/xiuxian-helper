@@ -32,28 +32,39 @@ class TelegramClient:
         self.sent_messages_log_tracking = collections.deque(maxlen=100)
         self.admin_commands = {}
         self.task_plugins = {}
+        
         self.client.on(events.NewMessage(chats=settings.GAME_GROUP_ID))(self._message_handler)
         self.client.on(events.MessageEdited(chats=settings.GAME_GROUP_ID))(self._message_edited_handler)
         self.client.on(events.MessageDeleted(chats=settings.GAME_GROUP_ID))(self._message_deleted_handler)
-        self.client.on(events.NewMessage(from_users=self.admin_id, func=lambda e: e.is_private))(self._admin_command_handler)
+        
+        # *** 优化：根据账号角色，设置不同的指令监听器 ***
+        if settings.IS_MAIN_ADMIN_ACCOUNT:
+            # 如果是主管理账号，只监听自己发到“收藏夹”的指令
+            format_and_log("SYSTEM", "指令监听", {'模式': '主管理账号 (收藏夹)'})
+            self.client.on(events.NewMessage(
+                outgoing=True,
+                func=lambda e: e.is_private and e.chat_id == e.sender_id
+            ))(self._admin_command_handler)
+        else:
+            # 如果是玩家账号，只监听来自指定管理员ID的“传入”私聊指令
+            format_and_log("SYSTEM", "指令监听", {'模式': f'玩家账号 (管理员ID: {self.admin_id})'})
+            self.client.on(events.NewMessage(
+                incoming=True,
+                from_users=self.admin_id,
+                func=lambda e: e.is_private
+            ))(self._admin_command_handler)
 
     async def _sleep_and_delete(self, delay: int, message_id: int):
         await asyncio.sleep(delay)
         try:
             await self.client.delete_messages(entity=settings.GAME_GROUP_ID, message_ids=[message_id])
-            format_and_log("SYSTEM", "自动删除", {'状态': '成功', '消息ID': message_id})
-        except Exception as e:
-            if "have already been deleted" in str(e):
-                format_and_log("SYSTEM", "自动删除", {'状态': '跳过', '消息ID': message_id, '原因': '消息已被删除'}, level=logging.INFO)
-            else:
-                format_and_log("SYSTEM", "自动删除", {'状态': '失败', '消息ID': message_id, '错误': str(e)}, level=logging.WARNING)
+        except Exception:
+            pass # 忽略删除失败，例如消息已被手动删除
 
     def _schedule_message_deletion(self, message: Message, delay_seconds: int):
         if not settings.AUTO_DELETE.get('enabled', False) or not message:
             return
         asyncio.create_task(self._sleep_and_delete(delay_seconds, message.id))
-        run_time = datetime.now(pytz.timezone(settings.TZ)) + timedelta(seconds=delay_seconds)
-        format_and_log("SYSTEM", "自动删除", {'状态': '已计划 (asyncio)', '消息ID': message.id, '执行时间': run_time.strftime('%H:%M:%S')})
 
     async def start(self):
         await self.client.start()
@@ -61,7 +72,6 @@ class TelegramClient:
         my_name = get_display_name(self.me)
         format_and_log("SYSTEM", "客户端状态", {'状态': '已成功连接 Telegram', '当前用户': f"{my_name} (ID: {self.me.id})"})
         asyncio.create_task(self._message_sender_loop())
-        format_and_log("SYSTEM", "后台服务", {'状态': '消息发送循环已启动。'})
 
     async def run_until_disconnected(self):
         await self.client.run_until_disconnected()
@@ -110,7 +120,7 @@ class TelegramClient:
 
     async def _message_handler(self, event: events.NewMessage.Event):
         message = event.message
-        is_reply_to_us = message.is_reply and message.reply_to_msg_id in self.pending_requests
+        is_reply_to_us = event.is_reply and message.reply_to_msg_id in self.pending_requests
         sender = await message.get_sender()
         beijing_tz = pytz.timezone(settings.TZ)
         sender_name = get_display_name(sender) if sender else "未知来源"
@@ -121,7 +131,6 @@ class TelegramClient:
             reply_to_id = message.reply_to_msg_id
             if reply_to_id in self.pending_requests:
                 sent_message, future = self.pending_requests.pop(reply_to_id)
-                # *** BUG 修复处：增加保护性检查，防止对已完成的 future 设置结果 ***
                 if future and not future.done():
                     future.set_result((sent_message, message))
             log_data['回复给'] = f"消息ID: {reply_to_id}"
@@ -148,11 +157,9 @@ class TelegramClient:
 
     def register_task(self, name, function):
         self.task_plugins[name] = function
-        format_and_log("SYSTEM", "插件加载", {'管理任务': f"'{name}' 已注册。"})
 
     def register_admin_command(self, name, handler, help_text):
         self.admin_commands[name] = {'handler': handler, 'help': help_text}
-        format_and_log("SYSTEM", "指令注册", {'指令名': name})
 
     async def _admin_command_handler(self, event: events.NewMessage.Event):
         command_text = event.text.strip()

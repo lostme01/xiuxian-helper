@@ -6,7 +6,7 @@
 # 配置区
 REPO_DIR="$HOME/tg-game-helper"      # 本地仓库路径，请改成你的路径
 COMMIT_MSG="$1"                       # 提交信息，从命令行参数获取
-CACHE_TIMEOUT=3600                    # HTTPS 缓存时间，单位秒，默认 1 小时
+CACHE_TIMEOUT=360000                  # HTTPS 缓存时间，单位秒，默认 1 小时
 
 # 如果没输入提交信息，使用默认
 if [ -z "$COMMIT_MSG" ]; then

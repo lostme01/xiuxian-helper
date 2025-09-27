@@ -1,0 +1,7 @@
+# --- 管理员与游戏设置 ---
+admin_user_id: 7654321
+# 新增：当前运行此脚本的账号是否为您的“主管理账号”
+# true: 是主管理号，只响应“收藏夹”中的指令
+# false: 是被管理的玩家号，只响应来自 admin_user_id 的私聊指令
+is_main_admin_account: false
+game_group_id: -1001234567890

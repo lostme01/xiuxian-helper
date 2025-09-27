@@ -41,25 +41,24 @@ async def _cmd_garden_seed_config(client, event, parts):
     )
 
 async def _cmd_auto_delete_toggle(client, event, parts):
-    # *** 优化：当不带参数时，显示当前状态 ***
+    # *** 优化：使其逻辑与其他开关指令完全一致 ***
     if len(parts) == 1:
         current_status = "开启" if settings.AUTO_DELETE.get('enabled') else "关闭"
         await event.reply(f"当前 **自动删除** 功能状态: **{current_status}**", parse_mode='md')
         return
 
-    help_text = client.admin_commands[parts[0]]['help']
-    if len(parts) != 2 or parts[1] not in ["开", "关"]:
-        await event.reply(help_text, parse_mode='md')
-        return
-        
-    switch_action = parts[1]
-    new_status = (switch_action == "开")
-    await update_setting(event,
-        root_key='auto_delete',
-        sub_key='enabled',
-        value=new_status,
-        success_message=f"**自动删除** 功能已 **{switch_action}**"
-    )
+    if len(parts) == 2 and parts[1] in ["开", "关"]:
+        switch_action = parts[1]
+        new_status = (switch_action == "开")
+        await update_setting(event,
+            root_key='auto_delete',
+            sub_key='enabled',
+            value=new_status,
+            success_message=f"**自动删除** 功能已 **{switch_action}**"
+        )
+    else:
+        await event.reply(HELP_DETAILS["自动删除"], parse_mode='md')
+
 
 def initialize_commands(client):
     client.register_admin_command("宗门设置", _cmd_sect_config, HELP_DETAILS["宗门设置"])

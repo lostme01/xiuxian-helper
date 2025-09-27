@@ -9,7 +9,6 @@ from datetime import datetime
 from config import settings
 from app.task_scheduler import scheduler, shutdown
 from app.telegram_client import TelegramClient
-# *** 新增导入 ***
 from app.plugins import (
     common_tasks, huangfeng_valley, taiyi_sect, 
     learning_tasks, exam_solver, tianji_exam_solver
@@ -84,19 +83,28 @@ class Application:
             format_and_log("SYSTEM", "核心服务", {'状态': '任务调度器已启动。'})
             await self.client.start()
 
-            # 在 client 启动后再初始化需要 me 对象的插件
             exam_solver.initialize_plugin(self.client)
-            # *** 新增：初始化天机考验插件 ***
             tianji_exam_solver.initialize_plugin(self.client)
 
             format_and_log("SYSTEM", "核心服务", {'状态': '正在执行启动后任务检查...'})
+            
             try:
                 await asyncio.gather(*(check() for check in self.startup_checks))
             except LookupError:
-                logging.critical("="*60)
-                logging.critical("检测到调度器数据库与当前代码不兼容！请删除旧的调度文件后重试:")
-                logging.critical(f"rm {settings.DATA_DIR}/jobs.sqlite")
-                logging.critical("="*60)
+                logging.warning("="*60)
+                logging.warning("检测到调度器数据库与当前代码不兼容，开始自动修复...")
+                
+                # *** 优化：此处不再需要手动关闭调度器，交由 finally 统一处理 ***
+                # if scheduler.running:
+                #     scheduler.shutdown(wait=False)
+                
+                db_path = settings.SCHEDULER_DB.replace('sqlite:///', '')
+                if os.path.exists(db_path):
+                    os.remove(db_path)
+                    logging.warning(f"已成功删除不兼容的调度文件: {db_path}")
+                
+                logging.warning("自动修复完成。程序将安全退出，请重新启动以应用更改。")
+                logging.warning("="*60)
                 return
 
             format_and_log("SYSTEM", "核心服务", {'状态': '应用已准备就绪。'})
