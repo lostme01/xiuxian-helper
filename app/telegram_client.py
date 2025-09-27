@@ -32,34 +32,29 @@ class TelegramClient:
         self.sent_messages_log_tracking = collections.deque(maxlen=100)
         self.admin_commands = {}
         self.task_plugins = {}
-        
         self.client.on(events.NewMessage(chats=settings.GAME_GROUP_ID))(self._message_handler)
         self.client.on(events.MessageEdited(chats=settings.GAME_GROUP_ID))(self._message_edited_handler)
         self.client.on(events.MessageDeleted(chats=settings.GAME_GROUP_ID))(self._message_deleted_handler)
-        
-        # *** 优化：根据账号角色，设置不同的指令监听器 ***
         if settings.IS_MAIN_ADMIN_ACCOUNT:
-            # 如果是主管理账号，只监听自己发到“收藏夹”的指令
             format_and_log("SYSTEM", "指令监听", {'模式': '主管理账号 (收藏夹)'})
-            self.client.on(events.NewMessage(
-                outgoing=True,
-                func=lambda e: e.is_private and e.chat_id == e.sender_id
-            ))(self._admin_command_handler)
+            self.client.on(events.NewMessage(outgoing=True, func=lambda e: e.is_private and e.chat_id == e.sender_id))(self._admin_command_handler)
         else:
-            # 如果是玩家账号，只监听来自指定管理员ID的“传入”私聊指令
             format_and_log("SYSTEM", "指令监听", {'模式': f'玩家账号 (管理员ID: {self.admin_id})'})
-            self.client.on(events.NewMessage(
-                incoming=True,
-                from_users=self.admin_id,
-                func=lambda e: e.is_private
-            ))(self._admin_command_handler)
+            self.client.on(events.NewMessage(incoming=True, from_users=self.admin_id, func=lambda e: e.is_private))(self._admin_command_handler)
+
+    async def send_admin_notification(self, message: str):
+        """向管理员发送一条系统通知"""
+        try:
+            await self.client.send_message(self.admin_id, message, parse_mode='md')
+            format_and_log("SYSTEM", "发送管理通知", {'状态': '成功'})
+        except Exception as e:
+            format_and_log("SYSTEM", "发送管理通知", {'状态': '失败', '错误': str(e)}, level=logging.ERROR)
 
     async def _sleep_and_delete(self, delay: int, message_id: int):
         await asyncio.sleep(delay)
         try:
             await self.client.delete_messages(entity=settings.GAME_GROUP_ID, message_ids=[message_id])
-        except Exception:
-            pass # 忽略删除失败，例如消息已被手动删除
+        except Exception: pass
 
     def _schedule_message_deletion(self, message: Message, delay_seconds: int):
         if not settings.AUTO_DELETE.get('enabled', False) or not message:
@@ -160,6 +155,7 @@ class TelegramClient:
 
     def register_admin_command(self, name, handler, help_text):
         self.admin_commands[name] = {'handler': handler, 'help': help_text}
+        format_and_log("SYSTEM", "指令注册", {'模块': f'{name}'})
 
     async def _admin_command_handler(self, event: events.NewMessage.Event):
         command_text = event.text.strip()
@@ -185,7 +181,6 @@ class TelegramClient:
                 await event.reply(f"指令 `{user_command}` 不明确，匹配到多个可能指令: `{'`, `'.join(matches)}`", parse_mode='md')
                 return
             matched_command = matches[0]
-
         format_and_log("SYSTEM", "管理员指令", {'指令': matched_command, '参数': ' '.join(parts[1:])})
         handler_func = self.admin_commands[matched_command]['handler']
         await handler_func(self, event, parts)

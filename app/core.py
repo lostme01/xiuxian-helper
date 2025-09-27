@@ -25,10 +25,35 @@ class Application:
         
         self.startup_checks = []
         self.client = TelegramClient()
+        
+        # *** 新增：启动时检查关键配置 ***
+        self.startup_notifications = []
+        self._check_critical_configs()
+        
         self.load_plugins_and_commands()
         format_and_log("SYSTEM", "系统初始化", {'状态': '所有模块加载完毕。'})
 
+    def _check_critical_configs(self):
+        """检查所有关键配置，并将缺失项记录到日志和通知列表"""
+        # 检查 Redis 配置
+        if not settings.REDIS_CONFIG.get('enabled'):
+            msg = "未配置 Redis，所有答题功能将禁用。"
+            self.startup_notifications.append(msg)
+            format_and_log("SYSTEM", "配置检查", {'问题': msg}, level=logging.WARNING)
+
+        # 检查答题功能配置
+        if settings.EXAM_SOLVER_CONFIG.get('enabled') or settings.TIANJI_EXAM_CONFIG.get('enabled'):
+            if not self.redis_db:
+                msg = "答题功能已启用，但 Redis 连接失败。"
+                self.startup_notifications.append(msg)
+                format_and_log("SYSTEM", "配置检查", {'问题': msg}, level=logging.CRITICAL)
+            if not settings.EXAM_SOLVER_CONFIG.get('gemini_api_key'):
+                msg = "答题功能已启用，但缺少 Gemini API Key。"
+                self.startup_notifications.append(msg)
+                format_and_log("SYSTEM", "配置检查", {'问题': msg}, level=logging.CRITICAL)
+
     def setup_logging(self):
+        # ... (此函数内容保持不变) ...
         log_format = '%(message)s'
         log_level = logging.INFO
         root_logger = logging.getLogger()
@@ -58,12 +83,11 @@ class Application:
         raw_logger.addHandler(raw_handler)
         
     def load_plugins_and_commands(self):
-        # 任务插件加载
+        # ... (此函数内容保持不变) ...
         common_checks = common_tasks.initialize_tasks(self.client)
         if common_checks: self.startup_checks.extend(common_checks)
         learning_checks = learning_tasks.initialize_tasks(self.client)
         if learning_checks: self.startup_checks.extend(learning_checks)
-        
         if settings.SECT_NAME == '黄枫谷':
             sect_checks = huangfeng_valley.initialize_tasks(self.client)
             if sect_checks: self.startup_checks.extend(sect_checks)
@@ -71,8 +95,6 @@ class Application:
             sect_checks = taiyi_sect.initialize_tasks(self.client)
             if sect_checks: self.startup_checks.extend(sect_checks)
         format_and_log("SYSTEM", "插件加载", {'状态': f"已加载【通用】及【{settings.SECT_NAME or '无'}】任务插件"})
-        
-        # 指令插件加载
         cmd_path = 'app/commands'
         for filename in os.listdir(cmd_path):
             if filename.endswith('.py') and not filename.startswith('__'):
@@ -83,8 +105,6 @@ class Application:
                     format_and_log("SYSTEM", "指令加载", {'模块': filename, '状态': '加载成功'})
                 except Exception as e:
                     format_and_log("SYSTEM", "指令加载", {'模块': filename, '状态': f'加载失败: {e}'}, level=logging.ERROR)
-        
-        # *** 优化：在 client 对象创建后，加载依赖它的答题插件 ***
         if self.redis_db:
             exam_solver.initialize_plugin(self.client, self.redis_db)
             tianji_exam_solver.initialize_plugin(self.client, self.redis_db)
@@ -96,9 +116,16 @@ class Application:
         try:
             scheduler.start()
             format_and_log("SYSTEM", "核心服务", {'状态': '任务调度器已启动。'})
-            # 在 client 启动后再初始化需要 me 对象的插件
             await self.client.start()
 
+            # *** 新增：发送启动告警 ***
+            if self.startup_notifications:
+                notification_message = "🚨 **助手启动异常告警** 🚨\n\n您的助手已启动，但检测到以下配置问题：\n"
+                for i, msg in enumerate(self.startup_notifications, 1):
+                    notification_message += f"\n{i}. {msg}"
+                notification_message += "\n\n请检查您的 `config/prod.yaml` 文件并使用 `,重启` 指令。"
+                await self.client.send_admin_notification(notification_message)
+            
             format_and_log("SYSTEM", "核心服务", {'状态': '正在执行启动后任务检查...'})
             
             try:
