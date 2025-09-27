@@ -1,62 +1,12 @@
-# 配置文件模板
-# 请将此文件命名为 prod.yaml 并放置在 config/ 目录下，然后填写你的真实信息。
-# !!! 重要: prod.yaml 文件已被 .gitignore 忽略，不会被提交到代码库。
-
-# --- 核心Telegram设置 ---
-api_id: 1234567
-api_hash: 'your_api_hash_here'
-
-# --- 管理员与游戏设置 ---
-admin_user_id: 7654321
-game_group_id: -1001234567890
-
-# --- 助手行为配置 ---
-command_prefixes: [',', '，']
-
-# --- 角色配置 ---
-sect_name: '黄枫谷'
-
-# --- 黄枫谷专属配置 ---
-huangfeng_valley:
-  garden_sow_seed: '凝血草种子'
-
-# --- 自动删除配置 ---
-auto_delete:
-  enabled: false
-  delay_after_reply: 60
-  delay_fire_and_forget: 120
-
-# --- 后台任务总开关 ---
-task_switches:
-  biguan: true          # 闭关修炼
-  dianmao: true         # 宗门点卯
-  learn_recipes: true   # 自动学习图纸
-  garden_check: true    # 自动药园(黄枫谷)
-  inventory_refresh: true # 自动刷新背包(黄枫谷)
-
-# --- 答题功能开关 ---
-exam_solver: # 玄骨校考
-  enabled: true
-  gemini_api_key: 'your_google_ai_studio_api_key_here'
-tianji_exam_solver: # 天机考验
-  enabled: true
-
-# --- 日志文件配置 ---
-log_rotation:
-  max_bytes: 10485760
-  backup_count: 5
-
-# --- 时区设置 ---
-timezone: 'Asia/Shanghai'
-
-# --- 日志开关 ---
-logging_switches:
-  system_activity: true
-  task_activity: true
-  cmd_sent: true
-  msg_recv: true
-  reply_recv: true
-  original_log_enabled: false
-  debug_log: false
-  log_edits: false
-  log_deletes: false
+# 配置文件模板 (部分内容)
+# ... (保留您文件中的其他所有配置) ...
+# --- Redis 数据库配置 ---
+redis:
+  host: 'redis'
+  port: 6379
+  password: 'your-secure-password'
+  db: 0
+  # *** 修正拼写 ***
+  xuangu_db_name: 'xuangu_qa'
+  tianji_db_name: 'tianji_qa'
+# ... (保留您文件中的其他所有配置) ...

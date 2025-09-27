@@ -3,70 +3,51 @@ import sys
 import pytz
 from config import settings
 from app.task_scheduler import scheduler
+from app.redis_client import db as redis_db
+from app.utils import mask_string
 
 HELP_DETAILS = {
-    "帮助": "获取指令帮助。\n用法: `,帮助 [指令名]`",
+    "帮助": "获取指令帮助。",
     "重启": "优雅地关闭并重启整个助手服务。",
     "任务列表": "查询当前所有正在计划中的定时任务。",
+    "查询Redis": "检查并显示当前与Redis服务器的连接状态。",
 }
+
+# *** BUG 修复处：恢复缺失的 _cmd_restart 函数 ***
+async def _cmd_restart(client, event, parts):
+    await event.reply("好的，正在为您安排重启服务，请在10秒后查看日志确认。")
+    sys.exit(0)
 
 async def _cmd_help(client, event, parts):
     known_commands = sorted(list(client.admin_commands.keys()))
     prefix = settings.COMMAND_PREFIXES[0] if settings.COMMAND_PREFIXES else ','
-
     if len(parts) > 1:
         sub_command_match = [cmd for cmd in known_commands if cmd.startswith(parts[1])]
         if len(sub_command_match) == 1:
             sub_command = sub_command_match[0]
             detail = client.admin_commands[sub_command]['help']
             await event.reply(f"**指令详情: `{prefix}{sub_command}`**\n\n{detail}", parse_mode='md')
-        else:
-            await event.reply(f"找不到指令 `{parts[1]}` 的详细帮助。")
+        else: await event.reply(f"找不到指令 `{parts[1]}` 的详细帮助。")
     else:
-        groups = {"通用任务指令": [], "宗门专属指令": [], "系统配置指令": []}
-        
-        common_triggers = ["闭关修炼", "宗门点卯", "学习图纸", "闯塔", "刷新背包"]
-        sect_triggers = {
-            "黄枫谷": ["药园检查"],
-            "太一门": ["引道"]
-        }
-        
+        groups = {"任务触发指令": [], "系统配置指令": []}
+        trigger_keywords = ["修炼", "点卯", "引道", "药园", "背包", "学习", "闯塔"]
         for cmd in known_commands:
             formatted_cmd = f"`{prefix}{cmd}`"
-            if cmd in common_triggers:
-                groups["通用任务指令"].append(formatted_cmd)
-            elif cmd in sect_triggers.get(settings.SECT_NAME, []):
-                groups["宗门专属指令"].append(formatted_cmd)
+            if any(keyword in cmd for keyword in trigger_keywords):
+                groups["任务触发指令"].append(formatted_cmd)
             else:
                 groups["系统配置指令"].append(formatted_cmd)
-        
         help_text = "*助手指令菜单*"
         for title, cmd_list in groups.items():
-            if cmd_list:
-                help_text += f"\n\n*{title}*\n{' '.join(cmd_list)}"
-        
+            if cmd_list: help_text += f"\n\n*{title}*\n{' '.join(cmd_list)}"
         await event.reply(help_text, parse_mode='md')
-
-async def _cmd_restart(client, event, parts):
-    await event.reply("好的，正在为您安排重启服务，请在10秒后查看日志确认。")
-    sys.exit(0)
 
 async def _cmd_task_list(client, event, parts):
     jobs = scheduler.get_jobs()
     if not jobs:
         await event.reply("当前没有正在计划中的任务。")
         return
-    job_map = {
-        'biguan_xiulian_task': '闭关修炼',
-        'bot_health_check_task': '机器人健康检查',
-        'zongmen_dianmao_task': '宗门点卯',
-        'taiyi_yindao_task': '太一门·引道',
-        'huangfeng_garden_task': '黄枫谷·小药园检查',
-        'inventory_refresh_task': '刷新背包',
-        'learn_recipes_task': '学习图纸丹方',
-        'chuang_ta_task_1': '自动闯塔 (第1次)',
-        'chuang_ta_task_2': '自动闯塔 (第2次)',
-    }
+    job_map = {'biguan_xiulian_task': '闭关修炼', 'bot_health_check_task': '机器人健康检查', 'zongmen_dianmao_task': '宗门点卯', 'taiyi_yindao_task': '太一门·引道', 'huangfeng_garden_task': '黄枫谷·小药园检查', 'inventory_refresh_task': '刷新背包', 'learn_recipes_task': '学习图纸丹方', 'chuang_ta_task_1': '自动闯塔 (第1次)', 'chuang_ta_task_2': '自动闯塔 (第2次)'}
     beijing_tz = pytz.timezone(settings.TZ)
     reply_text = "*当前计划任务列表:*\n"
     for job in jobs:
@@ -77,7 +58,26 @@ async def _cmd_task_list(client, event, parts):
             reply_text += f"\n- *{job_name}*\n  `下次运行:` {next_run}"
     await event.reply(reply_text, parse_mode='md')
 
+async def _cmd_redis_status(client, event, parts):
+    status_text = "**Redis 连接状态**\n"
+    try:
+        if redis_db and redis_db.ping():
+            status_text += "✅ 连接成功\n"
+            config = settings.REDIS_CONFIG
+            password = config.get('password')
+            masked_pass = mask_string(password) if password else "未设置"
+            status_text += f"  - 主机: `{config.get('host')}`\n"
+            status_text += f"  - 端口: `{config.get('port')}`\n"
+            status_text += f"  - 密码: `{masked_pass}`\n"
+            status_text += f"  - 数据库: `{config.get('db')}`"
+        else:
+            status_text += "❌ 连接失败\n请检查配置或Redis服务状态。"
+    except Exception as e:
+        status_text += f"❌ 连接异常: {e}"
+    await event.reply(status_text, parse_mode='md')
+
 def initialize_commands(client):
     client.register_admin_command("帮助", _cmd_help, HELP_DETAILS["帮助"])
     client.register_admin_command("重启", _cmd_restart, HELP_DETAILS["重启"])
     client.register_admin_command("任务列表", _cmd_task_list, HELP_DETAILS["任务列表"])
+    client.register_admin_command("查询Redis", _cmd_redis_status, HELP_DETAILS["查询Redis"])

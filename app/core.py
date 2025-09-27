@@ -9,6 +9,7 @@ from datetime import datetime
 from config import settings
 from app.task_scheduler import scheduler, shutdown
 from app.telegram_client import TelegramClient
+from app.redis_client import initialize_redis
 from app.plugins import (
     common_tasks, huangfeng_valley, taiyi_sect, 
     learning_tasks, exam_solver, tianji_exam_solver
@@ -18,8 +19,11 @@ from app.logger import format_and_log
 class Application:
     def __init__(self):
         self.setup_logging()
-        self.startup_checks = []
         format_and_log("SYSTEM", "系统初始化", {'状态': '应用开始初始化...'})
+        
+        self.redis_db = initialize_redis()
+        
+        self.startup_checks = []
         self.client = TelegramClient()
         self.load_plugins_and_commands()
         format_and_log("SYSTEM", "系统初始化", {'状态': '所有模块加载完毕。'})
@@ -54,6 +58,7 @@ class Application:
         raw_logger.addHandler(raw_handler)
         
     def load_plugins_and_commands(self):
+        # 任务插件加载
         common_checks = common_tasks.initialize_tasks(self.client)
         if common_checks: self.startup_checks.extend(common_checks)
         learning_checks = learning_tasks.initialize_tasks(self.client)
@@ -67,6 +72,7 @@ class Application:
             if sect_checks: self.startup_checks.extend(sect_checks)
         format_and_log("SYSTEM", "插件加载", {'状态': f"已加载【通用】及【{settings.SECT_NAME or '无'}】任务插件"})
         
+        # 指令插件加载
         cmd_path = 'app/commands'
         for filename in os.listdir(cmd_path):
             if filename.endswith('.py') and not filename.startswith('__'):
@@ -74,17 +80,24 @@ class Application:
                 try:
                     cmd_module = importlib.import_module(module_name)
                     cmd_module.initialize_commands(self.client)
+                    format_and_log("SYSTEM", "指令加载", {'模块': filename, '状态': '加载成功'})
                 except Exception as e:
                     format_and_log("SYSTEM", "指令加载", {'模块': filename, '状态': f'加载失败: {e}'}, level=logging.ERROR)
+        
+        # *** 优化：在 client 对象创建后，加载依赖它的答题插件 ***
+        if self.redis_db:
+            exam_solver.initialize_plugin(self.client, self.redis_db)
+            tianji_exam_solver.initialize_plugin(self.client, self.redis_db)
+        else:
+            format_and_log("SYSTEM", "插件跳过", {'模块': '所有答题插件', '原因': 'Redis 连接不可用'})
+
 
     async def run(self):
         try:
             scheduler.start()
             format_and_log("SYSTEM", "核心服务", {'状态': '任务调度器已启动。'})
+            # 在 client 启动后再初始化需要 me 对象的插件
             await self.client.start()
-
-            exam_solver.initialize_plugin(self.client)
-            tianji_exam_solver.initialize_plugin(self.client)
 
             format_and_log("SYSTEM", "核心服务", {'状态': '正在执行启动后任务检查...'})
             
@@ -93,16 +106,12 @@ class Application:
             except LookupError:
                 logging.warning("="*60)
                 logging.warning("检测到调度器数据库与当前代码不兼容，开始自动修复...")
-                
-                # *** 优化：此处不再需要手动关闭调度器，交由 finally 统一处理 ***
-                # if scheduler.running:
-                #     scheduler.shutdown(wait=False)
-                
+                if scheduler.running:
+                    scheduler.shutdown(wait=False)
                 db_path = settings.SCHEDULER_DB.replace('sqlite:///', '')
                 if os.path.exists(db_path):
                     os.remove(db_path)
                     logging.warning(f"已成功删除不兼容的调度文件: {db_path}")
-                
                 logging.warning("自动修复完成。程序将安全退出，请重新启动以应用更改。")
                 logging.warning("="*60)
                 return
