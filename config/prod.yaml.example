@@ -1,12 +1,78 @@
-# 配置文件模板 (部分内容)
-# ... (保留您文件中的其他所有配置) ...
-# --- Redis 数据库配置 ---
+# ----------------- 核心配置 (必须填写) -----------------
+# 从 my.telegram.org 获取
+api_id: 12345678
+api_hash: '0123456789abcdef0123456789abcdef'
+
+# 您的管理员 Telegram User ID (可以通过 @userinfobot 获取)
+admin_user_id: 987654321
+
+# 要监听和操作的游戏群组ID (必须是列表格式)
+game_group_ids:
+  - -1001234567890
+
+# ----------------- AI 答题配置 -----------------
+exam_solver:
+  enabled: true # 玄骨校考总开关
+  
+  # 在这里指定您想使用的模型名称, 通过 check_models.py 查询可用的模型
+  gemini_model_name: 'gemini-2.5-pro'
+  
+  # Gemini API Key 列表 (必须是列表格式)，支持多个 Key 轮询
+  gemini_api_keys:
+    - "AIzaSy...your...first...key"
+
+tianji_exam_solver:
+  enabled: true # 天机考验总开关
+
+# ----------------- 身份与行为配置 (按需修改) -----------------
+is_main_admin_account: false
+sect_name: '黄枫谷'
+command_prefixes: [',', '，']
+timezone: 'Asia/Shanghai'
+
+# ----------------- 功能开关 (true/false) -----------------
+task_switches:
+  biguan: true
+  dianmao: true
+  learn_recipes: true
+  inventory_refresh: true
+  chuang_ta: true
+  garden_check: true
+  mojun_arrival: true
+  auto_delete: true
+
+# ----------------- 高级微调 (按需修改) -----------------
 redis:
-  host: 'redis'
+  enabled: true
+  host: 'host.docker.internal'
   port: 6379
-  password: 'your-secure-password'
+  password: null
   db: 0
-  # *** 修正拼写 ***
   xuangu_db_name: 'xuangu_qa'
   tianji_db_name: 'tianji_qa'
-# ... (保留您文件中的其他所有配置) ...
+
+auto_delete:
+  enabled: true
+  delay_after_reply: 60
+  delay_fire_and_forget: 120
+
+huangfeng_valley:
+  garden_sow_seed: '凝血草种子'
+
+taiyi_sect:
+  yindao_success_cooldown_hours: 12
+
+log_rotation:
+  max_bytes: 5242880
+  backup_count: 9
+
+logging_switches:
+  system_activity: true
+  task_activity: true
+  cmd_sent: true
+  msg_recv: true
+  reply_recv: true
+  debug_log: false
+  log_edits: false
+  log_deletes: false
+  original_log_enabled: false

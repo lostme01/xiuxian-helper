@@ -1,16 +1,20 @@
 # === 核心功能 ===
-Telethon==1.34.0
-APScheduler==3.11.0
-SQLAlchemy==2.0.29
+Telethon
+APScheduler
+SQLAlchemy
 
 # === 数据库与缓存 ===
-redis==5.0.4
+redis
 
 # === AI 与答题 ===
-google-generativeai==0.5.4
+google-generativeai
 
 # === 配置与工具 ===
-PyYAML==6.0.1
-python-dotenv==1.0.1
-pytz==2024.1
-tzlocal==5.2
+PyYAML
+python-dotenv
+pytz
+tzlocal
+
+# === 新增：现代化指令系统 ===
+typer
+thefuzz[speedup]

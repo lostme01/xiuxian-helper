@@ -23,41 +23,35 @@ def _save_config(config_data: dict):
         format_and_log("SYSTEM", "配置写入失败", {'错误': str(e)}, level=logging.ERROR)
         return False
 
-async def update_setting(event, root_key, value, sub_key=None, success_message="配置更新成功"):
+# --- 核心修改：让函数返回字符串，而不是直接发送回复 ---
+def update_setting(root_key: str, value, sub_key: str = None, success_message: str = "配置更新成功") -> str:
     """
     更新配置项并写回文件，同时更新内存中的settings。
-    :param event: Telethon的事件对象，用于回复消息。
-    :param root_key: 要更新的顶级键或在settings中的属性名（小写）。
-    :param value: 新的值。
-    :param sub_key: 如果要更新的是嵌套字典中的值，则提供此子键。
-    :param success_message: 成功后回复给用户的消息。
+    返回一个表示操作结果的字符串消息。
     """
     full_config = _load_config()
-    target_obj_config = full_config
-    target_obj_settings = settings
     
     try:
         if sub_key:
             # 更新嵌套配置 e.g., logging_switches: { system_activity: true }
-            if root_key not in target_obj_config or not isinstance(target_obj_config.get(root_key), dict):
-                target_obj_config[root_key] = {}
-            target_obj_config[root_key][sub_key] = value
+            if root_key not in full_config or not isinstance(full_config.get(root_key), dict):
+                full_config[root_key] = {}
+            full_config[root_key][sub_key] = value
             # 更新内存中的配置
             settings_attr = getattr(settings, root_key.upper(), {})
             settings_attr[sub_key] = value
         else:
             # 更新顶级配置 e.g., sect_name: '黄枫谷'
-            target_obj_config[root_key] = value
+            full_config[root_key] = value
             # 更新内存中的配置
             setattr(settings, root_key.upper(), value)
 
         if _save_config(full_config):
-            await event.reply(f"✅ {success_message}。(已保存至文件)", parse_mode='md')
+            return f"✅ {success_message}。(已保存至文件)"
         else:
-            await event.reply(f"✅ {success_message}。(仅本次运行生效)", parse_mode='md')
+            return f"✅ {success_message}。(仅本次运行生效)"
             
     except Exception as e:
         error_msg = f"❌ 更新配置时发生内部错误: {e}"
-        await event.reply(error_msg)
         format_and_log("SYSTEM", "配置更新失败", {'错误': str(e)}, level=logging.ERROR)
-
+        return error_msg

@@ -9,14 +9,14 @@ db = None
 
 def initialize_redis():
     """
-    初始化 Redis 连接，并设置全局 db 变量。
-    返回连接成功与否的布尔值。
+    初始化 Redis 连接。
+    成功时返回 Redis 客户端实例，失败时返回 None。
     """
     global db
 
     if not settings.REDIS_CONFIG.get('enabled'):
         format_and_log("SYSTEM", "数据库连接", {'类型': 'Redis', '状态': '已禁用'})
-        return False
+        return None
 
     try:
         pool = redis.ConnectionPool(
@@ -24,13 +24,14 @@ def initialize_redis():
             port=settings.REDIS_CONFIG.get('port', 6379),
             password=settings.REDIS_CONFIG.get('password'),
             db=settings.REDIS_CONFIG.get('db', 0),
+            # --- 核心修复：开启自动解码，将 bytes 自动转为 str ---
             decode_responses=True,
             socket_connect_timeout=5
         )
         db = redis.Redis(connection_pool=pool)
         db.ping()
         format_and_log("SYSTEM", "数据库连接", {'类型': 'Redis', '状态': '连接成功'})
-        return True
+        return db
 
     except Exception as e:
         format_and_log("SYSTEM", "数据库连接", {
@@ -39,4 +40,5 @@ def initialize_redis():
             '错误': str(e),
         }, level=logging.CRITICAL)
         db = None
-        return False
+        return None
+

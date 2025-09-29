@@ -1,7 +1,7 @@
 services:
-  tg-helper:
-    image: lostme01/tg-game-helper:latest
-    container_name: tg-game-helper-prod
+  tg-helper-test:
+    image: tg-game-helper:local
+    container_name: tg-game-helper-test
     restart: unless-stopped
     tty: true
     extra_hosts:
