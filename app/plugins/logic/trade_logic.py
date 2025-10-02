@@ -10,7 +10,6 @@ from config import settings
 
 TASK_CHANNEL = "tg_helper:tasks"
 
-# --- 改造：为 publish_task 增加详细的返回结果日志 ---
 def publish_task(task: dict) -> bool:
     """将任务发布到 Redis 频道，并记录接收者数量。"""
     if not redis_client.db:
@@ -32,7 +31,7 @@ def publish_task(task: dict) -> bool:
         else:
             format_and_log("WARNING", "Redis-任务发布", {**log_data, '诊断': '没有任何客户端订阅此频道！'})
             
-        return True
+        return True # publish 本身成功了，即使没人收到
     except Exception as e:
         format_and_log("ERROR", "任务发布异常", {'错误': str(e)}, level=logging.ERROR)
         return False

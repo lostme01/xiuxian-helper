@@ -49,42 +49,46 @@ class Application:
         self.client = TelegramClient()
         format_and_log("SYSTEM", "组件初始化", {'组件': 'Telegram 客户端', '状态': '实例化完成'})
 
-    # --- 改造：植入终极“黑匣子”日志 ---
+    # --- 最终版：最稳定可靠的异步 Redis 监听器 ---
     async def _redis_listener_loop(self):
         if not pubsub_client: 
             format_and_log("WARNING", "Redis 监听器", {'状态': '未启动', '原因': 'Pub/Sub 客户端未初始化'})
             return
         
         last_heartbeat = 0
-        p = None
-        while True:
+        while True: 
+            p = None
             try:
-                if p is None:
-                    p = pubsub_client.pubsub()
-                    await p.subscribe(TASK_CHANNEL)
-                    format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '已订阅', '频道': TASK_CHANNEL})
+                p = pubsub_client.pubsub()
+                await p.subscribe(TASK_CHANNEL)
+                format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '已订阅', '频道': TASK_CHANNEL})
                 
-                # --- 日志点1: 打印心跳，证明循环在运行 ---
-                if time.time() - last_heartbeat > 15:
-                    format_and_log("DEBUG", "Redis 监听器", {'状态': '心跳', '详情': '监听循环正在正常运行...'})
-                    last_heartbeat = time.time()
+                # 使用最可靠的手动轮询循环
+                while True:
+                    if time.time() - last_heartbeat > 15:
+                        format_and_log("DEBUG", "Redis 监听器", {'状态': '心跳', '详情': '监听循环正在正常运行...'})
+                        last_heartbeat = time.time()
 
-                message = await p.get_message(ignore_subscribe_messages=True, timeout=1.0)
-                
-                # --- 日志点2: 打印 get_message 的原始返回 ---
-                format_and_log("DEBUG", "Redis 监听器", {'阶段': '轮询结果', '原始返回': str(message)})
+                    message = await p.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    
+                    format_and_log("DEBUG", "Redis 监听器", {'阶段': '轮询结果', '原始返回': str(message)})
 
-                if message:
-                    await redis_message_handler(message)
-                
-                await asyncio.sleep(0.1)
+                    if message:
+                        asyncio.create_task(redis_message_handler(message))
+                    
+                    await asyncio.sleep(0.1)
 
+            except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError) as e:
+                format_and_log("ERROR", "Redis 监听连接断开", {'错误': str(e)}, level=logging.ERROR)
             except Exception as e:
                 format_and_log("ERROR", "Redis 监听循环异常", {'错误': str(e)}, level=logging.CRITICAL)
+            finally:
                 if p:
-                    try: await p.unsubscribe(TASK_CHANNEL); await p.close()
+                    try:
+                        await p.unsubscribe(TASK_CHANNEL)
+                        await p.close()
                     except: pass
-                    p = None
+                
                 format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '将在5秒后尝试重连...'})
                 await asyncio.sleep(5)
         
