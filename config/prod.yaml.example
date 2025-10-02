@@ -1,87 +1,113 @@
 # ----------------- 核心配置 (必须填写) -----------------
+# 从 my.telegram.org 获取
 api_id: 12345678
 api_hash: '0123456789abcdef0123456789abcdef'
+
+# 您的Telegram用户ID，所有管理指令来源于此
 admin_user_id: 987654321
+
+# 游戏机器人所在的群组ID列表
 game_group_ids:
   - -1001234567890
+
+# 您与助手进行交互的管理群ID（可选）
 control_group_id: null
-test_group_id: null
 
 # ----------------- 身份与行为 -----------------
+# 您所在的游戏宗门，用于加载专属插件
 sect_name: '黄枫谷'
+
+# 指令前缀
 command_prefixes: [',', '，']
+
+# 时区，用于日志和任务调度
 timezone: 'Asia/Shanghai'
 
 # ----------------- AI 答题配置 -----------------
 exam_solver:
-  gemini_model_name: 'gemini-2.5-pro'
+  # 使用的Gemini模型名称
+  gemini_model_name: 'gemini-1.5-pro-latest'
+  # Gemini API Key列表，可以填多个以轮询使用
   gemini_api_keys:
     - "AIzaSy...your...first...key"
+  # 答题前的随机延迟（秒）
   reply_delay: { min: 5, max: 15 }
 
+# 玄骨考校自动答题开关
 xuangu_exam_solver:
   enabled: true
+# 天机考验自动答题开关
 tianji_exam_solver:
   enabled: true
 
 # ----------------- 周期任务开关 -----------------
 task_switches:
-  biguan: true
-  dianmao: true
-  learn_recipes: true
-  inventory_refresh: true
-  chuang_ta: true
-  garden_check: true
-  mojun_arrival: true
+  biguan: true            # 自动闭关
+  dianmao: true           # 自动点卯
+  learn_recipes: true     # 自动学习图纸丹方
+  inventory_refresh: true # 定时刷新背包缓存
+  chuang_ta: true         # 自动闯塔
+  garden_check: true      # 自动药园 (黄枫谷专属)
+  sect_treasury: true     # 每日自动更新宗门宝库
+  mojun_arrival: false    # 自动应对魔君降临事件
 
 # ----------------- 核心行为微调 -----------------
+# 指令发送后的随机延迟（秒）
 send_delay: { min: 12, max: 16 }
+# 等待游戏机器人回复的全局超时时间（秒）
 command_timeout: 60
+# 客户端无任何消息活动后自动重启的超时时间（秒）
 heartbeat_timeout: 1200
 
 # ----------------- 周期任务微调 -----------------
+# 为各类任务增加随机延迟，避免行为过于规律
 task_jitter:
   biguan: { min: 30, max: 90 }
   taiyi_yindao: { min: 300, max: 1200 }
   huangfeng_garden: { min: 5, max: 15 }
   learn_recipes: { min: 3, max: 7 }
+
+# 定时任务的执行时间点（24小时制）
 task_schedules:
   dianmao: [ '08:15', '20:15' ]
 
 # ----------------- 游戏指令配置 -----------------
+# 可自定义部分游戏指令
 game_commands:
   taiyi_yindao: '.引道 水'
 
 # ----------------- 高级配置 -----------------
 redis:
   enabled: true
-  host: 'host.docker.internal'
+  host: 'host.docker.internal' # Docker环境通常用这个
   port: 6379
   password: null
   db: 0
   xuangu_db_name: 'xuangu_qa'
   tianji_db_name: 'tianji_qa'
 
+# 消息自动删除配置
 auto_delete:
   enabled: true
-  delay_on_reply: 5
-  delay_fire_and_forget: 5
-  delay_admin_command: 30
-  delay_on_timeout: 60
+  delay_admin_command: 30 # 管理员指令和助手的回复在30秒后删除
 
-# --- 新增：交易协同配置 ---
+# 交易协同配置
 trade_coordination:
-  focus_fire_auto_delist: true # 是否在上架后立即下架，防止被别人买走，默认为 true
+  focus_fire_auto_delist: true # 集火时，助手上架物品后是否立即下架以防被抢
 
+# ----------------- 宗门专属配置 -----------------
 huangfeng_valley:
-  garden_sow_seed: '凝血草种子'
+  garden_sow_seed: '凝血草种子' # 药园优先播种的种子
+
 taiyi_sect:
-  yindao_success_cooldown_hours: 12
+  yindao_success_cooldown_hours: 12 # 引道成功后的冷却时间
 
+# ----------------- 日志配置 -----------------
 log_rotation:
-  max_bytes: 5242880
-  backup_count: 9
+  max_bytes: 5242880 # 单个日志文件最大5MB
+  backup_count: 9    # 保留9个备份
 
+# 各模块日志开关
 logging_switches:
   system_activity: true
   task_activity: true
