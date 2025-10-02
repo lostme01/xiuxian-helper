@@ -5,7 +5,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from config import settings
 
-# 直接创建并导出一个全局的调度器实例
+# --- 恢复：直接创建并导出一个全局的、已配置好的调度器实例 ---
 jobstores = {
     'default': SQLAlchemyJobStore(url=settings.SCHEDULER_DB)
 }
@@ -20,4 +20,3 @@ def shutdown():
     """安全地关闭调度器"""
     if scheduler.running:
         scheduler.shutdown()
-

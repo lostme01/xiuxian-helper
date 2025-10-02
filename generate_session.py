@@ -2,7 +2,6 @@
 import asyncio
 import os
 from config import settings
-from telethon import TelegramClient
 
 async def main():
     print("--- 增强型会话文件生成器 (v4.0 - 带强制同步) ---")
@@ -15,7 +14,7 @@ async def main():
 
     os.makedirs(settings.DATA_DIR, exist_ok=True)
 
-    client = TelegramClient(
+    client = TelethonTgClient(
         session_path, 
         settings.API_ID, 
         settings.API_HASH
@@ -47,7 +46,9 @@ async def main():
             print("\n客户端已断开连接。")
 
 if __name__ == "__main__":
+    from telethon import TelegramClient as TelethonTgClient
     if not os.path.isdir('config'):
         print("错误：请在项目根目录 (tg-game-helper/) 中运行此脚本。")
     else:
         asyncio.run(main())
+

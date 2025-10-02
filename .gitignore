@@ -1,23 +1,22 @@
-# 忽略 Python 虚拟环境
-/venv/
+# 配置文件 (保护私密信息)
+config/prod.yaml
 
-# 忽略 Python 缓存文件
+# Python 虚拟环境
+.venv/
+venv/
+env/
+
+# 运行时数据和日志
+data/
+logs/
+
+# Python 缓存
 __pycache__/
-*.py[cod]
-*.so
+*.pyc
+*.pyo
+*.pyd
 
-# 忽略运行时产生的日志目录
-/logs/
-
-# 忽略运行时产生的数据目录 (极其重要！)
-# 包含 session 文件、数据库、状态文件和缓存
-/data/
-
-# 忽略生产环境的配置文件 (极其重要！)
-# 包含 API ID, HASH 等密钥
-/config/prod.yaml
-
-# 忽略 IDE (如 VSCode, PyCharm) 的配置文件
-.vscode/
+# IDE 和操作系统生成的文件
 .idea/
-.DS_Store
+.vscode/
+*.DS_Store

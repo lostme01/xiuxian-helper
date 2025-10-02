@@ -8,9 +8,11 @@ services:
     tty: true
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # --- 核心新增：设置环境变量以减少底层库的日志输出 ---
     environment:
-      - GRPC_VERBOSITY=ERROR
+      - GRPC_VERBOOSITY=ERROR
+      - PYTHONDONTWRITEBYTECODE=1
+      # --- 核心修复：添加此环境变量以禁用Python输出缓冲 ---
+      - PYTHONUNBUFFERED=1
     volumes:
       - ./config/prod.yaml:/app/config/prod.yaml
       - ./data:/app/data

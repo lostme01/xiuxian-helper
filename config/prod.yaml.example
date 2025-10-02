@@ -1,36 +1,30 @@
 # ----------------- 核心配置 (必须填写) -----------------
-# 从 my.telegram.org 获取
 api_id: 12345678
 api_hash: '0123456789abcdef0123456789abcdef'
-
-# 您的管理员 Telegram User ID (可以通过 @userinfobot 获取)
 admin_user_id: 987654321
-
-# 要监听和操作的游戏群组ID (必须是列表格式)
 game_group_ids:
   - -1001234567890
+control_group_id: null
+test_group_id: null
 
-# ----------------- AI 答题配置 -----------------
-exam_solver:
-  enabled: true # 玄骨校考总开关
-  
-  # 在这里指定您想使用的模型名称, 通过 check_models.py 查询可用的模型
-  gemini_model_name: 'gemini-2.5-pro'
-  
-  # Gemini API Key 列表 (必须是列表格式)，支持多个 Key 轮询
-  gemini_api_keys:
-    - "AIzaSy...your...first...key"
-
-tianji_exam_solver:
-  enabled: true # 天机考验总开关
-
-# ----------------- 身份与行为配置 (按需修改) -----------------
-is_main_admin_account: false
+# ----------------- 身份与行为 -----------------
 sect_name: '黄枫谷'
 command_prefixes: [',', '，']
 timezone: 'Asia/Shanghai'
 
-# ----------------- 功能开关 (true/false) -----------------
+# ----------------- AI 答题配置 -----------------
+exam_solver:
+  gemini_model_name: 'gemini-2.5-pro'
+  gemini_api_keys:
+    - "AIzaSy...your...first...key"
+  reply_delay: { min: 5, max: 15 }
+
+xuangu_exam_solver:
+  enabled: true
+tianji_exam_solver:
+  enabled: true
+
+# ----------------- 周期任务开关 -----------------
 task_switches:
   biguan: true
   dianmao: true
@@ -39,9 +33,26 @@ task_switches:
   chuang_ta: true
   garden_check: true
   mojun_arrival: true
-  auto_delete: true
 
-# ----------------- 高级微调 (按需修改) -----------------
+# ----------------- 核心行为微调 -----------------
+send_delay: { min: 12, max: 16 }
+command_timeout: 60
+heartbeat_timeout: 1200
+
+# ----------------- 周期任务微调 -----------------
+task_jitter:
+  biguan: { min: 30, max: 90 }
+  taiyi_yindao: { min: 300, max: 1200 }
+  huangfeng_garden: { min: 5, max: 15 }
+  learn_recipes: { min: 3, max: 7 }
+task_schedules:
+  dianmao: [ '08:15', '20:15' ]
+
+# ----------------- 游戏指令配置 -----------------
+game_commands:
+  taiyi_yindao: '.引道 水'
+
+# ----------------- 高级配置 -----------------
 redis:
   enabled: true
   host: 'host.docker.internal'
@@ -53,12 +64,13 @@ redis:
 
 auto_delete:
   enabled: true
-  delay_after_reply: 60
-  delay_fire_and_forget: 120
+  delay_on_reply: 5
+  delay_fire_and_forget: 5
+  delay_admin_command: 30
+  delay_on_timeout: 60
 
 huangfeng_valley:
   garden_sow_seed: '凝血草种子'
-
 taiyi_sect:
   yindao_success_cooldown_hours: 12
 
@@ -74,5 +86,5 @@ logging_switches:
   reply_recv: true
   debug_log: false
   log_edits: false
-  log_deletes: false
+  log_deletes: true # <-- 确保这里是 true 才能看到删除日志
   original_log_enabled: false

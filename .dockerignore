@@ -1,0 +1,33 @@
+# Git 目录
+.git
+.github
+.gitignore
+
+# Python 虚拟环境
+.venv
+venv
+env
+
+# 运行时数据和日志
+data/
+logs/
+
+# 配置文件 (通过 volume 挂载，不应构建进镜像)
+config/prod.yaml
+config/prod.yaml.example
+
+# Docker 相关文件
+Dockerfile
+docker-compose.yml
+docker-compose.debug.yml
+docker-compose.test.yml
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 开发脚本和文档
+*.sh
+*.md
+check_models.py
+test_gemini.py

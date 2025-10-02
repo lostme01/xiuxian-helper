@@ -1,0 +1,95 @@
+api_id: 23631658
+api_hash: 786bd2b41a5c19100088d8961f8a5413
+admin_user_id: 5504380726
+game_group_ids:
+- -1001680975844
+- -1002324795299
+control_group_id: -1002324795299
+test_group_id: null
+sect_name: 黄枫谷
+command_prefixes:
+- ','
+- ，
+timezone: Asia/Shanghai
+exam_solver:
+  gemini_model_name: gemini-2.5-pro
+  gemini_api_keys:
+  - AIzaSyBJ_m787oCBEbWWf2aiy8ZfksH4MnJIcgg
+  - AIzaSyD4JV2Dnh4fr4x7vwaBoFFjZx1A1d1n-w0
+  - AIzaSyDPCTFQPWBVsMFsw-vlZT3bCqs334nwR70
+  reply_delay:
+    min: 5
+    max: 15
+xuangu_exam_solver:
+  enabled: true
+tianji_exam_solver:
+  enabled: true
+task_switches:
+  biguan: true
+  dianmao: true
+  learn_recipes: true
+  chuang_ta: true
+  garden_check: true
+  inventory_refresh: true
+  mojun_arrival: true
+  sect_treasury: true
+send_delay:
+  min: 12
+  max: 16
+command_timeout: 60
+heartbeat_timeout: 1200
+task_jitter:
+  biguan:
+    min: 30
+    max: 90
+  taiyi_yindao:
+    min: 300
+    max: 1200
+  huangfeng_garden:
+    min: 5
+    max: 15
+  learn_recipes:
+    min: 3
+    max: 7
+task_schedules:
+  dianmao:
+  - 08:15
+  - '20:15'
+game_commands:
+  taiyi_yindao: .引道 水
+redis:
+  enabled: true
+  host: host.docker.internal
+  port: 6379
+  password: Spatial1#1203
+  db: 0
+  xuangu_db_name: xuangu_qa
+  tianji_db_name: tianji_qa
+auto_delete:
+  enabled: true
+  delay_admin_command: 30
+auto_delete_strategies:
+  fire_and_forget:
+    delay_self: 5
+  request_response:
+    delay_self_on_reply: 30
+    delay_self_on_timeout: 60
+  long_task:
+    delay_self: 0
+huangfeng_valley:
+  garden_sow_seed: 凝血草种子
+taiyi_sect:
+  yindao_success_cooldown_hours: 12
+log_rotation:
+  max_bytes: 1048576
+  backup_count: 10
+logging_switches:
+  system_activity: true
+  task_activity: true
+  cmd_sent: true
+  msg_recv: true
+  reply_recv: true
+  debug_log: true
+  log_edits: true
+  log_deletes: false
+  original_log_enabled: true
