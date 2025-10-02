@@ -13,28 +13,14 @@ HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令**
 """
 
 async def _cmd_focus_fire(event, parts):
-    """
-    处理 ,集火 指令，包含最详细的“黑匣子”日志。
-    """
     app = get_application()
     client = app.client
     my_id = client.me.id if client.me else "未知"
     sender_id = event.sender_id
 
-    format_and_log("DEBUG", "集火-处理器", {
-        '阶段': '进入 _cmd_focus_fire',
-        '本机ID': my_id,
-        '发送者ID': sender_id,
-        '对比(sender_id == my_id)': sender_id == my_id
-    })
-
-    # --- 核心改造：最终的身份甄别守卫 ---
     if sender_id != my_id:
-        format_and_log("DEBUG", "集火-身份甄别", {'结果': '忽略 (指令非本机账号发出)'})
         return
 
-    # --- 从这里开始，只有发送指令的那个账号实例会继续执行 ---
-    
     format_and_log("INFO", "集火-身份确认", {'结果': '本机为发起者，开始执行任务'})
     
     if len(parts) < 3:
@@ -48,16 +34,10 @@ async def _cmd_focus_fire(event, parts):
         await client.reply_to_admin(event, f"❌ 参数格式错误！\n\n{HELP_TEXT_FOCUS_FIRE}")
         return
         
-    format_and_log("INFO", "集火-任务启动", {
-        '发起者(本机)ID': my_id,
-        '指令发送者(确认)': sender_id,
-        '查找物品': item_name
-    })
-
     progress_msg = await client.reply_to_admin(event, f"⏳ `集火任务启动`\n我是发起者，正在扫描其他助手库存...")
     client.pin_message(progress_msg)
 
-    best_account_id, found_quantity = trade_logic.find_best_executor(item_name, quantity, exclude_id=str(my_id))
+    best_account_id, found_quantity = await trade_logic.find_best_executor(item_name, quantity, exclude_id=str(my_id))
 
     if not best_account_id:
         await progress_msg.edit(f"❌ `任务失败`\n未在【任何其他助手】中找到拥有足够数量`{item_name}`的账号。")
@@ -75,7 +55,7 @@ async def _cmd_focus_fire(event, parts):
         "price": 1 
     }
     
-    if trade_logic.publish_task(task):
+    if await trade_logic.publish_task(task):
         await progress_msg.edit(f"✅ `指令已发送`\n等待助手号回报上架结果...")
     else:
         await progress_msg.edit(f"❌ `任务失败`\n任务发布至 Redis 失败，请检查连接。")
@@ -84,7 +64,6 @@ async def _cmd_focus_fire(event, parts):
 
 
 async def redis_message_handler(message):
-    # ... (此函数内容不变)
     app = get_application()
     my_id = str(app.client.me.id)
     
@@ -113,7 +92,6 @@ async def redis_message_handler(message):
 
 
 async def _cmd_debug_inventory(event, parts):
-    # ... (此函数内容不变)
     app = get_application()
     
     if event.sender_id != app.client.me.id:
@@ -126,4 +104,3 @@ async def _cmd_debug_inventory(event, parts):
 def initialize(app):
     app.register_command("集火", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="高级协同", usage=HELP_TEXT_FOCUS_FIRE)
     app.register_command("debug库存", _cmd_debug_inventory, help_text="🔬 (调试用)检查所有助手的库存缓存。", category="高级协同")
-

@@ -4,7 +4,7 @@ APScheduler==3.11.0
 SQLAlchemy==2.0.43
 
 # === 数据库与缓存 ===
-redis==6.4.0
+redis==5.0.4
 
 # === AI 与答题 ===
 google-generativeai==0.8.5

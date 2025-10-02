@@ -10,20 +10,19 @@ from config import settings
 
 TASK_CHANNEL = "tg_helper:tasks"
 
-def publish_task(task: dict) -> bool:
+async def publish_task(task: dict) -> bool:
     """将任务发布到 Redis 频道，并记录接收者数量。"""
     if not redis_client.db:
         format_and_log("ERROR", "任务发布失败", {'原因': 'Redis未连接'}, level=logging.ERROR)
         return False
     try:
         payload = json.dumps(task)
-        # 执行 publish 命令并获取返回值
-        receiver_count = redis_client.db.publish(TASK_CHANNEL, payload)
+        receiver_count = await redis_client.db.publish(TASK_CHANNEL, payload)
         
         log_data = {
             '频道': TASK_CHANNEL,
             '任务': task,
-            '接收者数量': receiver_count # 这是关键日志
+            '接收者数量': receiver_count
         }
         
         if receiver_count > 0:
@@ -31,13 +30,12 @@ def publish_task(task: dict) -> bool:
         else:
             format_and_log("WARNING", "Redis-任务发布", {**log_data, '诊断': '没有任何客户端订阅此频道！'})
             
-        return True # publish 本身成功了，即使没人收到
+        return True
     except Exception as e:
         format_and_log("ERROR", "任务发布异常", {'错误': str(e)}, level=logging.ERROR)
         return False
 
-def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) -> (str, int):
-    # ... (此函数内容不变)
+async def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) -> (str, int):
     if not redis_client.db:
         format_and_log("DEBUG", "集火-查找", {'阶段': '中止', '原因': 'Redis未连接'})
         return None, 0
@@ -52,7 +50,7 @@ def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) 
     })
 
     try:
-        keys_found = list(redis_client.db.scan_iter("tg_helper:task_states:*"))
+        keys_found = [key async for key in redis_client.db.scan_iter("tg_helper:task_states:*")]
         format_and_log("DEBUG", "集火-查找", {'阶段': '扫描Redis', '发现Key数量': len(keys_found), 'Keys': str(keys_found)})
         
         for key in keys_found:
@@ -64,7 +62,7 @@ def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) 
                 format_and_log("DEBUG", "集火-查找", log_context)
                 continue
 
-            inventory_json = redis_client.db.hget(key, "inventory")
+            inventory_json = await redis_client.db.hget(key, "inventory")
             if not inventory_json:
                 log_context['结果'] = '跳过 (无库存数据)'
                 format_and_log("DEBUG", "集火-查找", log_context)
@@ -98,7 +96,6 @@ def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) 
     return best_account_id, max_quantity
 
 async def execute_listing_task(item_name: str, quantity: int, price: int, requester_id: str):
-    # ... (此函数内容不变)
     app = get_application()
     command = f".上架 {item_name}*{quantity} 换 灵石*{price}"
     format_and_log("TASK", "集火-上架", {'阶段': '开始执行', '指令': command})
@@ -117,7 +114,7 @@ async def execute_listing_task(item_name: str, quantity: int, price: int, reques
                 "target_account_id": requester_id,
                 "item_id": item_id
             }
-            publish_task(result_task)
+            await publish_task(result_task)
             return True
         else:
             format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '未解析到ID或成功信息', '回复': reply.text})
@@ -130,7 +127,6 @@ async def execute_listing_task(item_name: str, quantity: int, price: int, reques
         return False
 
 async def execute_purchase_task(item_id: str):
-    # ... (此函数内容不变)
     app = get_application()
     command = f".购买 {item_id}"
     format_and_log("TASK", "集火-购买", {'阶段': '开始执行', '指令': command})
@@ -143,7 +139,6 @@ async def execute_purchase_task(item_id: str):
         await app.client.send_admin_notification(f"❌ **集火失败**：发送购买指令时发生错误: `{e}`。")
 
 async def logic_debug_inventories() -> str:
-    # ... (此函数内容不变)
     app = get_application()
     if not redis_client.db:
         return "❌ 错误: Redis 未连接。"
@@ -152,7 +147,7 @@ async def logic_debug_inventories() -> str:
     output_lines = []
     
     try:
-        all_keys = list(redis_client.db.scan_iter("tg_helper:task_states:*"))
+        all_keys = [key async for key in redis_client.db.scan_iter("tg_helper:task_states:*")]
         
         if not all_keys:
             output_lines.append("\n**诊断结果: 🔴 失败**\n在 Redis 中没有扫描到任何账户的状态键 (`tg_helper:task_states:*)。")
@@ -168,7 +163,7 @@ async def logic_debug_inventories() -> str:
             is_admin = (account_id_str == admin_id)
             
             line = f"- **{'[管理号]' if is_admin else '[助手号]'}** ID: `{account_id_str}`\n"
-            inventory_json = redis_client.db.hget(key, "inventory")
+            inventory_json = await redis_client.db.hget(key, "inventory")
             
             if not inventory_json:
                 line += "  - `库存`: ⚠️ **未找到** (请确保此账号已成功执行 `,立即刷新背包`)"

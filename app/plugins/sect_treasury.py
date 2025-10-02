@@ -46,7 +46,7 @@ async def trigger_update_treasury(force_run=False):
             format_and_log("TASK", "更新宗门宝库", {'阶段': '任务失败', '原因': '未能解析出任何物品信息'}, level=logging.WARNING)
             return False, "❌ **解析失败**: 无法从返回的信息中解析出宝库物品。"
 
-        set_state(STATE_KEY_TREASURY, treasury_data)
+        await set_state(STATE_KEY_TREASURY, treasury_data)
         format_and_log("TASK", "更新宗门宝库", {'阶段': '任务成功', '贡献': treasury_data["contribution"], '物品数量': len(treasury_data["items"])})
         return True, f"✅ **宗门宝库信息已更新**：\n- **当前贡献**: `{treasury_data['contribution']}`\n- **宝库物品**: 共 `{len(treasury_data['items'])}` 件"
     except CommandTimeoutError:
@@ -56,7 +56,6 @@ async def trigger_update_treasury(force_run=False):
         format_and_log("TASK", "更新宗门宝库", {'阶段': '任务异常', '错误': str(e)}, level=logging.CRITICAL)
         return False, f"❌ **发生意外错误**: `{str(e)}`"
 
-# --- 改造：为自定义任务处理器植入“消息钉”机制 ---
 async def _cmd_query_treasury(event, parts):
     app = get_application()
     client = app.client
@@ -85,7 +84,7 @@ def get_display_width(text: str) -> int:
     return width
 
 async def _cmd_view_cached_treasury(event, parts):
-    treasury_data = get_state(STATE_KEY_TREASURY, is_json=True)
+    treasury_data = await get_state(STATE_KEY_TREASURY, is_json=True)
     if not treasury_data:
         app = get_application()
         await app.client.reply_to_admin(event, "ℹ️ 尚未缓存任何宝库信息，请先使用 `,宗门宝库` 查询一次。")

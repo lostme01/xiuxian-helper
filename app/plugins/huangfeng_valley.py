@@ -20,7 +20,6 @@ async def trigger_garden_check(force_run=False):
     client = get_application().client
     format_and_log("TASK", "小药园", {'阶段': '任务开始', '强制执行': force_run})
     try:
-        # 使用“问答模式”获取药园状态
         _sent, reply = await client.send_game_command_request_response(".小药园")
         format_and_log("TASK", "小药园", {'阶段': '获取状态成功', '原始返回': reply.raw_text.replace('\n', ' ')})
     except CommandTimeoutError:
@@ -79,7 +78,6 @@ async def _handle_garden_problems(client, status) -> dict | None:
     
     for problem, command in commands_to_send.items():
         if problem in problems:
-            # 使用“发后不理”模式处理单个问题
             await client.send_game_command_fire_and_forget(command)
             format_and_log("TASK", "小药园", {'阶段': '发送指令', '指令': command})
             await asyncio.sleep(random.uniform(jitter_config['min'], jitter_config['max']))
@@ -87,7 +85,6 @@ async def _handle_garden_problems(client, status) -> dict | None:
     format_and_log("TASK", "小药园", {'阶段': '处理完毕', '操作': '等待后重新获取状态...'})
     await asyncio.sleep(random.uniform(20, 30))
     try:
-        # 再次使用“问答模式”获取最新状态
         _sent, reply = await client.send_game_command_request_response(".小药园")
         new_status = _parse_garden_status(reply)
         format_and_log("TASK", "小药园", {'阶段': '重新获取状态成功', '新状态': str(new_status)})
@@ -105,7 +102,7 @@ async def _sow_seeds(client, garden_status):
     if not sow_plots: return
     
     format_and_log("TASK", "小药园", {'阶段': '准备播种', '空闲地块': str(sow_plots)})
-    inventory = get_state("inventory", is_json=True)
+    inventory = await get_state("inventory", is_json=True)
     if not inventory:
         format_and_log("TASK", "小药园", {'阶段': '播种中止', '原因': '背包缓存为空'}, level=logging.WARNING)
         return
@@ -119,12 +116,11 @@ async def _sow_seeds(client, garden_status):
             
         format_and_log("TASK", "小药园", {'阶段': '执行播种', '地块': plot_id, '种子': seed})
         try:
-            # 使用“问答模式”确认播种是否成功
             _sent, reply = await client.send_game_command_request_response(f".播种 {plot_id} {seed}")
             if "成功" in reply.text:
                 inventory[seed] -= 1
                 if inventory[seed] <= 0: del inventory[seed]
-                set_state("inventory", inventory)
+                await set_state("inventory", inventory)
                 format_and_log("TASK", "小药园", {'阶段': '播种成功', '地块': plot_id, '种子': seed})
             else:
                  format_and_log("TASK", "小药园", {'阶段': '播种失败', '地块': plot_id, '返回': reply.raw_text}, level=logging.WARNING)

@@ -23,7 +23,6 @@ TASK_ID_INVENTORY_REFRESH = 'inventory_refresh_task'
 STATE_KEY_INVENTORY = "inventory"
 TASK_ID_ACTIVE_HEARTBEAT = 'active_status_heartbeat_task'
 
-# --- 改造：在超时或失败时返回明确的错误信息 ---
 async def trigger_dianmao_chuangong(force_run=False):
     client = get_application().client
     format_and_log("TASK", "宗门点卯", {'阶段': '任务开始', '强制执行': force_run})
@@ -64,7 +63,6 @@ async def trigger_dianmao_chuangong(force_run=False):
             client.unpin_message(sent_dianmao)
             client._schedule_message_deletion(sent_dianmao, 30, "宗门点卯(任务链结束)")
 
-# --- 改造：在超时或失败时返回明确的错误信息 ---
 async def update_inventory_cache(force_run=False):
     client = get_application().client
     format_and_log("TASK", "刷新背包", {'阶段': '任务开始', '强制执行': force_run})
@@ -72,7 +70,7 @@ async def update_inventory_cache(force_run=False):
         _sent, reply = await client.send_game_command_request_response(".储物袋")
         inventory = parse_inventory_text(reply)
         if inventory:
-            set_state(STATE_KEY_INVENTORY, inventory)
+            await set_state(STATE_KEY_INVENTORY, inventory)
             format_and_log("TASK", "刷新背包", {'阶段': '任务成功', '详情': f'解析并缓存了 {len(inventory)} 种物品。'})
             return f"✅ **[立即刷新背包]** 任务完成，已缓存 {len(inventory)} 种物品。"
         else:
@@ -86,13 +84,11 @@ async def update_inventory_cache(force_run=False):
         return f"❌ **[立即刷新背包]** 任务执行异常: `{e}`"
 
 async def active_status_heartbeat():
-    # ... (此函数内容不变)
     client = get_application().client
     if client and client.is_connected():
         await client.client(UpdateStatusRequest(offline=False))
 
 async def heartbeat_check():
-    # ... (此函数内容不变)
     client = get_application().client
     heartbeat_timeout_seconds = settings.HEARTBEAT_TIMEOUT
     time_since_last_update = datetime.now(pytz.timezone(settings.TZ)) - client.last_update_timestamp
@@ -102,19 +98,17 @@ async def heartbeat_check():
         await asyncio.sleep(2); sys.exit(1)
 
 async def trigger_chuang_ta(force_run=False):
-    # ... (此函数内容不变)
     format_and_log("TASK", "自动闯塔", {'阶段': '发送指令', '强制执行': force_run})
     await get_application().client.send_game_command_fire_and_forget(".闯塔")
     if not force_run:
         today_str = date.today().isoformat()
-        state = get_state(STATE_KEY_CHUANG_TA, is_json=True, default={"date": today_str, "completed_count": 0})
+        state = await get_state(STATE_KEY_CHUANG_TA, is_json=True, default={"date": today_str, "completed_count": 0})
         if state.get("date") != today_str: state = {"date": today_str, "completed_count": 1}
         else: state["completed_count"] = state.get("completed_count", 0) + 1
-        set_state(STATE_KEY_CHUANG_TA, state)
+        await set_state(STATE_KEY_CHUANG_TA, state)
         format_and_log("TASK", "自动闯塔", {'阶段': '状态更新', '今日已完成': state["completed_count"]})
 
 async def trigger_biguan_xiulian(force_run=False):
-    # ... (此函数内容不变)
     client = get_application().client
     format_and_log("TASK", "闭关修炼", {'阶段': '任务开始', '强制执行': force_run})
     beijing_tz = pytz.timezone(settings.TZ)
@@ -133,21 +127,20 @@ async def trigger_biguan_xiulian(force_run=False):
         format_and_log("TASK", "闭关修炼", {'阶段': '任务异常', '错误': str(e)}, level=logging.ERROR)
     finally:
         scheduler.add_job(trigger_biguan_xiulian, 'date', run_date=next_run_time, id=TASK_ID_BIGUAN, replace_existing=True)
-        set_state(STATE_KEY_BIGUAN, next_run_time.isoformat())
+        await set_state(STATE_KEY_BIGUAN, next_run_time.isoformat())
         format_and_log("TASK", "闭关修炼", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
 
 async def check_biguan_startup():
-    # ... (此函数内容不变)
     if not settings.TASK_SWITCHES.get('biguan'): return
     if scheduler.get_job(TASK_ID_BIGUAN): return
-    iso_str = get_state(STATE_KEY_BIGUAN)
+    iso_str = await get_state(STATE_KEY_BIGUAN)
     beijing_tz = pytz.timezone(settings.TZ)
     state_time = datetime.fromisoformat(iso_str).astimezone(beijing_tz) if iso_str else None
     if state_time and state_time > datetime.now(beijing_tz):
         scheduler.add_job(trigger_biguan_xiulian, 'date', run_date=state_time, id=TASK_ID_BIGUAN)
     else: await trigger_biguan_xiulian(force_run=True)
+
 async def check_dianmao_startup():
-    # ... (此函数内容不变)
     if not settings.TASK_SWITCHES.get('dianmao'): return
     beijing_tz, now = pytz.timezone(settings.TZ), datetime.now(pytz.timezone(settings.TZ))
     dianmao_times = settings.TASK_SCHEDULES.get('dianmao', [])
@@ -165,25 +158,25 @@ async def check_dianmao_startup():
                 format_and_log("TASK", "宗门点卯", {'阶段': '调度计划', '任务': f'每日第{i+1}次', '运行时间': run_time.strftime('%Y-%m-%d %H:%M:%S')})
             except ValueError:
                 format_and_log("SYSTEM", "配置错误", {'模块': '宗门点卯', '错误': f'时间格式不正确: {time_str}'}, level=logging.ERROR)
+
 async def check_active_heartbeat_startup():
-    # ... (此函数内容不变)
     if not scheduler.get_job(TASK_ID_ACTIVE_HEARTBEAT):
         scheduler.add_job(active_status_heartbeat, 'interval', minutes=5, id=TASK_ID_ACTIVE_HEARTBEAT)
+
 async def check_heartbeat_startup():
-    # ... (此函数内容不变)
     if not scheduler.get_job(TASK_ID_HEARTBEAT):
         scheduler.add_job(heartbeat_check, 'interval', minutes=15, id=TASK_ID_HEARTBEAT)
+
 async def check_inventory_refresh_startup():
-    # ... (此函数内容不变)
     if settings.TASK_SWITCHES.get('inventory_refresh', True) and not scheduler.get_job(TASK_ID_INVENTORY_REFRESH):
         scheduler.add_job(update_inventory_cache, 'interval', hours=6, jitter=3600, id=TASK_ID_INVENTORY_REFRESH)
+
 async def check_chuang_ta_startup():
-    # ... (此函数内容不变)
     if not settings.TASK_SWITCHES.get('chuang_ta', True): return
     today_str = date.today().isoformat()
-    state = get_state(STATE_KEY_CHUANG_TA, is_json=True, default={"date": "1970-01-01", "completed_count": 0})
+    state = await get_state(STATE_KEY_CHUANG_TA, is_json=True, default={"date": "1970-01-01", "completed_count": 0})
     if state.get("date") != today_str:
-        state = {"date": today_str, "completed_count": 0}; set_state(STATE_KEY_CHUANG_TA, state)
+        state = {"date": today_str, "completed_count": 0}; await set_state(STATE_KEY_CHUANG_TA, state)
         format_and_log("TASK", "自动闯塔", {'阶段': '状态重置', '新的一天': today_str})
     completed_count = state.get("completed_count", 0)
     total_runs_per_day = 2
@@ -212,7 +205,6 @@ async def check_chuang_ta_startup():
             format_and_log("TASK", "自动闯塔", {'阶段': '任务已调度', '任务ID': job_id, '运行时间': run_time.strftime('%Y-%m-%d %H:%M:%S')})
 
 def initialize(app):
-    # ... (此函数内容不变)
     app.register_task(task_key="biguan", function=trigger_biguan_xiulian, command_name="立即闭关", help_text="...")
     app.register_task(task_key="dianmao", function=trigger_dianmao_chuangong, command_name="立即点卯", help_text="...")
     app.register_task(task_key="chuang_ta", function=trigger_chuang_ta, command_name="立即闯塔", help_text="...")
@@ -221,4 +213,3 @@ def initialize(app):
         check_biguan_startup, check_dianmao_startup, check_chuang_ta_startup, 
         check_inventory_refresh_startup, check_heartbeat_startup, check_active_heartbeat_startup
     ])
-

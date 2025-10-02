@@ -26,7 +26,6 @@ async def trigger_yindao(force_run=False):
     yindao_command = settings.GAME_COMMANDS.get('taiyi_yindao', '.引道 水')
     
     try:
-        # --- 改造：移除硬编码的 timeout=60，使其使用全局默认值 ---
         _sent, reply = await client.send_game_command_request_response(yindao_command)
         format_and_log("TASK", "太一门引道", {'阶段': '获取状态成功', '原始返回': reply.raw_text.replace('\n', ' ')})
         
@@ -47,12 +46,12 @@ async def trigger_yindao(force_run=False):
         format_and_log("TASK", "太一门引道", {'阶段': '任务异常', '错误': str(e)}, level=logging.ERROR)
     finally:
         scheduler.add_job(trigger_yindao, 'date', run_date=next_run_time, id=TASK_ID_YINDAO, replace_existing=True)
-        set_state(STATE_KEY_YINDAO, next_run_time.isoformat())
+        await set_state(STATE_KEY_YINDAO, next_run_time.isoformat())
         format_and_log("TASK", "太一门引道", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
 
 async def check_yindao_startup():
     if scheduler.get_job(TASK_ID_YINDAO): return
-    iso_str = get_state(STATE_KEY_YINDAO)
+    iso_str = await get_state(STATE_KEY_YINDAO)
     state_time = datetime.fromisoformat(iso_str).astimezone(pytz.timezone(settings.TZ)) if iso_str else None
     now = datetime.now(pytz.timezone(settings.TZ))
     run_date = state_time if state_time and state_time > now else now + timedelta(seconds=random.uniform(10, 60))
@@ -66,4 +65,3 @@ def initialize(app):
         help_text="立即执行一次太一门的引道任务。"
     )
     app.startup_checks.append(check_yindao_startup)
-

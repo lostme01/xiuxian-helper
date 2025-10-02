@@ -21,17 +21,16 @@ async def trigger_learn_recipes(force_run=False):
     format_and_log("TASK", "自动学习", {'阶段': '任务开始', '强制执行': force_run})
 
     try:
-        # 使用“问答模式”获取已学列表
         _sent_msg, reply = await client.send_game_command_request_response(".炼制")
     except CommandTimeoutError:
         format_and_log("TASK", "自动学习", {'阶段': '任务失败', '原因': '获取已学列表超时'}, level=logging.ERROR)
         return
     
     learned_recipes = re.findall(r'\(来自:\s*([^)]*(?:图纸|丹方))\)', reply.raw_text)
-    set_state(STATE_KEY_LEARNED, learned_recipes)
+    await set_state(STATE_KEY_LEARNED, learned_recipes)
     format_and_log("TASK", "自动学习", {'阶段': '解析已学列表', '数量': len(learned_recipes), '列表': str(learned_recipes)})
     
-    inventory = get_state(STATE_KEY_INVENTORY, is_json=True, default={})
+    inventory = await get_state(STATE_KEY_INVENTORY, is_json=True, default={})
     if not inventory:
         format_and_log("TASK", "自动学习", {'阶段': '任务跳过', '原因': '背包缓存为空'})
         return
@@ -48,7 +47,6 @@ async def trigger_learn_recipes(force_run=False):
     for recipe in recipes_to_learn:
         try:
             format_and_log("TASK", "自动学习", {'阶段': '发送学习指令', '物品': recipe})
-            # 学习指令也使用“问答模式”，以确认是否学习成功
             await client.send_game_command_request_response(f".学习 {recipe}", timeout=10)
         except CommandTimeoutError:
             format_and_log("TASK", "自动学习", {'阶段': '学习失败', '原因': '等待回复超时', '物品': recipe}, level=logging.WARNING)

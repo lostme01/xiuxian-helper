@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import redis
+import redis.asyncio as redis
 import logging
 from config import settings
 from app.logger import format_and_log
@@ -8,9 +8,9 @@ from app.logger import format_and_log
 db = None
 pubsub_client = None
 
-def initialize_redis():
+async def initialize_redis():
     """
-    初始化 Redis 连接。
+    初始化 Redis 异步连接。
     成功时返回 Redis 客户端实例，失败时返回 None。
     """
     global db, pubsub_client
@@ -30,7 +30,7 @@ def initialize_redis():
             socket_connect_timeout=5
         )
         db = redis.Redis(connection_pool=pool)
-        db.ping()
+        await db.ping()
         format_and_log("SYSTEM", "数据库连接", {'类型': 'Redis (常规)', '状态': '连接成功'})
 
         # 为 Pub/Sub 创建另一个客户端，它将使用自己的连接
@@ -41,8 +41,8 @@ def initialize_redis():
 
     except Exception as e:
         format_and_log("SYSTEM", "数据库连接", {
-            '类型': 'Redis', 
-            '状态': '连接失败', 
+            '类型': 'Redis',
+            '状态': '连接失败',
             '错误': str(e),
         }, level=logging.CRITICAL)
         db = None

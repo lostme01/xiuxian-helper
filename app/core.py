@@ -36,12 +36,6 @@ class Application:
         self.setup_logging()
         
         format_and_log("SYSTEM", "应用初始化", {'阶段': '开始...'})
-        format_and_log("SYSTEM", "组件初始化", {'组件': 'Redis', '状态': '开始连接...'})
-        self.redis_db = initialize_redis()
-        
-        if settings.REDIS_CONFIG.get('enabled') and not self.redis_db:
-            format_and_log("SYSTEM", "应用中止", {'原因': 'Redis 配置为启用但连接失败。'}, level=logging.CRITICAL)
-            sys.exit(1)
 
         gemini_client.initialize_gemini()
         
@@ -49,7 +43,6 @@ class Application:
         self.client = TelegramClient()
         format_and_log("SYSTEM", "组件初始化", {'组件': 'Telegram 客户端', '状态': '实例化完成'})
 
-    # --- 最终版：最稳定可靠的异步 Redis 监听器 ---
     async def _redis_listener_loop(self):
         if not pubsub_client: 
             format_and_log("WARNING", "Redis 监听器", {'状态': '未启动', '原因': 'Pub/Sub 客户端未初始化'})
@@ -63,7 +56,6 @@ class Application:
                 await p.subscribe(TASK_CHANNEL)
                 format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '已订阅', '频道': TASK_CHANNEL})
                 
-                # 使用最可靠的手动轮询循环
                 while True:
                     if time.time() - last_heartbeat > 15:
                         format_and_log("DEBUG", "Redis 监听器", {'状态': '心跳', '详情': '监听循环正在正常运行...'})
@@ -71,8 +63,6 @@ class Application:
 
                     message = await p.get_message(ignore_subscribe_messages=True, timeout=1.0)
                     
-                    format_and_log("DEBUG", "Redis 监听器", {'阶段': '轮询结果', '原始返回': str(message)})
-
                     if message:
                         asyncio.create_task(redis_message_handler(message))
                     
@@ -93,7 +83,6 @@ class Application:
                 await asyncio.sleep(5)
         
     def setup_logging(self):
-        # ... (此函数内容不变)
         print("开始配置日志系统...")
         root_logger = logging.getLogger()
         if root_logger.hasHandlers(): root_logger.handlers.clear()
@@ -131,7 +120,6 @@ class Application:
         print(f"日志系统配置完成。当前日志级别: {logging.getLevelName(log_level)}")
 
     def register_command(self, name, handler, help_text="", category="默认", aliases=None, usage=None):
-        # ... (此函数内容不变)
         if aliases is None: aliases = []
         usage = usage or help_text
         
@@ -149,7 +137,6 @@ class Application:
             self.commands[cmd_name] = command_data
 
     def register_task(self, task_key, function, command_name, help_text):
-        # ... (此函数内容不变)
         self.task_functions[task_key] = function
         
         async def task_trigger_handler(event, parts):
@@ -185,7 +172,6 @@ class Application:
         self.register_command(command_name, task_trigger_handler, help_text=help_text, category="游戏任务")
         
     def load_plugins_and_commands(self, is_reload=False):
-        # ... (此函数内容不变)
         if is_reload:
             self.commands.clear()
             self.task_functions.clear()
@@ -199,7 +185,6 @@ class Application:
         format_and_log("SYSTEM", "插件加载", {'阶段': '所有插件加载完毕'})
 
     async def reload_plugins_and_commands(self):
-        # ... (此函数内容不变)
         format_and_log("SYSTEM", "热重载", {'阶段': '开始...'})
         try:
             reload(sys.modules['config.settings'])
@@ -223,6 +208,12 @@ class Application:
 
     async def run(self):
         try:
+            format_and_log("SYSTEM", "组件初始化", {'组件': 'Redis', '状态': '开始连接...'})
+            self.redis_db = await initialize_redis()
+            if settings.REDIS_CONFIG.get('enabled') and not self.redis_db:
+                format_and_log("SYSTEM", "应用中止", {'原因': 'Redis 配置为启用但连接失败。'}, level=logging.CRITICAL)
+                sys.exit(1)
+            
             scheduler.start()
             
             await self.client.start()
