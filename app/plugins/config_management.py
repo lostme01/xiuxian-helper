@@ -53,11 +53,17 @@ async def _cmd_toggle_log(event, parts):
 async def _cmd_toggle_task(event, parts):
     client = get_application().client
     task_map = {
-        '玄骨': ('玄骨考校', 'xuangu_exam_solver', 'enabled'), '天机': ('天机考验', 'tianji_exam_solver', 'enabled'),
-        '闭关': ('闭关修炼', 'task_switches', 'biguan'), '点卯': ('宗门点卯', 'task_switches', 'dianmao'),
-        '学习': ('自动学习', 'task_switches', 'learn_recipes'), '药园': ('自动药园', 'task_switches', 'garden_check'),
-        '背包': ('自动刷新背包', 'task_switches', 'inventory_refresh'), '魔君': ('魔君降临事件', 'task_switches', 'mojun_arrival'),
+        '玄骨': ('玄骨考校', 'xuangu_exam_solver', 'enabled'),
+        '天机': ('天机考验', 'tianji_exam_solver', 'enabled'),
+        '闭关': ('闭关修炼', 'task_switches', 'biguan'),
+        '点卯': ('宗门点卯', 'task_switches', 'dianmao'),
+        '学习': ('自动学习', 'task_switches', 'learn_recipes'),
+        '药园': ('自动药园', 'task_switches', 'garden_check'),
+        '背包': ('自动刷新背包', 'task_switches', 'inventory_refresh'),
+        '魔君': ('魔君降临事件', 'task_switches', 'mojun_arrival'),
         '自动删除': ('消息自动删除', 'auto_delete', 'enabled'),
+        # --- 核心新增：为“集火下架”功能添加入口 ---
+        '集火下架': ('集火后自动下架', 'trade_coordination', 'focus_fire_auto_delist'),
     }
     if len(parts) < 2:
         available_tasks = ' '.join([f"`{name}`" for name in sorted(task_map.keys())])
@@ -67,12 +73,18 @@ async def _cmd_toggle_task(event, parts):
     if task_name not in task_map:
         await client.reply_to_admin(event, f"❌ 未知的功能名: `{task_name}`。")
         return
+        
     friendly_name, root_key, sub_key = task_map[task_name]
+    # 动态获取配置对象，兼容多种配置结构
     config_obj = getattr(settings, f"{root_key.upper()}", getattr(settings, f"{root_key.upper()}_CONFIG", {}))
+
+    # 查询当前状态
     if len(parts) == 2:
         current_value = config_obj.get(sub_key)
         await client.reply_to_admin(event, f"ℹ️ 当前 **{friendly_name}** 功能状态: **{'开启' if current_value else '关闭'}**")
         return
+        
+    # 设置新状态
     if len(parts) == 3 and parts[2] in ["开", "关"]:
         new_status = (parts[2] == "开")
         await client.reply_to_admin(event, update_setting(root_key=root_key, sub_key=sub_key, value=new_status, success_message=f"**{friendly_name}** 功能已 **{parts[2]}**"))

@@ -26,31 +26,28 @@ async def _cmd_focus_fire(event, parts):
     my_id = client.me.id if client.me else "未知"
     sender_id = event.sender_id
 
-    if sender_id != my_id:
+    # 指令只能由管理员在控制群或私聊中对自己运行的实例发起
+    if sender_id != settings.ADMIN_USER_ID or my_id != settings.ADMIN_USER_ID:
         return
 
-    format_and_log("INFO", "集火-身份确认", {'结果': '本机为发起者，开始执行任务'})
+    format_and_log("INFO", "集火-身份确认", {'结果': '本机为管理员实例，开始执行任务'})
     
-    # 参数长度必须至少为3 (指令, 物品1, 数量1)
     if len(parts) < 3:
         await client.reply_to_admin(event, f"❌ 参数不足！\n\n{HELP_TEXT_FOCUS_FIRE}")
         return
 
-    # --- 核心修改：解析不同的指令格式 ---
     task_payload = {
         "task_type": "list_item",
         "requester_account_id": str(my_id),
     }
 
     try:
-        # 格式1: ,集火 物品A 数量A  (换灵石)
         if len(parts) == 3:
             task_payload["item_to_sell_name"] = parts[1]
             task_payload["item_to_sell_quantity"] = int(parts[2])
             task_payload["item_to_buy_name"] = "灵石"
             task_payload["item_to_buy_quantity"] = 1
             
-        # 格式2: ,集火 物品A 数量A 物品B 数量B (以物易物)
         elif len(parts) == 5:
             task_payload["item_to_sell_name"] = parts[1]
             task_payload["item_to_sell_quantity"] = int(parts[2])
@@ -81,7 +78,6 @@ async def _cmd_focus_fire(event, parts):
 
     await progress_msg.edit(f"✅ `已定位助手` (ID: `...{best_account_id[-4:]}`)\n⏳ 正在通过 Redis 下达上架指令...")
     
-    # 将目标账户ID加入任务
     task_payload["target_account_id"] = best_account_id
     
     if await trade_logic.publish_task(task_payload):
@@ -121,16 +117,5 @@ async def redis_message_handler(message):
         format_and_log("ERROR", "Redis 任务处理器", {'状态': '执行异常', '错误': str(e)})
 
 
-async def _cmd_debug_inventory(event, parts):
-    app = get_application()
-    
-    if event.sender_id != app.client.me.id:
-        return
-        
-    result = await trade_logic.logic_debug_inventories()
-    await app.client.reply_to_admin(event, result)
-
-
 def initialize(app):
     app.register_command("集火", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="高级协同", usage=HELP_TEXT_FOCUS_FIRE)
-    app.register_command("debug库存", _cmd_debug_inventory, help_text="🔬 (调试用)检查所有助手的库存缓存。", category="高级协同")
