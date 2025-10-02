@@ -6,115 +6,26 @@ from app.context import get_application
 from app.logger import format_and_log
 from app.telegram_client import CommandTimeoutError
 from app import redis_client
-from config import settings # 引入 settings
+from config import settings
 
-# Redis Pub/Sub 频道名称
 TASK_CHANNEL = "tg_helper:tasks"
 
-
-def find_best_account_for_item(item_name: str, required_quantity: int) -> (str, int):
-    """
-    扫描 Redis 查找拥有指定物品数量最多的助手号（非 admin_user_id）。
-    :return: (账户ID, 拥有数量) 或 (None, 0)
-    """
-    if not redis_client.db:
-        return None, 0
-
-    best_account_id = None
-    max_quantity = 0
-    admin_id = str(settings.ADMIN_USER_ID)
-
-    try:
-        for key in redis_client.db.scan_iter("tg_helper:task_states:*"):
-            account_id_str = key.split(':')[-1]
-            
-            if account_id_str == admin_id:
-                continue
-
-            inventory_json = redis_client.db.hget(key, "inventory")
-            if not inventory_json:
-                continue
-
-            inventory = json.loads(inventory_json)
-            current_quantity = inventory.get(item_name, 0)
-
-            if current_quantity >= required_quantity and current_quantity > max_quantity:
-                max_quantity = current_quantity
-                best_account_id = account_id_str
-    
-    except Exception as e:
-        format_and_log("ERROR", "扫描库存失败", {'错误': str(e)}, level=logging.ERROR)
-
-    return best_account_id, max_quantity
-
-
-def publish_task_to_account(task: dict):
-    """将任务发布到 Redis 频道。"""
-    if not redis_client.db:
-        format_and_log("ERROR", "任务发布失败", {'原因': 'Redis未连接'}, level=logging.ERROR)
-        return False
-    try:
-        payload = json.dumps(task)
-        redis_client.db.publish(TASK_CHANNEL, payload)
-        format_and_log("DEBUG", "任务已发布", task)
-        return True
-    except Exception as e:
-        format_and_log("ERROR", "任务发布异常", {'错误': str(e)}, level=logging.ERROR)
-        return False
-
-
-async def execute_listing_task(task: dict):
-    """由助手号执行的上架任务。"""
+def get_self_inventory():
+    """获取当前账号自己的库存信息"""
     app = get_application()
-    item_name = task.get("item_name")
-    quantity = task.get("quantity")
-    price = task.get("price")
-    requester_id = task.get("requester_account_id")
-
-    command = f".上架 {item_name}*{quantity} 换 灵石*{price}"
-    format_and_log("TASK", "集火-上架", {'阶段': '开始执行', '指令': command})
-
-    try:
-        _sent, reply = await app.client.send_game_command_request_response(command)
-        
-        match = re.search(r"挂单ID\s*:\s*(\d+)", reply.text)
-        
-        if "成功" in reply.text and match:
-            item_id = match.group(1)
-            format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id})
-            
-            result_task = {
-                "task_type": "purchase_item",
-                "target_account_id": requester_id,
-                "item_id": item_id
-            }
-            publish_task_to_account(result_task)
-        else:
-            format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '未解析到ID或成功信息', '回复': reply.text})
-    except CommandTimeoutError:
-        format_and_log("ERROR", "集火-上架", {'阶段': '失败', '原因': '等待回复超时'}, level=logging.ERROR)
-    except Exception as e:
-        format_and_log("ERROR", "集火-上架", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
-
-
-async def execute_purchase_task(task: dict):
-    """由管理号执行的购买任务。"""
-    app = get_application()
-    item_id = task.get("item_id")
-    command = f".购买 {item_id}"
-    format_and_log("TASK", "集火-购买", {'阶段': '开始执行', '指令': command})
+    if not redis_client.db: return None
     
-    try:
-        await app.client.send_game_command_fire_and_forget(command)
-        await app.client.send_admin_notification(f"✅ **集火成功**：已发送购买指令购买物品 ID `{item_id}`。")
-    except Exception as e:
-        format_and_log("ERROR", "集火-购买", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
-        await app.client.send_admin_notification(f"❌ **集火失败**：发送购买指令时发生错误: `{e}`。")
+    key = f"tg_helper:task_states:{app.client.me.id}"
+    inventory_json = redis_client.db.hget(key, "inventory")
+    if inventory_json:
+        return json.loads(inventory_json)
+    return {}
 
-# --- 改造：为 find_best_executor 植入超详细的“黑匣子”日志 ---
 def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) -> (str, int):
     """
     在除指定ID外的所有助手中，查找拥有某物品数量最多的账号。
+    :param exclude_id: 需要排除的账号ID (总是发起者自己)
+    :return: (账户ID, 拥有数量) 或 (None, 0)
     """
     if not redis_client.db:
         format_and_log("DEBUG", "集火-查找", {'阶段': '中止', '原因': 'Redis未连接'})
@@ -174,6 +85,65 @@ def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) 
 
     format_and_log("DEBUG", "集火-查找", {'阶段': '扫描结束', '最终选择ID': best_account_id, '最大数量': max_quantity})
     return best_account_id, max_quantity
+
+def publish_task(task: dict):
+    # ... (此函数内容不变)
+    if not redis_client.db:
+        format_and_log("ERROR", "任务发布失败", {'原因': 'Redis未连接'}, level=logging.ERROR)
+        return False
+    try:
+        payload = json.dumps(task)
+        redis_client.db.publish(TASK_CHANNEL, payload)
+        format_and_log("DEBUG", "任务已发布", task)
+        return True
+    except Exception as e:
+        format_and_log("ERROR", "任务发布异常", {'错误': str(e)}, level=logging.ERROR)
+        return False
+
+async def execute_listing_task(item_name: str, quantity: int, price: int, requester_id: str):
+    # ... (此函数内容不变)
+    app = get_application()
+    command = f".上架 {item_name}*{quantity} 换 灵石*{price}"
+    format_and_log("TASK", "集火-上架", {'阶段': '开始执行', '指令': command})
+
+    try:
+        _sent, reply = await app.client.send_game_command_request_response(command)
+        
+        match = re.search(r"挂单ID\s*:\s*(\d+)", reply.text)
+        
+        if "成功" in reply.text and match:
+            item_id = match.group(1)
+            format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id})
+            
+            result_task = {
+                "task_type": "purchase_item",
+                "target_account_id": requester_id,
+                "item_id": item_id
+            }
+            publish_task(result_task)
+            return True
+        else:
+            format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '未解析到ID或成功信息', '回复': reply.text})
+            return False
+    except CommandTimeoutError:
+        format_and_log("ERROR", "集火-上架", {'阶段': '失败', '原因': '等待回复超时'}, level=logging.ERROR)
+        return False
+    except Exception as e:
+        format_and_log("ERROR", "集火-上架", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
+        return False
+
+async def execute_purchase_task(item_id: str):
+    # ... (此函数内容不变)
+    app = get_application()
+    command = f".购买 {item_id}"
+    format_and_log("TASK", "集火-购买", {'阶段': '开始执行', '指令': command})
+    
+    try:
+        await app.client.send_game_command_fire_and_forget(command)
+        await app.client.send_admin_notification(f"✅ **集火成功**：已发送购买指令购买物品 ID `{item_id}`。")
+    except Exception as e:
+        format_and_log("ERROR", "集火-购买", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
+        await app.client.send_admin_notification(f"❌ **集火失败**：发送购买指令时发生错误: `{e}`。")
 
 
 async def logic_debug_inventories() -> str:
