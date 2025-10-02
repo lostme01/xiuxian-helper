@@ -13,6 +13,9 @@ HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令**
 """
 
 async def _cmd_focus_fire(event, parts):
+    """
+    处理 ,集火 指令，包含最详细的“黑匣子”日志。
+    """
     app = get_application()
     client = app.client
     my_id = client.me.id if client.me else "未知"
@@ -39,13 +42,23 @@ async def _cmd_focus_fire(event, parts):
 
     best_account_id, found_quantity = await trade_logic.find_best_executor(item_name, quantity, exclude_id=str(my_id))
 
+    # --- 诊断日志 ---
+    format_and_log("DEBUG", "集火-调试", {'阶段': 'find_best_executor 已返回', '返回值': best_account_id})
+
     if not best_account_id:
         await progress_msg.edit(f"❌ `任务失败`\n未在【任何其他助手】中找到拥有足够数量`{item_name}`的账号。")
         client.unpin_message(progress_msg)
         client._schedule_message_deletion(progress_msg, 30, "集火查找失败")
         return
 
+    # --- 诊断日志 ---
+    format_and_log("DEBUG", "集火-调试", {'阶段': '准备编辑消息'})
+    
     await progress_msg.edit(f"✅ `已定位助手` (ID: `...{best_account_id[-4:]}`)\n⏳ 正在通过 Redis 下达上架指令...")
+    
+    # --- 诊断日志 ---
+    format_and_log("DEBUG", "集火-调试", {'阶段': '消息已编辑，准备构建任务'})
+
     task = {
         "task_type": "list_item",
         "target_account_id": best_account_id,
@@ -104,3 +117,4 @@ async def _cmd_debug_inventory(event, parts):
 def initialize(app):
     app.register_command("集火", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="高级协同", usage=HELP_TEXT_FOCUS_FIRE)
     app.register_command("debug库存", _cmd_debug_inventory, help_text="🔬 (调试用)检查所有助手的库存缓存。", category="高级协同")
+
