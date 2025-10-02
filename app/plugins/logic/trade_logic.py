@@ -41,9 +41,10 @@ async def find_best_executor(item_name: str, required_quantity: int, exclude_id:
         return None, 0
 
     best_account_id = None
-    max_quantity = 0
+    min_sufficient_quantity = float('inf') 
+    
     format_and_log("DEBUG", "集火-查找", {
-        '阶段': '开始扫描',
+        '阶段': '开始扫描 (优化版)',
         '查找物品': item_name,
         '要求数量': required_quantity,
         '排除ID': exclude_id
@@ -74,9 +75,9 @@ async def find_best_executor(item_name: str, required_quantity: int, exclude_id:
                 log_context['库存数量'] = current_quantity
                 
                 if current_quantity >= required_quantity:
-                    if current_quantity > max_quantity:
-                        log_context['决策'] = f'更新最佳选择 (之前: {max_quantity}, 现在: {current_quantity})'
-                        max_quantity = current_quantity
+                    if current_quantity < min_sufficient_quantity:
+                        log_context['决策'] = f'更新最佳选择 (之前最优: {min_sufficient_quantity}, 现在更优: {current_quantity})'
+                        min_sufficient_quantity = current_quantity
                         best_account_id = account_id_str
                     else:
                         log_context['决策'] = '忽略 (非更优选择)'
@@ -92,8 +93,12 @@ async def find_best_executor(item_name: str, required_quantity: int, exclude_id:
     except Exception as e:
         format_and_log("ERROR", "扫描库存时发生严重异常", {'错误': str(e)}, level=logging.ERROR)
 
-    format_and_log("DEBUG", "集火-查找", {'阶段': '扫描结束', '最终选择ID': best_account_id, '最大数量': max_quantity})
-    return best_account_id, max_quantity
+    found_quantity = 0
+    if best_account_id:
+        found_quantity = min_sufficient_quantity if min_sufficient_quantity != float('inf') else 0
+
+    format_and_log("DEBUG", "集火-查找", {'阶段': '扫描结束', '最终选择ID': best_account_id, '对应数量': found_quantity})
+    return best_account_id, found_quantity
 
 async def execute_listing_task(item_name: str, quantity: int, price: int, requester_id: str):
     app = get_application()
@@ -103,11 +108,17 @@ async def execute_listing_task(item_name: str, quantity: int, price: int, reques
     try:
         _sent, reply = await app.client.send_game_command_request_response(command)
         
-        match = re.search(r"挂单ID\s*:\s*(\d+)", reply.text)
+        # --- 核心Bug修复 2.0 ---
+        # 1. 使用 .raw_text 来获取包含 `**` 的原始文本。
+        # 2. 使用更强大的正则表达式 `r"挂单ID\D+(\d+)"` 来匹配 `**挂单ID**: 1234` 这样的格式。
+        #    \D+ 会匹配冒号、空格等任何非数字字符。
+        # 3. 使用更精确的 "上架成功" 作为判断依据。
+        raw_reply_text = reply.raw_text
+        match = re.search(r"挂单ID\D+(\d+)", raw_reply_text)
         
-        if "成功" in reply.text and match:
+        if "上架成功" in raw_reply_text and match:
             item_id = match.group(1)
-            format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id})
+            format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id, '原始回复': raw_reply_text})
             
             result_task = {
                 "task_type": "purchase_item",
@@ -117,14 +128,19 @@ async def execute_listing_task(item_name: str, quantity: int, price: int, reques
             await publish_task(result_task)
             return True
         else:
-            format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '未解析到ID或成功信息', '回复': reply.text})
+            format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '未解析到ID或成功信息', '回复': raw_reply_text})
+            await app.client.send_admin_notification(f"❌ **集火失败**：助手号上架 `{item_name}` 时，游戏返回异常或无法解析挂单ID。请检查游戏内消息。")
             return False
+            
     except CommandTimeoutError:
         format_and_log("ERROR", "集火-上架", {'阶段': '失败', '原因': '等待回复超时'}, level=logging.ERROR)
+        await app.client.send_admin_notification(f"❌ **集火失败**：助手号上架 `{item_name}` 时，等待游戏机器人回复超时。")
         return False
     except Exception as e:
         format_and_log("ERROR", "集火-上架", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
+        await app.client.send_admin_notification(f"❌ **集火失败**：助手号上架 `{item_name}` 时发生未知异常: `{e}`")
         return False
+
 
 async def execute_purchase_task(item_id: str):
     app = get_application()
@@ -137,6 +153,7 @@ async def execute_purchase_task(item_id: str):
     except Exception as e:
         format_and_log("ERROR", "集火-购买", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
         await app.client.send_admin_notification(f"❌ **集火失败**：发送购买指令时发生错误: `{e}`。")
+
 
 async def logic_debug_inventories() -> str:
     app = get_application()
