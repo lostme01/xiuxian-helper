@@ -6,26 +6,15 @@ from app.context import get_application
 from app.logger import format_and_log
 from app.telegram_client import CommandTimeoutError
 from app import redis_client
-from config import settings
+from config import settings # 引入 settings
 
 # Redis Pub/Sub 频道名称
 TASK_CHANNEL = "tg_helper:tasks"
 
-def get_self_inventory():
-    """获取当前账号自己的库存信息"""
-    app = get_application()
-    if not redis_client.db: return None
-    
-    key = f"tg_helper:task_states:{app.client.me.id}"
-    inventory_json = redis_client.db.hget(key, "inventory")
-    if inventory_json:
-        return json.loads(inventory_json)
-    return {}
 
-def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) -> (str, int):
+def find_best_account_for_item(item_name: str, required_quantity: int) -> (str, int):
     """
-    在除指定ID外的所有助手中，查找拥有某物品数量最多的账号。
-    :param exclude_id: 需要排除的账号ID (通常是发起者自己)
+    扫描 Redis 查找拥有指定物品数量最多的助手号（非 admin_user_id）。
     :return: (账户ID, 拥有数量) 或 (None, 0)
     """
     if not redis_client.db:
@@ -33,12 +22,13 @@ def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) 
 
     best_account_id = None
     max_quantity = 0
+    admin_id = str(settings.ADMIN_USER_ID)
 
     try:
         for key in redis_client.db.scan_iter("tg_helper:task_states:*"):
             account_id_str = key.split(':')[-1]
             
-            if account_id_str == exclude_id:
+            if account_id_str == admin_id:
                 continue
 
             inventory_json = redis_client.db.hget(key, "inventory")
@@ -57,7 +47,8 @@ def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) 
 
     return best_account_id, max_quantity
 
-def publish_task(task: dict):
+
+def publish_task_to_account(task: dict):
     """将任务发布到 Redis 频道。"""
     if not redis_client.db:
         format_and_log("ERROR", "任务发布失败", {'原因': 'Redis未连接'}, level=logging.ERROR)
@@ -71,12 +62,15 @@ def publish_task(task: dict):
         format_and_log("ERROR", "任务发布异常", {'错误': str(e)}, level=logging.ERROR)
         return False
 
-async def execute_listing_task(item_name: str, quantity: int, price: int, requester_id: str):
-    """
-    执行上架物品的任务流程。
-    :return: 成功时返回 True，失败时返回 False
-    """
+
+async def execute_listing_task(task: dict):
+    """由助手号执行的上架任务。"""
     app = get_application()
+    item_name = task.get("item_name")
+    quantity = task.get("quantity")
+    price = task.get("price")
+    requester_id = task.get("requester_account_id")
+
     command = f".上架 {item_name}*{quantity} 换 灵石*{price}"
     format_and_log("TASK", "集火-上架", {'阶段': '开始执行', '指令': command})
 
@@ -89,28 +83,24 @@ async def execute_listing_task(item_name: str, quantity: int, price: int, reques
             item_id = match.group(1)
             format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id})
             
-            # 将结果回报给发起者
             result_task = {
                 "task_type": "purchase_item",
                 "target_account_id": requester_id,
                 "item_id": item_id
             }
-            publish_task(result_task)
-            return True
+            publish_task_to_account(result_task)
         else:
             format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '未解析到ID或成功信息', '回复': reply.text})
-            # (可选) 在此通知发起者上架失败
-            return False
     except CommandTimeoutError:
         format_and_log("ERROR", "集火-上架", {'阶段': '失败', '原因': '等待回复超时'}, level=logging.ERROR)
-        return False
     except Exception as e:
         format_and_log("ERROR", "集火-上架", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
-        return False
 
-async def execute_purchase_task(item_id: str):
-    """执行购买物品的任务流程。"""
+
+async def execute_purchase_task(task: dict):
+    """由管理号执行的购买任务。"""
     app = get_application()
+    item_id = task.get("item_id")
     command = f".购买 {item_id}"
     format_and_log("TASK", "集火-购买", {'阶段': '开始执行', '指令': command})
     
@@ -120,6 +110,71 @@ async def execute_purchase_task(item_id: str):
     except Exception as e:
         format_and_log("ERROR", "集火-购买", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
         await app.client.send_admin_notification(f"❌ **集火失败**：发送购买指令时发生错误: `{e}`。")
+
+# --- 改造：为 find_best_executor 植入超详细的“黑匣子”日志 ---
+def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) -> (str, int):
+    """
+    在除指定ID外的所有助手中，查找拥有某物品数量最多的账号。
+    """
+    if not redis_client.db:
+        format_and_log("DEBUG", "集火-查找", {'阶段': '中止', '原因': 'Redis未连接'})
+        return None, 0
+
+    best_account_id = None
+    max_quantity = 0
+    format_and_log("DEBUG", "集火-查找", {
+        '阶段': '开始扫描',
+        '查找物品': item_name,
+        '要求数量': required_quantity,
+        '排除ID': exclude_id
+    })
+
+    try:
+        keys_found = list(redis_client.db.scan_iter("tg_helper:task_states:*"))
+        format_and_log("DEBUG", "集火-查找", {'阶段': '扫描Redis', '发现Key数量': len(keys_found), 'Keys': str(keys_found)})
+        
+        for key in keys_found:
+            account_id_str = key.split(':')[-1]
+            log_context = {'当前检查Key': key, '提取ID': account_id_str}
+
+            if account_id_str == exclude_id:
+                log_context['结果'] = '跳过 (是发起者自己)'
+                format_and_log("DEBUG", "集火-查找", log_context)
+                continue
+
+            inventory_json = redis_client.db.hget(key, "inventory")
+            if not inventory_json:
+                log_context['结果'] = '跳过 (无库存数据)'
+                format_and_log("DEBUG", "集火-查找", log_context)
+                continue
+
+            try:
+                inventory = json.loads(inventory_json)
+                current_quantity = inventory.get(item_name, 0)
+                log_context['库存数量'] = current_quantity
+                
+                if current_quantity >= required_quantity:
+                    if current_quantity > max_quantity:
+                        log_context['决策'] = f'更新最佳选择 (之前: {max_quantity}, 现在: {current_quantity})'
+                        max_quantity = current_quantity
+                        best_account_id = account_id_str
+                    else:
+                        log_context['决策'] = '忽略 (非更优选择)'
+                else:
+                    log_context['决策'] = f'忽略 (数量 {current_quantity} < 要求 {required_quantity})'
+                
+                format_and_log("DEBUG", "集火-查找", log_context)
+
+            except json.JSONDecodeError:
+                format_and_log("WARNING", "集火-查找", {'阶段': '库存解析失败', 'Key': key, '原始数据': inventory_json[:100]})
+                continue
+    
+    except Exception as e:
+        format_and_log("ERROR", "扫描库存时发生严重异常", {'错误': str(e)}, level=logging.ERROR)
+
+    format_and_log("DEBUG", "集火-查找", {'阶段': '扫描结束', '最终选择ID': best_account_id, '最大数量': max_quantity})
+    return best_account_id, max_quantity
+
 
 async def logic_debug_inventories() -> str:
     # ... (此函数内容不变)

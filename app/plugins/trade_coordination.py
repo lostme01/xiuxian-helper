@@ -15,7 +15,8 @@ async def _cmd_focus_fire(event, parts):
     """处理 ,集火 指令，实现新的、纯粹的指派逻辑"""
     app = get_application()
     client = app.client
-    my_id = str(client.me.id)
+    # --- 改造：明确发起者身份 ---
+    originator_id = str(client.me.id)
     
     if len(parts) < 3:
         await client.reply_to_admin(event, f"❌ 参数不足！\n\n{HELP_TEXT_FOCUS_FIRE}")
@@ -28,11 +29,17 @@ async def _cmd_focus_fire(event, parts):
         await client.reply_to_admin(event, f"❌ 参数格式错误！\n\n{HELP_TEXT_FOCUS_FIRE}")
         return
 
+    format_and_log("DEBUG", "集火-任务启动", {
+        '发起者ID': originator_id,
+        '查找物品': item_name,
+        '要求数量': quantity
+    })
+
     progress_msg = await client.reply_to_admin(event, f"⏳ `集火任务启动`\n正在扫描其他助手库存...")
     client.pin_message(progress_msg)
 
-    # --- 核心改造：直接查找其他助手，不再检查自身库存 ---
-    best_account_id, found_quantity = trade_logic.find_best_executor(item_name, quantity, exclude_id=my_id)
+    # --- 改造：确认传递给查找函数的参数 ---
+    best_account_id, found_quantity = trade_logic.find_best_executor(item_name, quantity, exclude_id=originator_id)
 
     if not best_account_id:
         await progress_msg.edit(f"❌ `任务失败`\n未在【其他】助手中找到任何拥有足够数量`{item_name}`的账号。")
@@ -40,12 +47,11 @@ async def _cmd_focus_fire(event, parts):
         client._schedule_message_deletion(progress_msg, 30, "集火查找失败")
         return
 
-    # 分派任务给最佳助手
     await progress_msg.edit(f"✅ `已定位助手` (ID: `...{best_account_id[-4:]}`)\n⏳ 正在通过 Redis 下达上架指令...")
     task = {
         "task_type": "list_item",
         "target_account_id": best_account_id,
-        "requester_account_id": my_id,
+        "requester_account_id": originator_id,
         "item_name": item_name,
         "quantity": quantity,
         "price": 1 
