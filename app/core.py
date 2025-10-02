@@ -17,10 +17,7 @@ from app.redis_client import initialize_redis
 from app import gemini_client
 from app.plugins import load_all_plugins
 from app.logger import format_and_log, TimezoneFormatter
-from app.context import set_application, set_scheduler
-from app.plugins.trade_coordination import redis_message_handler
-from app.plugins.logic.trade_logic import TASK_CHANNEL
-
+from app.context import set_application, set_scheduler, get_application
 
 class Application:
     def __init__(self):
@@ -40,14 +37,16 @@ class Application:
         format_and_log("SYSTEM", "组件初始化", {'组件': 'Telegram 客户端', '状态': '实例化完成'})
 
     async def _redis_listener_loop(self):
-        from app.redis_client import db
-        if not db: 
+        from app.plugins.trade_coordination import redis_message_handler
+        from app.plugins.logic.trade_logic import TASK_CHANNEL
+        
+        if not self.redis_db: 
             format_and_log("WARNING", "Redis 监听器", {'状态': '未启动', '原因': 'Redis 未连接'})
             return
 
         while True: 
             try:
-                async with db.pubsub() as pubsub:
+                async with self.redis_db.pubsub() as pubsub:
                     await pubsub.subscribe(TASK_CHANNEL)
                     format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '已订阅', '频道': TASK_CHANNEL})
                     
@@ -108,7 +107,6 @@ class Application:
             self.startup_checks.clear()
             for handler, callback in list(self.client.client.list_event_handlers()):
                 if callback not in [self.client._message_handler, self.client._message_edited_handler, self.client._deleted_message_handler]:
-                    # --- 修复：添加正确的缩进 ---
                     self.client.client.remove_event_handler(callback, handler)
         load_all_plugins(self)
 
@@ -120,14 +118,11 @@ class Application:
         format_and_log("SYSTEM", "核心服务", {'阶段': '启动检查任务执行完毕。'})
 
     async def run(self):
-        """
-        [重构版]
-        编排所有服务的启动、运行和关闭。
-        """
         background_tasks = set()
         try:
             self.redis_db = await initialize_redis()
             if settings.REDIS_CONFIG.get('enabled') and not self.redis_db:
+                format_and_log("CRITICAL", "启动失败", {'原因': 'Redis配置为启用，但连接失败，程序退出。'})
                 sys.exit(1)
             
             scheduler.start()
@@ -137,15 +132,12 @@ class Application:
             
             self.load_plugins_and_commands()
             
-            # --- 核心重构：先让核心服务在后台运行起来 ---
             if self.redis_db:
                 redis_task = asyncio.create_task(self._redis_listener_loop())
                 background_tasks.add(redis_task)
             
-            # 给予后台任务一点时间来完成初始化
             await asyncio.sleep(2) 
 
-            # --- 然后再执行可能会发送指令的启动检查 ---
             await self.client._cache_chat_info()
             await self.client.warm_up_entity_cache()
             
@@ -155,7 +147,6 @@ class Application:
             await self.client.send_admin_notification("✅ **助手已成功启动并在线**")
             format_and_log("SYSTEM", "核心服务", {'阶段': '所有服务已启动，进入主循环...'})
             
-            # 主程序现在等待 Telegram 客户端断开连接
             await self.client.client.disconnected
 
         except Exception as e:
@@ -163,24 +154,26 @@ class Application:
         finally:
             for task in background_tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*background_tasks, return_exceptions=True)
 
             if self.client and self.client.is_connected():
                 await self.client.disconnect()
             shutdown()
             format_and_log("SYSTEM", "核心服务", {'阶段': '应用已关闭'})
 
-    # --- 以下方法保持不变 ---
     def register_command(self, name, handler, help_text="", category="默认", aliases=None, usage=None):
         if aliases is None: aliases = []
         usage = usage or help_text
         command_data = { "handler": handler, "help": help_text, "category": category, "aliases": aliases, "usage": usage }
-        for cmd_name in [name] + aliases: self.commands[cmd_name] = command_data
+        # --- 核心修复：注册指令时，统一使用小写 ---
+        for cmd_name in [name] + aliases:
+            self.commands[cmd_name.lower()] = command_data
+
     def register_task(self, task_key, function, command_name, help_text):
         self.task_functions[task_key] = function
         async def task_trigger_handler(event, parts):
-            from app.context import get_application
-            client = get_application().client
+            app = get_application()
+            client = app.client
             progress_message = await client.reply_to_admin(event, f"⏳ 好的，正在手动执行 **[{command_name}]** 任务...")
             if not progress_message: return
             client.pin_message(progress_message)
@@ -202,6 +195,7 @@ class Application:
                     client._schedule_message_deletion(edited_message, settings.AUTO_DELETE.get('delay_admin_command'), "编辑后的助手回复")
                 except MessageEditTimeExpiredError: await client.reply_to_admin(event, final_text)
         self.register_command(command_name, task_trigger_handler, help_text=help_text, category="游戏任务")
+
     async def reload_plugins_and_commands(self):
         format_and_log("SYSTEM", "热重载", {'阶段': '开始...'})
         try:
@@ -210,8 +204,9 @@ class Application:
                 if module_name.startswith('app.plugins.'):
                     reload(sys.modules[module_name])
         except Exception as e:
-            await self.client.send_admin_notification(f"❌ **热重载失败**：无法重新加载配置文件或插件，请检查日志。")
+            await self.client.send_admin_notification(f"❌ **热重载失败**：无法重新加载配置文件或插件，请检查日志。错误: {e}")
             return
+        
         self.load_plugins_and_commands(is_reload=True)
         asyncio.create_task(self._run_startup_checks())
         format_and_log("SYSTEM", "热重载", {'阶段': '完成'})

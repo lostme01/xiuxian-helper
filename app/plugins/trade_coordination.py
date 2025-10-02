@@ -24,10 +24,10 @@ async def _cmd_focus_fire(event, parts):
     app = get_application()
     client = app.client
     my_id = client.me.id if client.me else "未知"
-    sender_id = event.sender_id
-
-    # 指令只能由管理员在控制群或私聊中对自己运行的实例发起
-    if sender_id != settings.ADMIN_USER_ID or my_id != settings.ADMIN_USER_ID:
+    
+    # --- 核心优化：简化身份判断 ---
+    # 集火指令只能由管理员实例（即自身ID等于配置中的admin_user_id）发起。
+    if str(my_id) != str(settings.ADMIN_USER_ID):
         return
 
     format_and_log("INFO", "集火-身份确认", {'结果': '本机为管理员实例，开始执行任务'})

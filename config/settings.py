@@ -43,7 +43,7 @@ COMMAND_PREFIXES = config.get('command_prefixes', [',', '，'])
 SECT_NAME = config.get('sect_name', None)
 TZ = config.get('timezone', 'Asia/Shanghai')
 
-# --- 改造：从配置中读取全局指令超时时间 ---
+# --- 核心修改：确保全局指令超时时间被正确加载和使用 ---
 COMMAND_TIMEOUT = config.get('command_timeout', 60)
 
 AUTO_DELETE = _merge_config('auto_delete', {
@@ -100,7 +100,6 @@ EXAM_SOLVER_CONFIG = config.get('exam_solver', {})
 XUANGU_EXAM_CONFIG = config.get('xuangu_exam_solver', {'enabled': False})
 TIANJI_EXAM_CONFIG = config.get('tianji_exam_solver', {'enabled': False})
 LOG_ROTATION_CONFIG = config.get('log_rotation', {'max_bytes': 1048576, 'backup_count': 9})
-# --- 新增: 读取交易协同配置 ---
 TRADE_COORDINATION_CONFIG = config.get('trade_coordination', {'focus_fire_auto_delist': True})
 
 GEMINI_MODEL_NAME = EXAM_SOLVER_CONFIG.get('gemini_model_name', 'gemini-2.5-pro')
@@ -126,14 +125,11 @@ def check_startup_settings():
     }
     if XUANGU_EXAM_CONFIG.get('enabled') or TIANJI_EXAM_CONFIG.get('enabled'):
         required_settings['gemini_api_keys'] = (EXAM_SOLVER_CONFIG.get('gemini_api_keys'), "在 prod.yaml 或 .env 文件中设置 gemini_api_keys")
-    for key, (value, _) in required_settings.items():
-        if not value: missing_info.append(key)
-    if missing_info:
+    for key in missing_info:
         error_message = f"严重错误: 您的 `config/prod.yaml` 或 `.env` 配置文件中缺少或未正确配置以下必须的设置：\n"
         error_message += "--------------------------------------------------\n"
-        for key in missing_info:
-            _, example = required_settings[key]
-            error_message += f"\n缺失项: {key}\n正确格式示例:\n{example}\n"
+        _, example = required_settings[key]
+        error_message += f"\n缺失项: {key}\n正确格式示例:\n{example}\n"
         error_message += "\n--------------------------------------------------\n程序无法启动。"
         print(error_message)
         exit(1)

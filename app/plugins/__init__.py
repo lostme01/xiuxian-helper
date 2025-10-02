@@ -7,6 +7,7 @@ from app.logger import format_and_log
 
 def load_all_plugins(app):
     """
+    [修复版]
     动态扫描并加载所有插件。
     - app: Application 的实例，传递给每个插件以便注册。
     """
@@ -17,16 +18,15 @@ def load_all_plugins(app):
             try:
                 module = importlib.import_module(module_name)
                 
-                # --- 核心逻辑：检查宗门专属元数据 ---
+                # --- 核心修复：检查宗门专属元数据 ---
                 plugin_sect = getattr(module, '__plugin_sect__', None)
                 if plugin_sect and plugin_sect != settings.SECT_NAME:
-                    format_and_log("SYSTEM", "插件加载", {'模块': module_name, '状态': '已跳过', '原因': f'宗门不匹配 (需要 {plugin_sect})'})
-                    continue # 跳过该插件的初始化
+                    format_and_log("SYSTEM", "插件加载", {'模块': module_name, '状态': '已跳过', '原因': f'宗门不匹配 (需要 {plugin_sect}, 当前配置为 {settings.SECT_NAME})'})
+                    continue # 正确跳过该插件的后续所有初始化步骤
 
                 if hasattr(module, "initialize") and callable(getattr(module, "initialize")):
                     module.initialize(app)
                     format_and_log("SYSTEM", "插件加载", {'模块': module_name, '状态': '成功'})
-                # (对于没有 initialize 的组件文件，加载器现在会静默跳过，不再警告)
             
             except Exception as e:
                 format_and_log("SYSTEM", "插件加载失败", {

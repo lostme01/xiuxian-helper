@@ -2,26 +2,29 @@
 import re
 import logging
 import asyncio
+import pytz
+from datetime import datetime
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 from config import settings
 from app.logger import format_and_log
 from app.context import get_application
 from app.state_manager import set_state, get_state
-
+from app.telegram_client import CommandTimeoutError
 
 STATE_KEY_PROFILE = "character_profile"
 
+# --- 核心修复：将正则表达式中的 \*+ 更改为 \**，以匹配带或不带星号的用户名 ---
 PROFILE_PATTERN = re.compile(
-    r"@(?P<user>\w+)\*+\s*的天命玉牒"
-    r"(?:.*?\s*称\s*号\s*[:：\s]*【(?P<称号>[^】]+)】)?"
-    r".*?\s*宗\s*门\s*[:：\s]*【(?P<宗门>[^】]+)】"
-    r"(?:.*?\s*道\s*号\s*[:：\s]*(?P<道号>[^\n]+))?"
-    r"(?:.*?\s*灵\s*根\s*[:：\s]*(?P<灵根>[^\n]+))?"
-    r".*?\s*境\s*界\s*[:：\s]*(?P<境界>[^\n]+)"
-    r".*?\s*修\s*为\s*[:：\s]*(?P<当前修为>\d+)\s*/\s*(?P<修为上限>\d+)"
-    r".*?\s*丹\s*毒\s*[:：\s]*(?P<丹毒>[^\n]+)"
-    r".*?\s*杀\s*戮\s*[:：\s]*(?P<杀戮>[^\n]+)",
-    re.DOTALL
+    r"@(?P<user>\w+)\** 的天命玉牒\s*"
+    r"(?:[*\s]*称号[*\s]*: *【(?P<title>[^】]*)】)?\s*"
+    r"[*\s]*宗门[*\s]*: *【(?P<sect>[^】]*)】\s*"
+    r"(?:[*\s]*道号[*\s]*: *(?P<dao_name>.+?))?\s*"
+    r"(?:[*\s]*灵根[*\s]*: *(?P<root>.+?))?\s*"
+    r"[*\s]*境界[*\s]*: *(?P<realm>.+?)\s*"
+    r"[*\s]*修为[*\s]*: *(?P<exp_cur>\d+) */ *(?P<exp_max>\d+)\s*"
+    r"[*\s]*丹毒[*\s]*: *(?P<pill_poison>\d+) *点\s*"
+    r"[*\s]*杀戮[*\s]*: *(?P<kills>\d+) *人",
+    re.S
 )
 
 def _parse_profile_text(text: str) -> dict:
@@ -29,8 +32,21 @@ def _parse_profile_text(text: str) -> dict:
     if not match:
         return {}
 
-    profile = {k: v.strip() if v else v for k, v in match.groupdict().items()}
+    raw_profile = {k: v.strip() if v else v for k, v in match.groupdict().items()}
     
+    profile = {
+        "user": raw_profile.get("user"),
+        "称号": raw_profile.get("title"),
+        "宗门": raw_profile.get("sect"),
+        "道号": raw_profile.get("dao_name"),
+        "灵根": raw_profile.get("root"),
+        "境界": raw_profile.get("realm"),
+        "当前修为": raw_profile.get("exp_cur"),
+        "修为上限": raw_profile.get("exp_max"),
+        "丹毒": f"{raw_profile.get('pill_poison')} 点",
+        "杀戮": f"{raw_profile.get('kills')} 人",
+    }
+
     for key in ["当前修为", "修为上限"]:
         if profile.get(key):
             try:
@@ -65,29 +81,47 @@ async def trigger_update_profile(force_run=False):
     client = app.client
     command = ".我的灵根"
     
+    sent_message = None
+    initial_reply = None
+    final_message = None
+
     try:
-        initial_reply_pattern = r"正.*?在.*?查.*?询.*?的.*?天.*?命.*?玉.*?牒"
-        
-        _initial_reply, final_message = await client.send_and_wait_for_edit(
-            command, initial_reply_pattern=initial_reply_pattern, timeout=30)
+        sent_message, initial_reply = await client.send_game_command_request_response(command)
 
-        if not final_message:
-            return False, "❌ **查询失败**: 等待游戏机器人更新信息超时。"
+        profile_data = _parse_profile_text(initial_reply.raw_text)
 
-        profile_data = _parse_profile_text(final_message.text)
+        if profile_data.get("境界"):
+            final_message = initial_reply
+        else:
+            initial_reply_pattern = r"正.*?在.*?查.*?询.*?的.*?天.*?命.*?玉.*?牒"
+            if re.search(initial_reply_pattern, initial_reply.text):
+                edit_future = asyncio.Future()
+                client.pending_edit_by_id[initial_reply.id] = edit_future
+                
+                remaining_timeout = settings.COMMAND_TIMEOUT - (datetime.now(pytz.utc) - sent_message.date).total_seconds()
+                if remaining_timeout <= 0:
+                    raise asyncio.TimeoutError("获取初始回复后没有剩余时间等待编辑。")
+                
+                final_message = await asyncio.wait_for(edit_future, timeout=remaining_timeout)
+                profile_data = _parse_profile_text(final_message.raw_text)
+            else:
+                return False, f"❌ **查询失败**: 游戏机器人返回的初始消息与预期不符。\n\n**收到的初始消息**:\n`{initial_reply.text}`"
 
         if not profile_data.get("境界"):
-            return False, f"❌ **解析失败**: 无法从返回的信息中解析出角色数据。\n\n**原始返回**:\n`{final_message.text}`"
+            return False, f"❌ **解析失败**: 无法从最终返回的信息中解析出角色数据。\n\n**原始返回**:\n`{getattr(final_message, 'raw_text', '无最终消息')}`"
 
         await set_state(STATE_KEY_PROFILE, profile_data)
-        
         reply_text = _format_profile_reply(profile_data, "✅ **角色信息已更新并缓存**:")
         return True, reply_text
 
-    except asyncio.TimeoutError:
-        return False, "❌ **查询失败**: 发送指令后，游戏机器人无响应或未在规定时间内更新信息。"
+    except (CommandTimeoutError, asyncio.TimeoutError):
+        return False, f"❌ **查询失败**: 等待游戏机器人响应或更新信息超时(超过 {settings.COMMAND_TIMEOUT} 秒)。"
     except Exception as e:
         return False, f"❌ **发生意外错误**: `{str(e)}`"
+    finally:
+        if initial_reply:
+            client.pending_edit_by_id.pop(initial_reply.id, None)
+
 
 async def _cmd_query_profile(event, parts):
     app = get_application()

@@ -4,7 +4,6 @@ from config import settings
 from app.config_manager import update_setting, _load_config, _save_config
 from app.logger import LOG_DESC_TO_SWITCH, LOG_SWITCH_TO_DESC
 
-# --- 改造：添加“指令超时”到映射表 ---
 CONFIG_MAP = {
     "指令前缀": "command_prefixes", "宗门名称": "sect_name", "时区": "timezone",
     "指令超时": "command_timeout", "心跳超时": "heartbeat_timeout",
@@ -22,7 +21,6 @@ def _get_nested_value(config_dict, path):
     keys = path.split('.')
     value = config_dict
     for key in keys:
-        # 兼容字典和对象属性访问
         if isinstance(value, dict):
             value = value.get(key)
         else:
@@ -35,8 +33,9 @@ def _get_nested_value(config_dict, path):
 async def logic_get_config_item(key: str | None) -> str:
     """获取指定或所有可查询的配置项"""
     if not key:
+        # --- 核心修改：优化显示格式 ---
         header = "✅ **可供查询的配置项如下 (请使用中文名查询):**\n\n"
-        keys_text = ' '.join([f"`{k}`" for k in sorted(CONFIG_MAP.keys())])
+        keys_text = '\n'.join([f"- `{k}`" for k in sorted(CONFIG_MAP.keys())])
         return header + keys_text
         
     if key not in CONFIG_MAP:
@@ -50,7 +49,6 @@ async def logic_get_config_item(key: str | None) -> str:
         value = "****** (出于安全考虑, 已隐藏)"
 
     if value is None:
-        # 如果文件中没有，尝试从内存中的 settings 获取
         value = _get_nested_value(settings, path.upper())
         if value is None:
             return f"❌ 查询配置 `{path}` 失败, 未在配置文件或默认设置中找到该项。"
@@ -74,3 +72,4 @@ async def logic_toggle_all_logs(enable: bool) -> str:
         return f"✅ 所有日志模块已设置为 **{status_text}** 状态。"
     else:
         return f"⚠️ 内存中的日志配置已更新，但写入 `prod.yaml` 文件失败。"
+

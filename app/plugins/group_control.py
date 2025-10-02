@@ -14,7 +14,7 @@ async def _handle_help_command(event, parts):
     
     if len(parts) > 1:
         cmd_name_to_find = parts[1]
-        command_info = app.commands.get(cmd_name_to_find)
+        command_info = app.commands.get(cmd_name_to_find.lower()) # 查找时也用小写
         if command_info:
             usage_text = command_info.get('usage', '该指令没有提供详细的帮助信息。')
             await client.reply_to_admin(event, f"📄 **指令帮助: {prefix}{cmd_name_to_find}**\n\n{usage_text}")
@@ -27,6 +27,7 @@ async def _handle_help_command(event, parts):
     for name, data in app.commands.items():
         handler = data['handler']
         if handler not in unique_cmds:
+            # name 已经是小写了
             unique_cmds[handler] = {"name": name, "category": data.get("category", "默认")}
     
     for cmd_info in unique_cmds.values():
@@ -78,6 +79,7 @@ async def execute_command(event):
         return
 
     cmd_name = parts[0]
+    # --- 核心校对：确保查找时使用小写 ---
     command_info = app.commands.get(cmd_name.lower())
     
     if command_info and (handler := command_info.get("handler")):
@@ -95,32 +97,24 @@ async def execute_command(event):
 def initialize(app):
     client = app.client
     
-    # 定义指令应该响应的唯一地方：管理员私聊（或收藏夹）和控制群。
     admin_command_chats = [settings.ADMIN_USER_ID]
     if settings.CONTROL_GROUP_ID:
         admin_command_chats.append(settings.CONTROL_GROUP_ID)
 
     app.register_command("帮助", _handle_help_command, help_text="ℹ️ 显示此帮助菜单。", category="系统管理", aliases=["help"])
 
-    # 监听器只在指定的 admin_command_chats 中生效。
     @client.client.on(events.NewMessage(chats=admin_command_chats))
     async def admin_command_handler(event):
-        # 仅处理来自管理员的消息（双重保险）
         if event.sender_id != settings.ADMIN_USER_ID:
             return
 
-        # --- 核心逻辑：处理管理员自己是助手的情况 ---
         if event.out:
-            # 如果消息是自己发出的，并且是在群组里（即控制群），则忽略，不作任何响应。
-            # 这就强制要求管理员通过收藏夹（私聊）来管理自己的助手。
             if event.is_group:
                 format_and_log("DEBUG", "指令分发-忽略", {'原因': '管理员在群内对自己发出的指令不响应'})
                 return
             
-            # 如果是在私聊（收藏夹）中对自己发指令，则为其安排自动删除
             is_command = any(event.text.startswith(p) for p in settings.COMMAND_PREFIXES)
             if is_command:
                 client._schedule_message_deletion(event.message, settings.AUTO_DELETE.get('delay_admin_command'), "管理员自己的指令")
         
-        # 执行指令
         await execute_command(event)

@@ -25,7 +25,6 @@ class TelegramClient:
     def __init__(self):
         self.api_id, self.api_hash, self.admin_id = settings.API_ID, settings.API_HASH, settings.ADMIN_USER_ID
         self.me = None
-        self.is_admin_self = False
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         self.client = TelethonTgClient(settings.SESSION_FILE_PATH, self.api_id, self.api_hash)
         
@@ -35,15 +34,20 @@ class TelegramClient:
         
         self.message_queue = asyncio.Queue()
         self.pending_req_by_id = {}
+        self.pending_edit_by_id = {}
         self.deletion_tasks = {}
         self._pinned_messages = set()
 
-        all_groups = settings.GAME_GROUP_IDS + ([settings.CONTROL_GROUP_ID] if settings.CONTROL_GROUP_ID else [])
+        # --- 核心修复：将监听范围严格限定在配置文件指定的群组中 ---
+        all_configured_groups = settings.GAME_GROUP_IDS + ([settings.CONTROL_GROUP_ID] if settings.CONTROL_GROUP_ID else [])
         if getattr(settings, 'TEST_GROUP_ID', None):
-            all_groups.append(settings.TEST_GROUP_ID)
+            all_configured_groups.append(settings.TEST_GROUP_ID)
         
-        self.client.on(events.NewMessage(chats=all_groups, incoming=True))(self._message_handler)
-        self.client.on(events.MessageEdited(chats=all_groups, incoming=True))(self._message_edited_handler)
+        # 这个处理器负责监听游戏事件、机器人回复和日志记录，必须严格限定在配置的群组中
+        self.client.on(events.NewMessage(chats=all_configured_groups, incoming=True))(self._message_handler)
+        self.client.on(events.MessageEdited(chats=all_configured_groups, incoming=True))(self._message_edited_handler)
+        
+        # 删除事件的处理器也需要限定范围
         self.client.add_event_handler(self._deleted_message_handler, events.Raw(types=[UpdateDeleteChannelMessages, UpdateDeleteMessages]))
         
     async def reply_to_admin(self, event, text: str, **kwargs):
@@ -137,33 +141,21 @@ class TelegramClient:
             await self._cancel_message_deletion(sent_message)
         return sent_message, reply_message
 
-    async def send_and_wait_for_edit(self, command: str, initial_reply_pattern: str, timeout: int = 30) -> tuple[Message | None, Message | None]:
-        edit_future = asyncio.Future()
-        initial_reply = None
-        async def edit_handler(event: events.MessageEdited.Event):
-            if initial_reply and event.message.id == initial_reply.id:
-                if not edit_future.done():
-                    edit_future.set_result(event.message)
-        self.client.add_event_handler(edit_handler, events.MessageEdited)
+    async def send_and_wait_for_edit(self, command: str, initial_reply_pattern: str, timeout: int = None) -> tuple[Message | None, Message | None]:
+        if timeout is None:
+            timeout = settings.COMMAND_TIMEOUT
+        
         try:
-            _sent_message, initial_reply = await self.send_game_command_request_response(command, timeout=timeout)
-            if not re.search(initial_reply_pattern, initial_reply.text):
-                return initial_reply, None
-            remaining_timeout = timeout - (datetime.now(pytz.utc) - _sent_message.date).total_seconds()
-            if remaining_timeout <= 0: return initial_reply, None
-            final_message = await asyncio.wait_for(edit_future, timeout=remaining_timeout)
-            return initial_reply, final_message
+            sent_message, initial_reply = await self.send_game_command_request_response(command, timeout=timeout)
+            return sent_message, initial_reply
         except (CommandTimeoutError, asyncio.TimeoutError):
-            raise asyncio.TimeoutError(f"等待指令 '{command}' 的响应或编辑超时。")
-        finally:
-            self.client.remove_event_handler(edit_handler, events.MessageEdited)
-    
+            raise asyncio.TimeoutError(f"等待指令 '{command}' 的响应超时(总时长 {timeout} 秒)。")
+
     async def start(self):
         await self.client.start()
         self.me = await self.client.get_me()
-        self.is_admin_self = self.me.id == self.admin_id
         my_name = get_display_name(self.me)
-        identity = "主控账号 (Admin)" if self.is_admin_self else "辅助账号 (Helper)"
+        identity = "主控账号 (Admin)" if str(self.me.id) == str(self.admin_id) else "辅助账号 (Helper)"
         from app.logger import format_and_log
         format_and_log("SYSTEM", "客户端状态", {'状态': '已成功连接', '当前用户': f"{my_name} (ID: {self.me.id})", '识别身份': identity})
         asyncio.create_task(self._message_sender_loop())
@@ -210,8 +202,8 @@ class TelegramClient:
             
         try:
             await self.client.delete_messages(entity=message.chat_id, message_ids=[message.id])
-        except Exception as e:
-            logging.warning(f"自动删除消息 {message.id} (位于对话 {message.chat_id}) 失败: {e}")
+        except Exception:
+            pass
         finally:
             self.deletion_tasks.pop(task_key, None)
 
@@ -221,54 +213,67 @@ class TelegramClient:
             return
         
         task_key = (message.chat_id, message.id)
+        
+        if task_key in self._pinned_messages:
+            format_and_log("DEBUG", "消息删除-跳过", {"原因": "消息已被钉住", "消息ID": message.id})
+            return
+
         if task_key in self.deletion_tasks:
             self.deletion_tasks[task_key].cancel()
 
         task = asyncio.create_task(self._sleep_and_delete(delay_seconds, message))
         self.deletion_tasks[task_key] = task
         
-        format_and_log("DEBUG", "安排消息删除", {"消息ID": message.id, "对话ID": message.chat_id, "延迟(秒)": delay_seconds, "场景": reason})
+        format_and_log("DEBUG", "安排消息删除", {"消息ID": message.id, "延迟(秒)": delay_seconds, "场景": reason})
 
     async def _cancel_message_deletion(self, message: Message):
         from app.logger import format_and_log
         if not message: return
-        task_key = (message.chat_id, message.id)
-        task = self.deletion_tasks.pop(task_key, None)
+        task = self.deletion_tasks.pop((message.chat_id, message.id), None)
         if task:
             task.cancel()
             format_and_log("DEBUG", "取消消息删除", {"消息ID": message.id})
 
     def pin_message(self, message: Message):
+        from app.logger import format_and_log
         if not message: return
         task_key = (message.chat_id, message.id)
         self._pinned_messages.add(task_key)
-        from app.logger import format_and_log
-        format_and_log("DEBUG", "消息保护", {"操作": "钉住", "消息ID": message.id})
+        
+        task = self.deletion_tasks.pop(task_key, None)
+        if task:
+            task.cancel()
+            format_and_log("DEBUG", "消息保护", {"操作": "钉住并取消删除", "消息ID": message.id})
+        else:
+            format_and_log("DEBUG", "消息保护", {"操作": "钉住", "消息ID": message.id})
 
     def unpin_message(self, message: Message):
+        from app.logger import format_and_log
         if not message: return
         task_key = (message.chat_id, message.id)
         self._pinned_messages.discard(task_key)
-        from app.logger import format_and_log
+        
         format_and_log("DEBUG", "消息保护", {"操作": "解钉", "消息ID": message.id})
+        self._schedule_message_deletion(message, settings.AUTO_DELETE.get('delay_admin_command'), "解钉后自动清理")
 
     async def _message_handler(self, event: events.NewMessage.Event):
-        from app.logger import format_and_log
         log_type = LogType.MSG_SENT_SELF if event.out else LogType.MSG_RECV
         await log_event(log_type, event)
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         
         is_reply_to_us = not event.out and event.is_reply and event.message.reply_to_msg_id in self.pending_req_by_id
         if is_reply_to_us:
-            format_and_log("DEBUG", "客户端流程 -> _message_handler", {'阶段': '检测到有效回复', '回复的消息ID': event.message.reply_to_msg_id})
-            await log_event(LogType.REPLY_RECV, event)
-            reply_to_id = event.message.reply_to_msg_id
-            future = self.pending_req_by_id.get(reply_to_id)
+            future = self.pending_req_by_id.get(event.message.reply_to_msg_id)
             if future and not future.done():
+                await log_event(LogType.REPLY_RECV, event)
                 future.set_result(event.message)
 
     async def _message_edited_handler(self, event: events.MessageEdited.Event):
         await log_event(LogType.MSG_EDIT, event)
+        
+        future = self.pending_edit_by_id.get(event.message.id)
+        if future and not future.done():
+            future.set_result(event.message)
     
     async def _deleted_message_handler(self, update):
         chat_id = None
