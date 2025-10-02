@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import asyncio
 from app.context import get_application
 from app.logger import format_and_log
 from app.telegram_client import CommandTimeoutError
@@ -100,26 +101,31 @@ async def find_best_executor(item_name: str, required_quantity: int, exclude_id:
     format_and_log("DEBUG", "集火-查找", {'阶段': '扫描结束', '最终选择ID': best_account_id, '对应数量': found_quantity})
     return best_account_id, found_quantity
 
-async def execute_listing_task(item_name: str, quantity: int, price: int, requester_id: str):
+async def execute_listing_task(item_to_sell_name: str, item_to_sell_quantity: int, item_to_buy_name: str, item_to_buy_quantity: int, requester_id: str):
     app = get_application()
-    command = f".上架 {item_name}*{quantity} 换 灵石*{price}"
+    
+    # --- 核心修改：动态构建上架指令 ---
+    command = f".上架 {item_to_sell_name}*{item_to_sell_quantity} 换 {item_to_buy_name}*{item_to_buy_quantity}"
+    
     format_and_log("TASK", "集火-上架", {'阶段': '开始执行', '指令': command})
 
     try:
         _sent, reply = await app.client.send_game_command_request_response(command)
         
-        # --- 核心Bug修复 2.0 ---
-        # 1. 使用 .raw_text 来获取包含 `**` 的原始文本。
-        # 2. 使用更强大的正则表达式 `r"挂单ID\D+(\d+)"` 来匹配 `**挂单ID**: 1234` 这样的格式。
-        #    \D+ 会匹配冒号、空格等任何非数字字符。
-        # 3. 使用更精确的 "上架成功" 作为判断依据。
         raw_reply_text = reply.raw_text
         match = re.search(r"挂单ID\D+(\d+)", raw_reply_text)
         
         if "上架成功" in raw_reply_text and match:
             item_id = match.group(1)
-            format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id, '原始回复': raw_reply_text})
+            format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id})
             
+            # --- 核心新增：检查是否需要立即下架 ---
+            if settings.TRADE_COORDINATION_CONFIG.get('focus_fire_auto_delist', True):
+                format_and_log("TASK", "集火-安全操作", {'阶段': '执行立即下架', '挂单ID': item_id})
+                await asyncio.sleep(random.uniform(1, 2)) # 短暂延迟确保挂单成功
+                await app.client.send_game_command_fire_and_forget(f".下架 {item_id}")
+            
+            # 无论是否下架，都通知发起者可以购买了
             result_task = {
                 "task_type": "purchase_item",
                 "target_account_id": requester_id,
@@ -129,18 +135,17 @@ async def execute_listing_task(item_name: str, quantity: int, price: int, reques
             return True
         else:
             format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '未解析到ID或成功信息', '回复': raw_reply_text})
-            await app.client.send_admin_notification(f"❌ **集火失败**：助手号上架 `{item_name}` 时，游戏返回异常或无法解析挂单ID。请检查游戏内消息。")
+            await app.client.send_admin_notification(f"❌ **集火失败**：助手号上架 `{item_to_sell_name}` 时，游戏返回异常或无法解析挂单ID。")
             return False
             
     except CommandTimeoutError:
         format_and_log("ERROR", "集火-上架", {'阶段': '失败', '原因': '等待回复超时'}, level=logging.ERROR)
-        await app.client.send_admin_notification(f"❌ **集火失败**：助手号上架 `{item_name}` 时，等待游戏机器人回复超时。")
+        await app.client.send_admin_notification(f"❌ **集火失败**：助手号上架 `{item_to_sell_name}` 时，等待游戏机器人回复超时。")
         return False
     except Exception as e:
         format_and_log("ERROR", "集火-上架", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
-        await app.client.send_admin_notification(f"❌ **集火失败**：助手号上架 `{item_name}` 时发生未知异常: `{e}`")
+        await app.client.send_admin_notification(f"❌ **集火失败**：助手号上架 `{item_to_sell_name}` 时发生未知异常: `{e}`")
         return False
-
 
 async def execute_purchase_task(item_id: str):
     app = get_application()
@@ -153,7 +158,6 @@ async def execute_purchase_task(item_id: str):
     except Exception as e:
         format_and_log("ERROR", "集火-购买", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
         await app.client.send_admin_notification(f"❌ **集火失败**：发送购买指令时发生错误: `{e}`。")
-
 
 async def logic_debug_inventories() -> str:
     app = get_application()

@@ -69,6 +69,10 @@ auto_delete:
   delay_admin_command: 30
   delay_on_timeout: 60
 
+# --- 新增：交易协同配置 ---
+trade_coordination:
+  focus_fire_auto_delist: true # 是否在上架后立即下架，防止被别人买走，默认为 true
+
 huangfeng_valley:
   garden_sow_seed: '凝血草种子'
 taiyi_sect:
@@ -86,5 +90,5 @@ logging_switches:
   reply_recv: true
   debug_log: false
   log_edits: false
-  log_deletes: true # <-- 确保这里是 true 才能看到删除日志
+  log_deletes: true
   original_log_enabled: false

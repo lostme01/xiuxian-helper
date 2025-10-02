@@ -100,6 +100,9 @@ EXAM_SOLVER_CONFIG = config.get('exam_solver', {})
 XUANGU_EXAM_CONFIG = config.get('xuangu_exam_solver', {'enabled': False})
 TIANJI_EXAM_CONFIG = config.get('tianji_exam_solver', {'enabled': False})
 LOG_ROTATION_CONFIG = config.get('log_rotation', {'max_bytes': 1048576, 'backup_count': 9})
+# --- 新增: 读取交易协同配置 ---
+TRADE_COORDINATION_CONFIG = config.get('trade_coordination', {'focus_fire_auto_delist': True})
+
 GEMINI_MODEL_NAME = EXAM_SOLVER_CONFIG.get('gemini_model_name', 'gemini-2.5-pro')
 
 gemini_keys_from_env = os.getenv('GEMINI_API_KEYS')
