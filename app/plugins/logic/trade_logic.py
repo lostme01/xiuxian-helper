@@ -10,23 +10,35 @@ from config import settings
 
 TASK_CHANNEL = "tg_helper:tasks"
 
-def get_self_inventory():
-    """获取当前账号自己的库存信息"""
-    app = get_application()
-    if not redis_client.db: return None
-    
-    key = f"tg_helper:task_states:{app.client.me.id}"
-    inventory_json = redis_client.db.hget(key, "inventory")
-    if inventory_json:
-        return json.loads(inventory_json)
-    return {}
+# --- 改造：为 publish_task 增加详细的返回结果日志 ---
+def publish_task(task: dict) -> bool:
+    """将任务发布到 Redis 频道，并记录接收者数量。"""
+    if not redis_client.db:
+        format_and_log("ERROR", "任务发布失败", {'原因': 'Redis未连接'}, level=logging.ERROR)
+        return False
+    try:
+        payload = json.dumps(task)
+        # 执行 publish 命令并获取返回值
+        receiver_count = redis_client.db.publish(TASK_CHANNEL, payload)
+        
+        log_data = {
+            '频道': TASK_CHANNEL,
+            '任务': task,
+            '接收者数量': receiver_count # 这是关键日志
+        }
+        
+        if receiver_count > 0:
+            format_and_log("INFO", "Redis-任务已发布", log_data)
+        else:
+            format_and_log("WARNING", "Redis-任务发布", {**log_data, '诊断': '没有任何客户端订阅此频道！'})
+            
+        return True
+    except Exception as e:
+        format_and_log("ERROR", "任务发布异常", {'错误': str(e)}, level=logging.ERROR)
+        return False
 
 def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) -> (str, int):
-    """
-    在除指定ID外的所有助手中，查找拥有某物品数量最多的账号。
-    :param exclude_id: 需要排除的账号ID (总是发起者自己)
-    :return: (账户ID, 拥有数量) 或 (None, 0)
-    """
+    # ... (此函数内容不变)
     if not redis_client.db:
         format_and_log("DEBUG", "集火-查找", {'阶段': '中止', '原因': 'Redis未连接'})
         return None, 0
@@ -86,20 +98,6 @@ def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) 
     format_and_log("DEBUG", "集火-查找", {'阶段': '扫描结束', '最终选择ID': best_account_id, '最大数量': max_quantity})
     return best_account_id, max_quantity
 
-def publish_task(task: dict):
-    # ... (此函数内容不变)
-    if not redis_client.db:
-        format_and_log("ERROR", "任务发布失败", {'原因': 'Redis未连接'}, level=logging.ERROR)
-        return False
-    try:
-        payload = json.dumps(task)
-        redis_client.db.publish(TASK_CHANNEL, payload)
-        format_and_log("DEBUG", "任务已发布", task)
-        return True
-    except Exception as e:
-        format_and_log("ERROR", "任务发布异常", {'错误': str(e)}, level=logging.ERROR)
-        return False
-
 async def execute_listing_task(item_name: str, quantity: int, price: int, requester_id: str):
     # ... (此函数内容不变)
     app = get_application()
@@ -144,7 +142,6 @@ async def execute_purchase_task(item_id: str):
     except Exception as e:
         format_and_log("ERROR", "集火-购买", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
         await app.client.send_admin_notification(f"❌ **集火失败**：发送购买指令时发生错误: `{e}`。")
-
 
 async def logic_debug_inventories() -> str:
     # ... (此函数内容不变)
