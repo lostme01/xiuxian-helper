@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import asyncio
+import random
 from app.context import get_application
 from app.logger import format_and_log
 from app.telegram_client import CommandTimeoutError
@@ -104,7 +105,6 @@ async def find_best_executor(item_name: str, required_quantity: int, exclude_id:
 async def execute_listing_task(item_to_sell_name: str, item_to_sell_quantity: int, item_to_buy_name: str, item_to_buy_quantity: int, requester_id: str):
     app = get_application()
     
-    # --- 核心修改：动态构建上架指令 ---
     command = f".上架 {item_to_sell_name}*{item_to_sell_quantity} 换 {item_to_buy_name}*{item_to_buy_quantity}"
     
     format_and_log("TASK", "集火-上架", {'阶段': '开始执行', '指令': command})
@@ -119,13 +119,11 @@ async def execute_listing_task(item_to_sell_name: str, item_to_sell_quantity: in
             item_id = match.group(1)
             format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id})
             
-            # --- 核心新增：检查是否需要立即下架 ---
             if settings.TRADE_COORDINATION_CONFIG.get('focus_fire_auto_delist', True):
                 format_and_log("TASK", "集火-安全操作", {'阶段': '执行立即下架', '挂单ID': item_id})
-                await asyncio.sleep(random.uniform(1, 2)) # 短暂延迟确保挂单成功
+                await asyncio.sleep(random.uniform(1, 2)) 
                 await app.client.send_game_command_fire_and_forget(f".下架 {item_id}")
             
-            # 无论是否下架，都通知发起者可以购买了
             result_task = {
                 "task_type": "purchase_item",
                 "target_account_id": requester_id,
