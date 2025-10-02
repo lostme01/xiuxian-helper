@@ -7,6 +7,7 @@ import os
 import sys
 from importlib import reload, import_module
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
+import redis.asyncio as redis # 明确导入
 
 from config import settings
 from app.task_scheduler import scheduler, shutdown
@@ -47,26 +48,42 @@ class Application:
         self.client = TelegramClient()
         format_and_log("SYSTEM", "组件初始化", {'组件': 'Telegram 客户端', '状态': '实例化完成'})
 
-    # --- 改造：为 Redis 监听器添加详细日志 ---
+    # --- 核心修复：部署最终的、最健壮的异步 Redis 监听器 ---
     async def _redis_listener_loop(self):
-        if not pubsub_client: return
+        if not pubsub_client: 
+            format_and_log("WARNING", "Redis 监听器", {'状态': '未启动', '原因': 'Pub/Sub 客户端未初始化'})
+            return
         
-        p = pubsub_client.pubsub()
-        p.subscribe(TASK_CHANNEL)
-        format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '已启动', '频道': TASK_CHANNEL})
-        
-        while True:
+        while True: # 外层循环确保断线后能无限重连
+            p = None
             try:
-                # 使用异步方式获取消息，避免长时间阻塞
-                message = await p.get_message(ignore_subscribe_messages=True, timeout=1.0)
-                if message:
-                    format_and_log("DEBUG", "Redis 监听器", {'阶段': '收到原始消息', '消息': str(message)})
-                    await redis_message_handler(message)
+                p = pubsub_client.pubsub()
+                await p.subscribe(TASK_CHANNEL)
+                format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '已订阅', '频道': TASK_CHANNEL})
                 
-                # 短暂休眠，让出CPU
-                await asyncio.sleep(0.1)
+                # 这是最关键的部分：使用异步迭代器来监听
+                # 它会一直阻塞在这里，直到有消息或连接断开
+                async for message in p.listen():
+                    # 我们只关心 'message' 类型的消息
+                    if message and message['type'] == 'message':
+                        format_and_log("DEBUG", "Redis 监听器", {'阶段': '收到原始消息', '消息': str(message)})
+                        # 启动一个新任务来处理消息，避免阻塞监听循环
+                        asyncio.create_task(redis_message_handler(message))
+
+            except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError) as e:
+                format_and_log("ERROR", "Redis 监听连接断开", {'错误': str(e)}, level=logging.ERROR)
             except Exception as e:
                 format_and_log("ERROR", "Redis 监听循环异常", {'错误': str(e)}, level=logging.CRITICAL)
+            finally:
+                # 无论任何原因退出循环，都尝试清理并准备重连
+                if p:
+                    try:
+                        await p.unsubscribe(TASK_CHANNEL)
+                        await p.close() # 确保关闭连接
+                    except Exception as clean_e:
+                        format_and_log("ERROR", "Redis PubSub 清理失败", {'错误': str(clean_e)})
+                
+                format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '将在5秒后尝试重连...'})
                 await asyncio.sleep(5)
         
     def setup_logging(self):
