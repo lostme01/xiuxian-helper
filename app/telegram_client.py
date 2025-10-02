@@ -103,10 +103,8 @@ class TelegramClient:
         await self.message_queue.put((command, reply_to, future, target_chat_id))
         return await future
 
-    # --- 改造：将默认 timeout 与全局设置关联 ---
     async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
         strategy = settings.AUTO_DELETE_STRATEGIES['request_response']
-        # 如果调用时没有指定 timeout，则使用全局配置
         if timeout is None: 
             timeout = settings.COMMAND_TIMEOUT
         
@@ -148,7 +146,6 @@ class TelegramClient:
                     edit_future.set_result(event.message)
         self.client.add_event_handler(edit_handler, events.MessageEdited)
         try:
-            # 这里的 timeout 仍然是总超时，但其内部的 send_game_command_request_response 会使用全局默认值
             _sent_message, initial_reply = await self.send_game_command_request_response(command, timeout=timeout)
             if not re.search(initial_reply_pattern, initial_reply.text):
                 return initial_reply, None
@@ -192,7 +189,6 @@ class TelegramClient:
         from app.logger import format_and_log
         format_and_log("SYSTEM", "缓存初始化", {'模块': '群组信息', '缓存数量': len(self.group_name_cache), '慢速模式': self.slowmode_cache})
 
-    # ... (文件其余部分保持不变) ...
     def is_connected(self): return self.client.is_connected()
     async def disconnect(self): await self.client.disconnect()
     async def warm_up_entity_cache(self):
@@ -255,8 +251,6 @@ class TelegramClient:
         self._pinned_messages.discard(task_key)
         from app.logger import format_and_log
         format_and_log("DEBUG", "消息保护", {"操作": "解钉", "消息ID": message.id})
-
-    async def run_until_disconnected(self): await self.client.run_until_disconnected()
 
     async def _message_handler(self, event: events.NewMessage.Event):
         from app.logger import format_and_log
