@@ -5,10 +5,17 @@ from app.context import get_application
 from app import redis_client
 from app.logger import format_and_log
 
+def _normalize_formation_name(name: str) -> str:
+    """
+    标准化阵法名称，去除常见的后缀。
+    例如: "三才微尘阵图" -> "三才微尘阵"
+    """
+    return name.replace("阵图", "").replace("阵法", "").replace("图", "")
+
 async def logic_check_knowledge_all_accounts() -> str:
     """
-    [修改版]
-    遍历每个助手，并使用其自身的宗门宝库缓存作为标准进行对比。
+    [最终修复版]
+    遍历每个助手，使用其自身的宝库缓存，并通过名称标准化进行精确对比。
     """
     app = get_application()
     if not app.redis_db:
@@ -27,10 +34,8 @@ async def logic_check_knowledge_all_accounts() -> str:
         other_accounts_count += 1
         account_report = [f"**- 助手ID**: `...{account_id_str[-4:]}`"]
         
-        # 1. 获取该助手的全部状态数据
         account_state = await app.redis_db.hgetall(key)
         
-        # 2. 从该助手的状态中，获取其自己的宗门宝库作为“总纲”
         treasury_json = account_state.get("sect_treasury")
         if not treasury_json:
             account_report.append("  - `⚠️ 缺少宗门宝库缓存，无法对比。`")
@@ -39,15 +44,27 @@ async def logic_check_knowledge_all_accounts() -> str:
 
         try:
             treasury_data = json.loads(treasury_json)
-            all_recipes = set(treasury_data.get("丹方", []))
-            all_blueprints = set(treasury_data.get("图纸", []))
-            all_formations = set(treasury_data.get("阵法", []))
+            # --- 核心修复：正确解析和分类宝库物品 ---
+            all_recipes = set()
+            all_blueprints = set()
+            all_formations = set()
+
+            for item in treasury_data.get("items", []):
+                item_name = item.get("name", "")
+                if "丹方" in item_name:
+                    all_recipes.add(item_name)
+                elif "图纸" in item_name:
+                    all_blueprints.add(item_name)
+                elif "阵" in item_name: # 泛匹配与阵法相关的物品
+                    # --- 核心修复：对阵法名称进行标准化 ---
+                    all_formations.add(_normalize_formation_name(item_name))
+
         except (json.JSONDecodeError, TypeError):
-            account_report.append("  - `❌ 解析宗门宝库数据失败。`")
+            account_report.append("  - `❌ 解析该助手的宗门宝库数据失败。`")
             report_lines.append("\n".join(account_report))
             continue
 
-        # 3. 对比丹方和图纸
+        # 对比丹方和图纸
         learned_recipes_json = account_state.get("learned_recipes")
         learned_recipes = set(json.loads(learned_recipes_json) if learned_recipes_json else [])
         
@@ -59,18 +76,17 @@ async def logic_check_knowledge_all_accounts() -> str:
         if unlearned_blueprints:
             account_report.append(f"  - **未学图纸**: `{', '.join(sorted(unlearned_blueprints))}`")
 
-        # 4. 对比阵法
+        # 对比阵法
         formation_info_json = account_state.get("formation_info")
         formation_info = json.loads(formation_info_json) if formation_info_json else {}
-        learned_formations = set(formation_info.get("learned", []))
+        learned_formations = set(formation_info.get("learned", [])) # 已学阵法名称已是标准格式
         
         unlearned_formations = all_formations - learned_formations
         if unlearned_formations:
             account_report.append(f"  - **未学阵法**: `{', '.join(sorted(unlearned_formations))}`")
             
-        # 如果该号全部学完
         if len(account_report) == 1:
-            account_report.append("  - `✅ 所有项目均已学习完毕。`")
+            account_report.append("  - `✅ 所有可学项目均已掌握。`")
             
         report_lines.append("\n".join(account_report))
 
