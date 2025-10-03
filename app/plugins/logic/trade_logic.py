@@ -38,58 +38,34 @@ async def publish_task(task: dict) -> bool:
         return False
 
 async def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) -> (str, int):
+    """为“集火”任务寻找拥有最多物品的执行者。"""
     if not redis_client.db:
-        format_and_log("DEBUG", "集火-查找", {'阶段': '中止', '原因': 'Redis未连接'})
         return None, 0
 
     best_account_id = None
     min_sufficient_quantity = float('inf') 
     
-    format_and_log("DEBUG", "集火-查找", {
-        '阶段': '开始扫描 (优化版)',
-        '查找物品': item_name,
-        '要求数量': required_quantity,
-        '排除ID': exclude_id
-    })
-
     try:
         keys_found = [key async for key in redis_client.db.scan_iter("tg_helper:task_states:*")]
-        format_and_log("DEBUG", "集火-查找", {'阶段': '扫描Redis', '发现Key数量': len(keys_found), 'Keys': str(keys_found)})
         
         for key in keys_found:
             account_id_str = key.split(':')[-1]
-            log_context = {'当前检查Key': key, '提取ID': account_id_str}
-
             if account_id_str == exclude_id:
-                log_context['结果'] = '跳过 (是发起者自己)'
-                format_and_log("DEBUG", "集火-查找", log_context)
                 continue
 
             inventory_json = await redis_client.db.hget(key, "inventory")
             if not inventory_json:
-                log_context['结果'] = '跳过 (无库存数据)'
-                format_and_log("DEBUG", "集火-查找", log_context)
                 continue
 
             try:
                 inventory = json.loads(inventory_json)
                 current_quantity = inventory.get(item_name, 0)
-                log_context['库存数量'] = current_quantity
                 
                 if current_quantity >= required_quantity:
                     if current_quantity < min_sufficient_quantity:
-                        log_context['决策'] = f'更新最佳选择 (之前最优: {min_sufficient_quantity}, 现在更优: {current_quantity})'
                         min_sufficient_quantity = current_quantity
                         best_account_id = account_id_str
-                    else:
-                        log_context['决策'] = '忽略 (非更优选择)'
-                else:
-                    log_context['决策'] = f'忽略 (数量 {current_quantity} < 要求 {required_quantity})'
-                
-                format_and_log("DEBUG", "集火-查找", log_context)
-
             except json.JSONDecodeError:
-                format_and_log("WARNING", "集火-查找", {'阶段': '库存解析失败', 'Key': key, '原始数据': inventory_json[:100]})
                 continue
     
     except Exception as e:
@@ -99,8 +75,24 @@ async def find_best_executor(item_name: str, required_quantity: int, exclude_id:
     if best_account_id:
         found_quantity = min_sufficient_quantity if min_sufficient_quantity != float('inf') else 0
 
-    format_and_log("DEBUG", "集火-查找", {'阶段': '扫描结束', '最终选择ID': best_account_id, '对应数量': found_quantity})
     return best_account_id, found_quantity
+
+async def find_any_executor(exclude_id: str) -> str | None:
+    """为“收货”任务寻找任意一个可用的执行者。"""
+    if not redis_client.db:
+        format_and_log("ERROR", "查找执行者失败", {'原因': 'Redis未连接'})
+        return None
+    try:
+        # 迭代所有状态键
+        async for key in redis_client.db.scan_iter("tg_helper:task_states:*"):
+            account_id_str = key.split(':')[-1]
+            # 返回第一个不是自己的ID
+            if account_id_str != exclude_id:
+                format_and_log("DEBUG", "收货-查找执行者", {'选择': account_id_str})
+                return account_id_str
+    except Exception as e:
+        format_and_log("ERROR", "扫描执行者时发生异常", {'错误': str(e)})
+    return None
 
 async def execute_listing_task(item_to_sell_name: str, item_to_sell_quantity: int, item_to_buy_name: str, item_to_buy_quantity: int, requester_id: str):
     app = get_application()
@@ -148,11 +140,12 @@ async def execute_listing_task(item_to_sell_name: str, item_to_sell_quantity: in
 async def execute_purchase_task(item_id: str):
     app = get_application()
     command = f".购买 {item_id}"
-    format_and_log("TASK", "集火-购买", {'阶段': '开始执行', '指令': command})
+    format_and_log("TASK", "协同任务-购买", {'阶段': '开始执行', '指令': command})
     
     try:
         await app.client.send_game_command_fire_and_forget(command)
-        await app.client.send_admin_notification(f"✅ **集火成功**：已发送购买指令购买物品 ID `{item_id}`。")
+        # 购买是最后一步，成功后私聊通知管理员
+        await app.client.send_admin_notification(f"✅ **协同任务成功**：已发送购买指令购买物品 ID `{item_id}`。")
     except Exception as e:
-        format_and_log("ERROR", "集火-购买", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
-        await app.client.send_admin_notification(f"❌ **集火失败**：发送购买指令时发生错误: `{e}`。")
+        format_and_log("ERROR", "协同任务-购买", {'阶段': '异常', '错误': str(e)}, level=logging.ERROR)
+        await app.client.send_admin_notification(f"❌ **协同任务失败**：发送购买指令时发生错误: `{e}`。")

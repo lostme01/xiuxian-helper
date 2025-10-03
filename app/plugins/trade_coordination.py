@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
+import re
 from app.context import get_application
 from .logic import trade_logic
 from app.logger import format_and_log
 from config import settings
+from app.telegram_client import CommandTimeoutError
 
 HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令 (v2)**
 **说明**: 自动协调其他助手上架指定物品，然后由本机购买。
@@ -17,16 +19,17 @@ HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令 (v2)**
   *示例*: `,集火 百年铁木 2 凝血草 20`
 """
 
+HELP_TEXT_RECEIVE_GOODS = """📦 **收货指令**
+**说明**: 由发起者(管理员)账号在群内发送，自动寻找一个助手号来“购买”您上架的物品，实现物品转移。
+**用法**: `,收货 <物品名称> <数量>`
+**示例**: `,收货 凝血草 100`
+"""
+
 async def _cmd_focus_fire(event, parts):
-    """
-    [v2版] 处理 ,集火 指令，支持两种交易模式。
-    """
     app = get_application()
     client = app.client
-    my_id = client.me.id if client.me else "未知"
+    my_id = str(client.me.id) if client.me else "未知"
     
-    # --- 核心优化：简化身份判断 ---
-    # 集火指令只能由管理员实例（即自身ID等于配置中的admin_user_id）发起。
     if str(my_id) != str(settings.ADMIN_USER_ID):
         return
 
@@ -73,7 +76,6 @@ async def _cmd_focus_fire(event, parts):
     if not best_account_id:
         await progress_msg.edit(f"❌ `任务失败`\n未在【任何其他助手】中找到拥有足够数量`{item_to_find}`的账号。")
         client.unpin_message(progress_msg)
-        client._schedule_message_deletion(progress_msg, 30, "集火查找失败")
         return
 
     await progress_msg.edit(f"✅ `已定位助手` (ID: `...{best_account_id[-4:]}`)\n⏳ 正在通过 Redis 下达上架指令...")
@@ -84,8 +86,67 @@ async def _cmd_focus_fire(event, parts):
         await progress_msg.edit(f"✅ `指令已发送`\n等待助手号回报上架结果...")
     else:
         await progress_msg.edit(f"❌ `任务失败`\n任务发布至 Redis 失败，请检查连接。")
+    
+    client.unpin_message(progress_msg)
+
+
+async def _cmd_receive_goods(event, parts):
+    app = get_application()
+    client = app.client
+    my_id = str(client.me.id) if client.me else "未知"
+
+    if my_id != str(settings.ADMIN_USER_ID):
+        return
+
+    if len(parts) < 3:
+        await client.reply_to_admin(event, f"❌ 参数不足！\n\n{HELP_TEXT_RECEIVE_GOODS}")
+        return
+
+    try:
+        quantity = int(parts[-1])
+        item_name = " ".join(parts[1:-1])
+    except (ValueError, IndexError):
+        await client.reply_to_admin(event, f"❌ 参数格式错误！\n\n{HELP_TEXT_RECEIVE_GOODS}")
+        return
+
+    progress_msg = await client.reply_to_admin(event, f"⏳ `收货任务启动`\n正在寻找一个空闲的助手号...")
+    client.pin_message(progress_msg)
+
+    executor_id = await trade_logic.find_any_executor(exclude_id=my_id)
+    if not executor_id:
+        await progress_msg.edit("❌ `任务失败`\n未在 Redis 中找到任何其他在线的助手号。")
         client.unpin_message(progress_msg)
-        client._schedule_message_deletion(progress_msg, 30, "集火发布失败")
+        return
+
+    await progress_msg.edit(f"✅ `已定位助手` (ID: `...{executor_id[-4:]}`)\n⏳ 正在上架物品以生成交易单...")
+
+    try:
+        list_command = f".上架 灵石*1 换 {item_name}*{quantity}"
+        _sent, reply = await client.send_game_command_request_response(list_command)
+
+        raw_reply_text = reply.raw_text
+        match = re.search(r"挂单ID\D+(\d+)", raw_reply_text)
+
+        if "上架成功" in raw_reply_text and match:
+            item_id = match.group(1)
+            await progress_msg.edit(f"✅ `上架成功` (挂单ID: `{item_id}`)\n⏳ 正在通过 Redis 通知助手号购买...")
+
+            task = {
+                "task_type": "purchase_item",
+                "target_account_id": executor_id,
+                "item_id": item_id
+            }
+
+            if await trade_logic.publish_task(task):
+                await progress_msg.edit(f"✅ `指令已发送`\n助手号 (ID: `...{executor_id[-4:]}`) 将购买挂单 `{item_id}`。")
+            else:
+                await progress_msg.edit("❌ `任务失败`\n向 Redis 发布购买任务时失败。")
+        else:
+            await progress_msg.edit(f"❌ `任务失败`\n上架物品时未能从游戏机器人处获取挂单ID。\n\n**回复**:\n`{raw_reply_text}`")
+    except (CommandTimeoutError, Exception) as e:
+        await progress_msg.edit(f"❌ `任务失败`\n在上架物品时发生错误: `{e}`")
+    finally:
+        client.unpin_message(progress_msg)
 
 
 async def redis_message_handler(message):
@@ -94,24 +155,26 @@ async def redis_message_handler(message):
     
     try:
         data = json.loads(message['data'])
-        target_account_id = data.get("target_account_id")
         task_type = data.get("task_type")
 
-        if my_id != target_account_id:
-            return
-        
-        format_and_log("INFO", "Redis 任务匹配成功", {'任务类型': task_type, '详情': str(data)})
+        # 集火任务，需要匹配目标ID
+        if task_type in ["list_item", "purchase_item"]:
+            target_account_id = data.get("target_account_id")
+            if my_id != target_account_id:
+                return
+            
+            format_and_log("INFO", "Redis 任务匹配成功", {'任务类型': task_type, '详情': str(data)})
 
-        if task_type == "list_item":
-            await trade_logic.execute_listing_task(
-                item_to_sell_name=data["item_to_sell_name"],
-                item_to_sell_quantity=data["item_to_sell_quantity"],
-                item_to_buy_name=data["item_to_buy_name"],
-                item_to_buy_quantity=data["item_to_buy_quantity"],
-                requester_id=data["requester_account_id"]
-            )
-        elif task_type == "purchase_item":
-            await trade_logic.execute_purchase_task(item_id=data["item_id"])
+            if task_type == "list_item":
+                await trade_logic.execute_listing_task(
+                    item_to_sell_name=data["item_to_sell_name"],
+                    item_to_sell_quantity=data["item_to_sell_quantity"],
+                    item_to_buy_name=data["item_to_buy_name"],
+                    item_to_buy_quantity=data["item_to_buy_quantity"],
+                    requester_id=data["requester_account_id"]
+                )
+            elif task_type == "purchase_item":
+                await trade_logic.execute_purchase_task(item_id=data["item_id"])
 
     except Exception as e:
         format_and_log("ERROR", "Redis 任务处理器", {'状态': '执行异常', '错误': str(e)})
@@ -119,3 +182,4 @@ async def redis_message_handler(message):
 
 def initialize(app):
     app.register_command("集火", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="高级协同", usage=HELP_TEXT_FOCUS_FIRE)
+    app.register_command("收货", _cmd_receive_goods, help_text="📦 协同助手接收物品。", category="高级协同", usage=HELP_TEXT_RECEIVE_GOODS)
