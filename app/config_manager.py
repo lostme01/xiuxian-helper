@@ -36,8 +36,6 @@ def update_setting(root_key: str, value, sub_key: str = None, success_message: s
                 full_config[root_key] = {}
             full_config[root_key][sub_key] = value
             
-            # --- 核心修复：正确查找并更新内存中的配置对象 ---
-            # 模仿 config_management.py 中的查找逻辑，尝试多种可能的变量名
             settings_attr = getattr(settings, root_key.upper(), None)
             if settings_attr is None:
                 settings_attr = getattr(settings, f"{root_key.upper()}_CONFIG", None)
@@ -45,7 +43,6 @@ def update_setting(root_key: str, value, sub_key: str = None, success_message: s
             if settings_attr is not None and isinstance(settings_attr, dict):
                 settings_attr[sub_key] = value
             else:
-                 # 作为最后的保障，直接在 settings 模块上设置属性
                 setattr(settings, sub_key.upper(), value)
 
         else:

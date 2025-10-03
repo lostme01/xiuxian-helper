@@ -38,16 +38,12 @@ class TelegramClient:
         self.deletion_tasks = {}
         self._pinned_messages = set()
 
-        # --- 核心修复：将监听范围严格限定在配置文件指定的群组中 ---
         all_configured_groups = settings.GAME_GROUP_IDS + ([settings.CONTROL_GROUP_ID] if settings.CONTROL_GROUP_ID else [])
         if getattr(settings, 'TEST_GROUP_ID', None):
             all_configured_groups.append(settings.TEST_GROUP_ID)
         
-        # 这个处理器负责监听游戏事件、机器人回复和日志记录，必须严格限定在配置的群组中
         self.client.on(events.NewMessage(chats=all_configured_groups, incoming=True))(self._message_handler)
         self.client.on(events.MessageEdited(chats=all_configured_groups, incoming=True))(self._message_edited_handler)
-        
-        # 删除事件的处理器也需要限定范围
         self.client.add_event_handler(self._deleted_message_handler, events.Raw(types=[UpdateDeleteChannelMessages, UpdateDeleteMessages]))
         
     async def reply_to_admin(self, event, text: str, **kwargs):
@@ -257,6 +253,13 @@ class TelegramClient:
         self._schedule_message_deletion(message, settings.AUTO_DELETE.get('delay_admin_command'), "解钉后自动清理")
 
     async def _message_handler(self, event: events.NewMessage.Event):
+        # 导入放到函数内部，彻底解决循环导入问题
+        from app.plugins.trade_coordination import handle_trade_report
+        
+        # 1. 尝试处理交易快报
+        await handle_trade_report(event)
+
+        # 2. 执行常规的日志和回复处理
         log_type = LogType.MSG_SENT_SELF if event.out else LogType.MSG_RECV
         await log_event(log_type, event)
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))

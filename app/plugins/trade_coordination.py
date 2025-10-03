@@ -3,12 +3,18 @@ import json
 import logging
 import re
 import shlex
+import asyncio
+import random
+import pytz
+from datetime import datetime, timedelta
 from telethon import events
 from app.context import get_application
 from .logic import trade_logic
 from app.logger import format_and_log
 from config import settings
 from app.telegram_client import CommandTimeoutError
+from app.task_scheduler import scheduler
+from app.plugins.common_tasks import update_inventory_cache
 
 HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令 (P2P最终版)**
 **说明**: 在控制群或私聊中，使用想发起任务的账号发送此指令。该账号将成为发起者，并自动协调网络中其他助手完成交易。
@@ -22,15 +28,12 @@ HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令 (P2P最终版)**
 """
 
 HELP_TEXT_RECEIVE_GOODS = """📦 **收货指令 (P2P最终版)**
-**说明**: 在控制群或私聊中，使用想发起任务的账号发送此指令。该账号将上架物品，并通知网络中其他助手购买。
+**说明**: 在控制群或私聊中，使用想发起任务的账号发送此指令。该账号将上架物品，并通知网络中拥有足够物品的另一个助手购买。
 **用法**: `,收货 <物品名称> <数量>`
 **示例**: `,收货 凝血草 100`
 """
 
 async def _cmd_focus_fire(event, parts):
-    """
-    处理“集火”指令的函数，由统一分发器在确认权限后调用。
-    """
     app = get_application()
     client = app.client
     my_id = str(client.me.id)
@@ -79,9 +82,6 @@ async def _cmd_focus_fire(event, parts):
     client.unpin_message(progress_msg)
 
 async def _cmd_receive_goods(event, parts):
-    """
-    处理“收货”指令的函数，由统一分发器在确认权限后调用。
-    """
     app = get_application()
     client = app.client
     my_id = str(client.me.id)
@@ -97,12 +97,12 @@ async def _cmd_receive_goods(event, parts):
         await client.reply_to_admin(event, f"❌ 参数格式错误！\n\n{HELP_TEXT_RECEIVE_GOODS}")
         return
 
-    progress_msg = await client.reply_to_admin(event, f"⏳ `[{my_username}] 收货任务启动`\n正在寻找网络中任意一个助手...")
+    progress_msg = await client.reply_to_admin(event, f"⏳ `[{my_username}] 收货任务启动`\n正在扫描网络查找拥有`{item_name} x{quantity}`的助手...")
     client.pin_message(progress_msg)
 
-    executor_id = await trade_logic.find_any_executor(exclude_id=my_id)
+    executor_id, _ = await trade_logic.find_best_executor(item_name, quantity, exclude_id=my_id)
     if not executor_id:
-        await progress_msg.edit("❌ `任务失败`\n未在 Redis 中找到任何其他在线的助手。")
+        await progress_msg.edit(f"❌ `任务失败`\n未在网络中找到拥有足够 `{item_name} x{quantity}` 的其他助手。")
         client.unpin_message(progress_msg)
         return
 
@@ -133,6 +133,27 @@ async def redis_message_handler(message):
     try:
         data = json.loads(message['data'])
         task_type = data.get("task_type")
+
+        # --- 核心修改：升级广播任务的执行逻辑 ---
+        if task_type == "broadcast_command":
+            # 1. 管理员号不执行任何广播指令
+            if my_id == str(settings.ADMIN_USER_ID):
+                return
+
+            # 2. 检查是否有宗门限制
+            target_sect = data.get("target_sect")
+            if target_sect and target_sect != settings.SECT_NAME:
+                # 如果有宗门限制且不匹配，则忽略
+                return
+            
+            # 3. 执行指令
+            command_to_run = data.get("command_to_run")
+            if command_to_run:
+                format_and_log("TASK", "广播指令-执行", {'指令': command_to_run, '宗门匹配': bool(target_sect)})
+                await app.client.send_game_command_fire_and_forget(command_to_run)
+            return
+
+        # 原有的集火/收货任务逻辑
         if task_type in ["list_item", "purchase_item"]:
             target_account_id = data.get("target_account_id")
             if my_id != target_account_id:
@@ -149,7 +170,24 @@ async def redis_message_handler(message):
     except Exception as e:
         format_and_log("ERROR", "Redis 任务处理器", {'状态': '执行异常', '错误': str(e)})
 
+async def handle_trade_report(event):
+    app = get_application()
+    client = app.client
+    if not client.me or not client.me.username:
+        return
+    my_username = client.me.username
+    if not event.text:
+        return
+    if "【万宝楼快报】" not in event.text or f"@{my_username}" not in event.text:
+        return
+        
+    format_and_log("INFO", "万宝楼快报", {'状态': '匹配成功', '用户': my_username})
+    delay_minutes = random.randint(3, 10)
+    next_run_time = datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=delay_minutes)
+    job_id = f"post_sale_refresh_{client.me.id}"
+    scheduler.add_job(update_inventory_cache, 'date', run_date=next_run_time, id=job_id, replace_existing=True, args=[True])
+    await client.send_admin_notification(f"ℹ️ **交易通知**\n助手 `@{my_username}` 售出物品，其背包将在约 {delay_minutes} 分钟后自动刷新。")
+
 def initialize(app):
-    # 将指令注册回标准的指令系统
     app.register_command("集火", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="高级协同", usage=HELP_TEXT_FOCUS_FIRE)
     app.register_command("收货", _cmd_receive_goods, help_text="📦 协同助手接收物品。", category="高级协同", usage=HELP_TEXT_RECEIVE_GOODS)
