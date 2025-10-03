@@ -8,7 +8,8 @@ import functools
 from datetime import timedelta
 from telethon.tl.types import Message
 from app.logger import format_and_log
-from app.context import get_application # 引入 get_application
+from app.context import get_application
+from config import settings
 
 def require_args(count: int, usage: str):
     """
@@ -18,31 +19,53 @@ def require_args(count: int, usage: str):
         @functools.wraps(func)
         async def wrapper(event, parts: list):
             if len(parts) < count:
-                # --- 优化：使用动态传入的 usage 文本 ---
-                # 同时也获取命令本身，以便在帮助信息中显示
                 app = get_application()
                 cmd_name = parts[0]
-                command_info = app.commands.get(cmd_name, {})
+                command_info = app.commands.get(cmd_name.lower(), {})
                 usage_text = command_info.get('usage', '该指令没有提供详细的用法说明。')
                 
-                await event.reply(f"❌ **参数不足！**\n\n{usage_text}", parse_mode='md')
+                await get_application().client.reply_to_admin(event, f"❌ 参数不足！\n\n{usage_text}")
                 return
             try:
                 return await func(event, parts)
             except ValueError:
-                 await event.reply(f"❌ **参数解析错误**\n请检查您的引号是否匹配。\n\n{usage}", parse_mode='md')
+                 await get_application().client.reply_to_admin(event, f"❌ 参数解析错误！\n请检查您的引号是否匹配。\n\n{usage}")
         return wrapper
     return decorator
 
-async def send_paginated_message(event, text: str, max_length: int = 4000):
-    if len(text) <= max_length:
-        await event.reply(text, parse_mode='md')
+async def send_paginated_message(event, text: str, max_length: int = 3500, prefix_message=None):
+    """
+    [修复版]
+    发送长消息，自动分页。
+    - text: 要发送的完整文本。
+    - prefix_message: (可选) 如果提供，将编辑此消息作为第一页，而不是发送新消息。
+    """
+    client = get_application().client
+    chunks = [text[i:i + max_length] for i in range(0, len(text), max_length)]
+    
+    if not chunks:
+        if prefix_message:
+            await prefix_message.edit("（无内容）")
         return
 
-    await event.reply(f"ℹ️ 查询结果过长，将分多条发送...")
-    for i in range(0, len(text), max_length):
-        chunk = text[i:i+max_length]
-        await event.reply(chunk, parse_mode='md')
+    last_message = None
+    
+    # 处理第一页
+    if prefix_message:
+        try:
+            await prefix_message.edit(chunks[0])
+            last_message = prefix_message
+        except Exception: # 如果编辑失败（例如消息太旧），则改为直接回复
+            last_message = await client.reply_to_admin(event, chunks[0])
+    else:
+        last_message = await client.reply_to_admin(event, chunks[0])
+
+    # 处理后续页面
+    if last_message:
+        for chunk in chunks[1:]:
+            new_message = await last_message.reply(chunk)
+            client._schedule_message_deletion(new_message, settings.AUTO_DELETE.get('delay_admin_command'), "分页消息")
+            last_message = new_message
 
 def mask_string(text: str, head: int = 4, tail: int = 4) -> str:
     if not isinstance(text, str) or len(text) <= head + tail:

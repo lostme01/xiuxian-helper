@@ -10,17 +10,13 @@ from app.plugins.logic.trade_logic import publish_task
 
 async def _handle_broadcast_command(event):
     """
-    [修改版] 处理全局广播和宗门广播指令。
+    [最终版] 处理全局广播和宗门广播指令。
     """
     app = get_application()
     client = app.client
     
-    if event.sender_id != settings.ADMIN_USER_ID:
-        return
-
     command_text = event.text.strip()
     
-    # 使用正则表达式匹配指令格式
     match = re.match(r"\*(all|[\u4e00-\u9fa5]+)\s+(.+)", command_text)
     if not match:
         return
@@ -42,7 +38,6 @@ async def _handle_broadcast_command(event):
         "command_to_run": command_to_run
     }
     
-    # 如果不是 *all，则为宗门广播
     if target_group != "all":
         task["target_sect"] = target_group
 
@@ -66,6 +61,15 @@ def initialize(app):
 
     @client.client.on(events.NewMessage(chats=[settings.CONTROL_GROUP_ID]))
     async def broadcast_handler(event):
-        if event.sender_id == settings.ADMIN_USER_ID:
-            await _handle_broadcast_command(event)
+        # --- 核心修复：明确分工 ---
+        # 1. 只有管理员才能发送广播指令
+        if event.sender_id != settings.ADMIN_USER_ID:
+            return
+            
+        # 2. 只有管理员号对应的实例才能成为“发布者”
+        if str(client.me.id) != str(settings.ADMIN_USER_ID):
+            return
+
+        # 3. 如果满足条件，则处理广播指令
+        await _handle_broadcast_command(event)
 
