@@ -38,15 +38,11 @@ async def trigger_dianmao_chuangong(force_run=False):
 
         chuangong_commands = [".宗门传功"] * 3
         
-        # --- 核心修复：初始化要回复的消息为我们自己发出的第一条指令 ---
         message_to_reply_to = sent_dianmao
         
         for i, command in enumerate(chuangong_commands):
             try:
-                # 每次都回复给自己发出的上一条消息
                 sent_cg, reply_cg = await client.send_game_command_request_response(command, reply_to=message_to_reply_to.id)
-                
-                # 更新下一次要回复的消息为刚刚发出的这一条
                 message_to_reply_to = sent_cg
                 
                 format_and_log("TASK", "宗门点卯", {'阶段': f'传功 {i+1}/3', '返回': reply_cg.text.replace('\n', ' ')})
@@ -71,24 +67,43 @@ async def trigger_dianmao_chuangong(force_run=False):
             client._schedule_message_deletion(sent_dianmao, 30, "宗门点卯(任务链结束)")
 
 async def update_inventory_cache(force_run=False):
+    """
+    [修改版] 刷新背包缓存，并在完成后为自己安排下一次随机时间的刷新。
+    """
     client = get_application().client
     format_and_log("TASK", "刷新背包", {'阶段': '任务开始', '强制执行': force_run})
+    
+    success = False
     try:
         _sent, reply = await client.send_game_command_request_response(".储物袋")
         inventory = parse_inventory_text(reply)
         if inventory:
             await set_state(STATE_KEY_INVENTORY, inventory)
+            success = True
             format_and_log("TASK", "刷新背包", {'阶段': '任务成功', '详情': f'解析并缓存了 {len(inventory)} 种物品。'})
-            return f"✅ **[立即刷新背包]** 任务完成，已缓存 {len(inventory)} 种物品。"
+            if force_run:
+                return f"✅ **[立即刷新背包]** 任务完成，已缓存 {len(inventory)} 种物品。"
         else:
             format_and_log("TASK", "刷新背包", {'阶段': '任务失败', '原因': '未能解析到任何物品'}, level=logging.WARNING)
-            return "⚠️ **[立即刷新背包]** 任务失败：未能从游戏返回信息中解析到任何物品。"
+            if force_run:
+                return "⚠️ **[立即刷新背包]** 任务失败：未能从游戏返回信息中解析到任何物品。"
     except CommandTimeoutError:
          format_and_log("TASK", "刷新背包", {'阶段': '任务失败', '原因': '等待回复超时'}, level=logging.ERROR)
-         return "❌ **[立即刷新背包]** 任务失败：等待游戏机器人回复超时。"
+         if force_run:
+            return "❌ **[立即刷新背包]** 任务失败：等待游戏机器人回复超时。"
     except Exception as e:
         format_and_log("TASK", "刷新背包", {'阶段': '任务异常', '错误': str(e)}, level=logging.ERROR)
-        return f"❌ **[立即刷新背包]** 任务执行异常: `{e}`"
+        if force_run:
+            return f"❌ **[立即刷新背包]** 任务执行异常: `{e}`"
+    finally:
+        # 只有在非手动触发的情况下，才安排下一次自动执行
+        if not force_run and settings.TASK_SWITCHES.get('inventory_refresh', True):
+            # 随机1到3小时
+            random_interval_hours = random.uniform(1, 3)
+            next_run_time = datetime.now(pytz.timezone(settings.TZ)) + timedelta(hours=random_interval_hours)
+            scheduler.add_job(update_inventory_cache, 'date', run_date=next_run_time, id=TASK_ID_INVENTORY_REFRESH, replace_existing=True)
+            format_and_log("TASK", "刷新背包", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
+
 
 async def active_status_heartbeat():
     client = get_application().client
@@ -175,8 +190,14 @@ async def check_heartbeat_startup():
         scheduler.add_job(heartbeat_check, 'interval', minutes=15, id=TASK_ID_HEARTBEAT)
 
 async def check_inventory_refresh_startup():
+    """
+    [修改版] 启动时检查背包刷新任务。
+    """
     if settings.TASK_SWITCHES.get('inventory_refresh', True) and not scheduler.get_job(TASK_ID_INVENTORY_REFRESH):
-        scheduler.add_job(update_inventory_cache, 'interval', hours=6, jitter=3600, id=TASK_ID_INVENTORY_REFRESH)
+        # 安排首次任务在1分钟后执行，之后它将自我循环
+        first_run_time = datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=1)
+        scheduler.add_job(update_inventory_cache, 'date', run_date=first_run_time, id=TASK_ID_INVENTORY_REFRESH)
+        format_and_log("TASK", "刷新背包", {'阶段': '调度计划', '详情': '首次任务已计划在1分钟后运行'})
 
 async def check_chuang_ta_startup():
     if not settings.TASK_SWITCHES.get('chuang_ta', True): return
