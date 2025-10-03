@@ -13,6 +13,27 @@ HELP_TEXT_GET_CONFIG = """🔍 **查看当前配置**
 HELP_TEXT_TOGGLE_LOG = "📝 **管理日志开关**\n**用法**: `,日志开关 <类型|全部消息> <开|关>`"
 HELP_TEXT_TOGGLE_TASK = "🔧 **管理功能开关**\n**用法**: `,任务开关 <功能名> [<开|关>]`"
 
+def _get_settings_object(root_key: str) -> dict | None:
+    """
+    [修复版]
+    一个健壮的函数，用于在settings模块中根据不同的命名模式查找配置对象。
+    """
+    # 模式1: 直接匹配大写变量名 (例如, TASK_SWITCHES)
+    if hasattr(settings, root_key.upper()):
+        return getattr(settings, root_key.upper())
+    
+    # 模式2: 匹配 _CONFIG 后缀 (例如, TRADE_COORDINATION_CONFIG)
+    if hasattr(settings, f"{root_key.upper()}_CONFIG"):
+        return getattr(settings, f"{root_key.upper()}_CONFIG")
+        
+    # 模式3: 针对 solver 的特殊模式 (例如, XUANGU_EXAM_CONFIG)
+    if root_key.endswith('_solver'):
+        base_name = root_key.replace('_solver', '')
+        if hasattr(settings, f"{base_name.upper()}_CONFIG"):
+            return getattr(settings, f"{base_name.upper()}_CONFIG")
+            
+    return None
+
 async def _cmd_get_config(event, parts):
     key_to_query = parts[1] if len(parts) > 1 else None
     await get_application().client.reply_to_admin(event, await config_logic.logic_get_config_item(key_to_query))
@@ -24,7 +45,8 @@ async def _cmd_toggle_log(event, parts):
         switches = []
         for switch_name, desc in LOG_SWITCH_TO_DESC.items():
             is_enabled = settings.LOGGING_SWITCHES.get(switch_name, False)
-            switches.append(f"- **{desc}**: `{'开启' if is_enabled else '关闭'}`")
+            status = "✅ 开启" if is_enabled else "❌ 关闭"
+            switches.append(f"- **{desc}**: {status}")
         status_text += "\n".join(sorted(switches))
         status_text += f"\n\n**用法**: `,日志开关 <类型|全部消息> <开|关>`"
         await client.reply_to_admin(event, status_text)
@@ -55,36 +77,46 @@ async def _cmd_toggle_task(event, parts):
     task_map = {
         '玄骨': ('玄骨考校', 'xuangu_exam_solver', 'enabled'),
         '天机': ('天机考验', 'tianji_exam_solver', 'enabled'),
-        '闭关': ('闭关修炼', 'task_switches', 'biguan'),
-        '点卯': ('宗门点卯', 'task_switches', 'dianmao'),
+        '闭关': ('自动闭关', 'task_switches', 'biguan'),
+        '点卯': ('自动点卯', 'task_switches', 'dianmao'),
         '学习': ('自动学习', 'task_switches', 'learn_recipes'),
         '药园': ('自动药园', 'task_switches', 'garden_check'),
         '背包': ('自动刷新背包', 'task_switches', 'inventory_refresh'),
-        '魔君': ('魔君降临事件', 'task_switches', 'mojun_arrival'),
+        '闯塔': ('自动闯塔', 'task_switches', 'chuang_ta'),
+        '宝库': ('自动宗门宝库', 'task_switches', 'sect_treasury'),
+        '阵法': ('自动更新阵法', 'task_switches', 'formation_update'),
+        '魔君': ('自动应对魔君', 'task_switches', 'mojun_arrival'),
         '自动删除': ('消息自动删除', 'auto_delete', 'enabled'),
-        # --- 核心新增：为“集火下架”功能添加入口 ---
         '集火下架': ('集火后自动下架', 'trade_coordination', 'focus_fire_auto_delist'),
     }
-    if len(parts) < 2:
-        available_tasks = ' '.join([f"`{name}`" for name in sorted(task_map.keys())])
-        await client.reply_to_admin(event, f"{HELP_TEXT_TOGGLE_TASK}\n\n**可控制的功能**: {available_tasks}")
+    
+    if len(parts) == 1:
+        status_lines = ["🔧 **各功能开关状态**:\n"]
+        for key, (friendly_name, root_key, sub_key) in sorted(task_map.items()):
+            # --- 核心修改：使用新的健壮的查找函数 ---
+            config_obj = _get_settings_object(root_key) or {}
+            is_enabled = config_obj.get(sub_key, False)
+            status = "✅ 开启" if is_enabled else "❌ 关闭"
+            status_lines.append(f"- **{friendly_name}** (`{key}`): {status}")
+        
+        status_lines.append(f"\n**用法**: `,任务开关 <功能名> [<开|关>]`")
+        await client.reply_to_admin(event, "\n".join(status_lines))
         return
+
     task_name = parts[1]
     if task_name not in task_map:
         await client.reply_to_admin(event, f"❌ 未知的功能名: `{task_name}`。")
         return
         
     friendly_name, root_key, sub_key = task_map[task_name]
-    # 动态获取配置对象，兼容多种配置结构
-    config_obj = getattr(settings, f"{root_key.upper()}", getattr(settings, f"{root_key.upper()}_CONFIG", {}))
-
-    # 查询当前状态
+    
+    config_obj = _get_settings_object(root_key) or {}
+        
     if len(parts) == 2:
         current_value = config_obj.get(sub_key)
         await client.reply_to_admin(event, f"ℹ️ 当前 **{friendly_name}** 功能状态: **{'开启' if current_value else '关闭'}**")
         return
         
-    # 设置新状态
     if len(parts) == 3 and parts[2] in ["开", "关"]:
         new_status = (parts[2] == "开")
         await client.reply_to_admin(event, update_setting(root_key=root_key, sub_key=sub_key, value=new_status, success_message=f"**{friendly_name}** 功能已 **{parts[2]}**"))
