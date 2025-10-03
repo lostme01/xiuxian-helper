@@ -37,11 +37,18 @@ async def trigger_dianmao_chuangong(force_run=False):
             return "✅ **[立即点卯]** 任务完成（今日已完成）。"
 
         chuangong_commands = [".宗门传功"] * 3
-        last_message = reply_dianmao
+        
+        # --- 核心修复：初始化要回复的消息为我们自己发出的第一条指令 ---
+        message_to_reply_to = sent_dianmao
+        
         for i, command in enumerate(chuangong_commands):
             try:
-                _sent_cg, reply_cg = await client.send_game_command_request_response(command, reply_to=last_message.id)
-                last_message = reply_cg
+                # 每次都回复给自己发出的上一条消息
+                sent_cg, reply_cg = await client.send_game_command_request_response(command, reply_to=message_to_reply_to.id)
+                
+                # 更新下一次要回复的消息为刚刚发出的这一条
+                message_to_reply_to = sent_cg
+                
                 format_and_log("TASK", "宗门点卯", {'阶段': f'传功 {i+1}/3', '返回': reply_cg.text.replace('\n', ' ')})
                 if "过于频繁" in reply_cg.text:
                     format_and_log("TASK", "宗门点卯", {'阶段': '传功中止', '原因': '传功次数已达上限。'})
