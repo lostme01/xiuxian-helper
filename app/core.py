@@ -19,13 +19,15 @@ from app.plugins import load_all_plugins
 from app.logger import format_and_log, TimezoneFormatter
 from app.context import set_application, set_scheduler, get_application
 from app.utils import create_error_reply
-from app.inventory_manager import inventory_manager # 导入全局库存管理器
+from app.inventory_manager import inventory_manager
+from app.character_stats_manager import stats_manager # 导入全局数值管理器
 
 class Application:
     def __init__(self):
         self.client: TelegramClient = None
         self.redis_db = None
-        self.inventory_manager = inventory_manager # [新增] 将实例附加到app上
+        self.inventory_manager = inventory_manager
+        self.stats_manager = stats_manager # [新增] 将实例附加到app上
         self.startup_checks = []
         self.commands = {}
         self.task_functions = {}

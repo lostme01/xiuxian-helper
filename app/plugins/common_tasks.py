@@ -15,6 +15,7 @@ from telethon.tl.functions.account import UpdateStatusRequest
 from app.telegram_client import CommandTimeoutError
 from app.context import get_application
 from app.inventory_manager import inventory_manager
+from app.character_stats_manager import stats_manager
 
 TASK_ID_BIGUAN = 'biguan_xiulian_task'
 STATE_KEY_BIGUAN = "biguan"
@@ -25,7 +26,20 @@ TASK_ID_INVENTORY_REFRESH = 'inventory_refresh_task'
 STATE_KEY_INVENTORY = "inventory"
 TASK_ID_ACTIVE_HEARTBEAT = 'active_status_heartbeat_task'
 
+def _parse_and_update_contribution(reply_text: str):
+    """辅助函数，用于从回复中解析贡献并更新"""
+    contrib_match = re.search(r"获得了 \*\*([\d,]+)\*\* 点宗门贡献", reply_text)
+    if contrib_match:
+        gained_contrib = int(contrib_match.group(1).replace(',', ''))
+        # 使用 asyncio.create_task 在后台更新，不阻塞主流程
+        asyncio.create_task(stats_manager.add_contribution(gained_contrib))
+        format_and_log("DEBUG", "贡献度更新", {'来源': '点卯/传功', '增加': gained_contrib})
+
 async def trigger_dianmao_chuangong(force_run=False):
+    """
+    [最终优化版 v2]
+    增加对点卯和传功获得贡献的实时追踪。
+    """
     client = get_application().client
     format_and_log("TASK", "宗门点卯", {'阶段': '任务开始', '强制执行': force_run})
     sent_dianmao = None
@@ -33,7 +47,12 @@ async def trigger_dianmao_chuangong(force_run=False):
         sent_dianmao, reply_dianmao = await client.send_game_command_long_task(".宗门点卯")
         client.pin_message(sent_dianmao)
 
-        format_and_log("TASK", "宗门点卯", {'阶段': '点卯指令', '返回': reply_dianmao.text.replace('\n', ' ')})
+        log_text = reply_dianmao.text.replace('\n', ' ')
+        format_and_log("TASK", "宗门点卯", {'阶段': '点卯指令', '返回': log_text})
+        
+        # [核心优化] 如果点卯成功，解析并增加贡献
+        if "获得了" in log_text:
+            _parse_and_update_contribution(reply_dianmao.text)
         
         chuangong_commands = [".宗门传功"] * 3
         
@@ -43,9 +62,14 @@ async def trigger_dianmao_chuangong(force_run=False):
                 reply_to=sent_dianmao.id
             )
             
-            format_and_log("TASK", "宗门点卯", {'阶段': f'传功 {i+1}/{len(chuangong_commands)}', '返回': reply_cg.text.replace('\n', ' ')})
+            log_text_cg = reply_cg.text.replace('\n', ' ')
+            format_and_log("TASK", "宗门点卯", {'阶段': f'传功 {i+1}/{len(chuangong_commands)}', '返回': log_text_cg})
 
-            if "过于频繁" in reply_cg.text:
+            # [核心优化] 如果传功成功，解析并增加贡献
+            if "获得了" in log_text_cg:
+                _parse_and_update_contribution(reply_cg.text)
+
+            if "过于频繁" in log_text_cg:
                 format_and_log("TASK", "宗门点卯", {'阶段': '传功已达上限', '详情': '任务链正常结束。'})
                 return "✅ **[立即点卯]** 任务已成功执行完毕（点卯和传功均已完成）。"
         
@@ -103,10 +127,6 @@ async def heartbeat_check():
         await asyncio.sleep(2); sys.exit(1)
 
 async def trigger_chuang_ta(force_run=False):
-    """
-    [最终优化版]
-    执行闯塔并等待最终战报，解析奖励并更新库存。
-    """
     client = get_application().client
     format_and_log("TASK", "自动闯塔", {'阶段': '任务开始', '强制执行': force_run})
     
@@ -129,7 +149,6 @@ async def trigger_chuang_ta(force_run=False):
             format_and_log("WARNING", "自动闯塔", {'阶段': '解析失败', '原因': '未收到预期的战报格式', '返回': final_reply.text})
             
     except Exception as e:
-        # 自动任务失败时记录日志，手动触发时向上抛出异常
         log_level = logging.ERROR if not force_run else logging.DEBUG
         format_and_log("TASK", "自动闯塔", {'阶段': '任务异常', '错误': str(e)}, level=log_level)
         if force_run:

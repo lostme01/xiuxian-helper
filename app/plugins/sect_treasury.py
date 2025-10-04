@@ -12,6 +12,7 @@ from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
 from app.utils import send_paginated_message, create_error_reply
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
+from app.character_stats_manager import stats_manager
 
 STATE_KEY_TREASURY = "sect_treasury"
 TASK_ID_TREASURY = "sect_treasury_daily_task"
@@ -43,19 +44,20 @@ async def trigger_update_treasury(force_run=False):
 
         treasury_data = _parse_treasury_text(reply_message.text)
         if not treasury_data["items"]:
-            # [优化] 抛出异常
             raise ValueError("无法从返回的信息中解析出宝库物品。")
 
-        await set_state(STATE_KEY_TREASURY, treasury_data)
+        # [核心优化] 使用新的管理器来更新贡献值和物品列表
+        await stats_manager.set_contribution(treasury_data["contribution"])
+        await set_state(STATE_KEY_TREASURY, treasury_data) # 物品列表依然存在这里
+        
         format_and_log("TASK", "更新宗门宝库", {'阶段': '任务成功', '贡献': treasury_data["contribution"], '物品数量': len(treasury_data["items"])})
         if force_run:
-            return f"✅ **宗门宝库信息已更新**：\n- **当前贡献**: `{treasury_data['contribution']}`\n- **宝库物品**: 共 `{len(treasury_data['items'])}` 件"
+            return f"✅ **宗门宝库信息已更新**：\n- **当前贡献**: `{treasury_data['contribution']}` (已校准)\n- **宝库物品**: 共 `{len(treasury_data['items'])}` 件"
     except Exception as e:
         if force_run:
             raise e
         else:
              format_and_log("TASK", "更新宗门宝库", {'阶段': '任务异常', '错误': str(e)}, level=logging.CRITICAL)
-
 
 async def _cmd_query_treasury(event, parts):
     app = get_application()
@@ -77,8 +79,7 @@ async def _cmd_query_treasury(event, parts):
         client.unpin_message(progress_message)
         try:
             await client._cancel_message_deletion(progress_message)
-            edited_message = await progress_message.edit(final_text)
-            client._schedule_message_deletion(edited_message, settings.AUTO_DELETE.get('delay_admin_command'), "宝库查询结果")
+            await progress_message.edit(final_text)
         except MessageEditTimeExpiredError:
             await client.reply_to_admin(event, final_text)
 
@@ -91,15 +92,15 @@ def get_display_width(text: str) -> int:
 
 async def _cmd_view_cached_treasury(event, parts):
     treasury_data = await get_state(STATE_KEY_TREASURY, is_json=True)
-    if not treasury_data:
-        app = get_application()
-        await app.client.reply_to_admin(event, "ℹ️ 尚未缓存任何宝库信息，请先使用 `,宗门宝库` 查询一次。")
-        return
-    items = treasury_data.get('items', [])
-    if not items:
-        reply_text = f"📄 **已缓存的宗门宝库信息**\n**当前贡献**: `{treasury_data.get('contribution', '未知')}`\n\n(宝库为空)"
+    # [优化] 从新的管理器获取最新的贡献值
+    contribution = await stats_manager.get_contribution()
+
+    if not treasury_data or not treasury_data.get('items'):
+        reply_text = f"📄 **已缓存的宗门宝库信息**\n**当前贡献**: `{contribution}`\n\n(宝库为空或尚未缓存)"
         await get_application().client.reply_to_admin(event, reply_text)
         return
+
+    items = treasury_data.get('items', [])
     max_width = 0
     for item in items:
         width = get_display_width(item['name'])
@@ -109,7 +110,8 @@ async def _cmd_view_cached_treasury(event, parts):
         current_width = get_display_width(item['name'])
         padding_spaces = ' ' * ((max_width - current_width) + 2)
         items_text.append(f"`{item['name']}{padding_spaces}售价：{item['price']}`")
-    reply_text = f"📄 **已缓存的宗门宝库信息**\n**当前贡献**: `{treasury_data.get('contribution', '未知')}`\n"
+    
+    reply_text = f"📄 **已缓存的宗门宝库信息**\n**当前贡献**: `{contribution}`\n\n"
     reply_text += "\n".join(items_text)
     await send_paginated_message(event, reply_text)
 
