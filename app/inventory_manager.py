@@ -9,27 +9,29 @@ STATE_KEY_INVENTORY = "inventory"
 class InventoryManager:
     def __init__(self):
         self._inventory_cache = None
-        self._lock = asyncio.Lock() # [新增] 操作锁
+        self._lock = asyncio.Lock()
 
     async def _load_inventory(self):
-        """从状态管理器加载完整库存到内存缓存"""
+        """
+        [已修复] 从状态管理器加载完整库存到内存缓存。
+        此内部函数不应再获取锁，因为它总是被已获取锁的公共函数调用。
+        """
         if self._inventory_cache is None:
-            # 加载也需要上锁，防止多个任务同时触发加载
-            async with self._lock:
-                # 双重检查，防止在等待锁的过程中，其他任务已经完成了加载
-                if self._inventory_cache is None:
-                    self._inventory_cache = await get_state(STATE_KEY_INVENTORY, is_json=True, default={})
-                    format_and_log("SYSTEM", "库存管理器", {'状态': '已从State加载库存到内存'})
+            # 移除了此处的 async with self._lock，因为它会导致死锁
+            self._inventory_cache = await get_state(STATE_KEY_INVENTORY, is_json=True, default={})
+            format_and_log("SYSTEM", "库存管理器", {'状态': '已从State加载库存到内存'})
 
     async def get_inventory(self) -> dict:
         """获取当前完整的库存字典"""
-        await self._load_inventory()
-        return self._inventory_cache.copy()
+        async with self._lock:
+            await self._load_inventory()
+            return self._inventory_cache.copy()
 
     async def get_item_count(self, item_name: str) -> int:
         """获取单个物品的数量"""
-        await self._load_inventory()
-        return self._inventory_cache.get(item_name, 0)
+        async with self._lock:
+            await self._load_inventory()
+            return self._inventory_cache.get(item_name, 0)
 
     async def add_item(self, item_name: str, quantity: int):
         """
@@ -67,6 +69,7 @@ class InventoryManager:
                     '请求扣减': quantity, 
                     '实际拥有': current_quantity
                 })
+                # [修复] 即使数量不足，也应该扣除所有，以匹配游戏逻辑
                 self._inventory_cache.pop(item_name, None)
             else:
                 new_quantity = current_quantity - quantity

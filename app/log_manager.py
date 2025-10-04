@@ -43,17 +43,46 @@ def _get_group_display(chat_id: int) -> str:
 
 
 async def log_event(log_type: LogType, event, **kwargs):
+    app = get_application()
     message_obj = getattr(event, 'message', event)
     
-    if settings.LOGGING_SWITCHES.get('original_log_enabled') and isinstance(message_obj, Message) and hasattr(message_obj, 'text'):
-        if message_obj.text:
-            log_header = f"--- Raw Log: Message ID {getattr(message_obj, 'id', 'N/A')} in Chat {getattr(message_obj, 'chat_id', 'N/A')} ---"
-            raw_logger.info(f"{log_header}\n{message_obj.text}\n")
+    chat_id = getattr(message_obj, 'chat_id', None)
+    msg_id = getattr(message_obj, 'id', None)
+    sender_id = getattr(message_obj, 'sender_id', None)
+    
+    # --- [核心修改] 增强原始日志 ---
+    if settings.LOGGING_SWITCHES.get('original_log_enabled') and isinstance(message_obj, Message) and hasattr(message_obj, 'text') and message_obj.text:
+        log_header = ""
+        log_type_str = ""
+        
+        try:
+            sender_name = get_display_name(await message_obj.get_sender()) if hasattr(message_obj, 'get_sender') else "Me"
+        except Exception:
+            sender_name = f"ID:{sender_id}"
 
+        if log_type == LogType.MSG_RECV:
+            log_type_str = "收到消息"
+        elif log_type == LogType.MSG_SENT_SELF:
+            log_type_str = "发送消息"
+        elif log_type == LogType.MSG_EDIT:
+            log_type_str = "消息编辑"
+        elif log_type == LogType.REPLY_RECV:
+            log_type_str = "收到回复"
+        
+        if log_type_str:
+            reply_to_id = getattr(message_obj.reply_to, 'reply_to_msg_id', None)
+            reply_str = f" (回复 to: {reply_to_id})" if reply_to_id else ""
+            
+            log_header = (f"--- [原始日志: {log_type_str}] ---\n"
+                          f"  群组: {_get_group_display(chat_id)}\n"
+                          f"  来源: {sender_name} (ID:{sender_id})\n"
+                          f"  消息ID: {msg_id}{reply_str}\n"
+                          f"----------------------------------")
+            raw_logger.info(f"{log_header}\n{message_obj.text}\n{'-'*50}")
+
+
+    # --- 原有逻辑保持不变 ---
     log_data, title = {}, ""
-    chat_id = getattr(event, 'chat_id', None)
-    msg_id = getattr(event, 'id', None)
-    sender_id = getattr(event, 'sender_id', None)
     
     sender_info = f"(ID: {sender_id})"
     if sender_id:
@@ -75,7 +104,6 @@ async def log_event(log_type: LogType, event, **kwargs):
         title, log_data["编辑者"], log_data["消息ID"], log_data["新内容"] = "消息被编辑", sender_info, msg_id, text_content
     elif log_type == LogType.MSG_DELETE:
         title = "消息被删除"
-        # --- 核心修改：将 "被删消息IDs" 改为 "被删ID" ---
         log_data["被删ID"] = str(kwargs.get("deleted_ids", []))
     elif log_type == LogType.CMD_SENT:
         title, bot_me = "指令已发送", get_application().client.me

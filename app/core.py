@@ -95,8 +95,10 @@ class Application:
         raw_logger.setLevel(logging.INFO)
         raw_logger.propagate = False
         if raw_logger.hasHandlers(): raw_logger.handlers.clear()
+        
+        # [核心修改] 使用更简洁的 formatter，因为上下文信息将在 log_manager 中动态添加
         raw_log_formatter = TimezoneFormatter(
-            fmt='%(asctime)s\n%(message)s\n' + '-'*50, datefmt='%Y-%m-%d %H:%M:%S %Z', tz_name=settings.TZ
+            fmt='%(asctime)s\n%(message)s\n', datefmt='%Y-%m-%d %H:%M:%S %Z', tz_name=settings.TZ
         )
         raw_log_handler = logging.handlers.RotatingFileHandler(
             settings.RAW_LOG_FILE, maxBytes=settings.LOG_ROTATION_CONFIG['max_bytes'], 

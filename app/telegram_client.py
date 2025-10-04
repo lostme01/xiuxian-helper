@@ -104,6 +104,7 @@ class TelegramClient:
         return await future
 
     async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
+        from app.logger import format_and_log
         strategy = settings.AUTO_DELETE_STRATEGIES['request_response']
         if timeout is None: 
             timeout = settings.COMMAND_TIMEOUT
@@ -111,23 +112,26 @@ class TelegramClient:
         reply_future = asyncio.Future()
         sent_message = None
         try:
+            format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '开始发送指令', '指令': command})
             sent_message = await self._send_command_and_get_message(command, reply_to=reply_to, target_chat_id=target_chat_id)
+            format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '指令已发送，开始等待回复', '消息ID': sent_message.id})
             self.pending_req_by_id[sent_message.id] = reply_future
             reply_message = await asyncio.wait_for(reply_future, timeout=timeout)
+            format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '已收到回复', '回复消息ID': reply_message.id})
             
             self._schedule_message_deletion(sent_message, strategy['delay_self_on_reply'], "游戏指令(问答-成功)")
             
-            # (这个功能在上一个修复中被移除，因为它无法删除机器人消息)
-            # self._schedule_message_deletion(reply_message, strategy['delay_bot_reply'], "游戏Bot的回复")
-            
             return sent_message, reply_message
         except asyncio.TimeoutError:
+            format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '等待回复超时', '指令': command})
             if sent_message:
                 self._schedule_message_deletion(sent_message, strategy['delay_self_on_timeout'], "游戏指令(问答-超时)")
             raise CommandTimeoutError(f"等待指令 '{command}' 的回复超时 ({timeout}秒)。")
         finally:
             if sent_message:
                 self.pending_req_by_id.pop(sent_message.id, None)
+            format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '清理请求监听器', '消息ID': getattr(sent_message, 'id', 'N/A')})
+
 
     async def send_game_command_fire_and_forget(self, command: str, reply_to: int = None, target_chat_id: int = None):
         strategy = settings.AUTO_DELETE_STRATEGIES['fire_and_forget']
@@ -142,46 +146,45 @@ class TelegramClient:
         return sent_message, reply_message
 
     async def send_and_wait_for_edit(self, command: str, initial_reply_pattern: str, timeout: int = None) -> tuple[Message, Message]:
-        """
-        [最终修复版]
-        发送一个指令，等待其初始回复，然后继续等待该回复被编辑，并返回最终编辑后的消息。
-        """
+        from app.logger import format_and_log
         if timeout is None:
             timeout = settings.COMMAND_TIMEOUT
         
         sent_message = None
         initial_reply = None
         try:
-            # 1. 发送指令并获取初始回复
+            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '开始', '指令': command})
             sent_message, initial_reply = await self.send_game_command_request_response(command, timeout=timeout)
+            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '已收到初始回复', '消息ID': initial_reply.id})
 
-            # 2. 检查初始回复是否符合预期模式
             if not re.search(initial_reply_pattern, initial_reply.text):
-                # 如果不符合，说明游戏逻辑可能已变，直接返回这个“意外”的回复
+                format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '初始回复与预期模式不符，直接返回', '模式': initial_reply_pattern})
                 return sent_message, initial_reply
-
-            # 3. 设置一个 Future 来监听此消息的编辑事件
+            
+            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '初始回复匹配成功，开始等待编辑', '消息ID': initial_reply.id})
             edit_future = asyncio.Future()
             self.pending_edit_by_id[initial_reply.id] = edit_future
 
-            # 4. 计算剩余的等待时间
             time_elapsed = (datetime.now(pytz.utc) - sent_message.date).total_seconds()
             remaining_timeout = timeout - time_elapsed
             
             if remaining_timeout <= 0:
+                format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '超时', '原因': '获取初始回复后没有剩余时间'})
                 raise CommandTimeoutError("获取初始回复后没有剩余时间等待编辑。")
 
-            # 5. 等待编辑事件，或直到剩余时间耗尽
+            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '进入等待编辑状态', '剩余时间': f"{remaining_timeout:.2f}s"})
             final_message = await asyncio.wait_for(edit_future, timeout=remaining_timeout)
+            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '成功捕获到编辑事件', '消息ID': final_message.id})
             return sent_message, final_message
 
         except (CommandTimeoutError, asyncio.TimeoutError) as e:
-            # 统一将所有超时错误归为 CommandTimeoutError 并向上抛出
+            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '等待编辑超时或失败', '错误': str(e)})
             raise CommandTimeoutError(f"等待指令 '{command}' 的响应或编辑超时 (总时长 {timeout} 秒)。") from e
         finally:
-            # 确保清理监听器
             if initial_reply:
                 self.pending_edit_by_id.pop(initial_reply.id, None)
+            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '清理编辑监听器', '消息ID': getattr(initial_reply, 'id', 'N/A')})
+
 
     async def start(self):
         await self.client.start()
@@ -267,7 +270,6 @@ class TelegramClient:
             format_and_log("DEBUG", "取消消息删除", {"消息ID": message.id})
 
     def pin_message(self, message: Message):
-        # [核心修复] 增加对 None 的安全检查
         if not message: return
         from app.logger import format_and_log
         task_key = (message.chat_id, message.id)
@@ -281,7 +283,6 @@ class TelegramClient:
             format_and_log("DEBUG", "消息保护", {"操作": "钉住", "消息ID": message.id})
 
     def unpin_message(self, message: Message):
-        # [核心修复] 增加对 None 的安全检查
         if not message: return
         from app.logger import format_and_log
         task_key = (message.chat_id, message.id)
@@ -291,13 +292,10 @@ class TelegramClient:
         self._schedule_message_deletion(message, settings.AUTO_DELETE.get('delay_admin_command'), "解钉后自动清理")
 
     async def _message_handler(self, event: events.NewMessage.Event):
-        # 导入放到函数内部，彻底解决循环导入问题
         from app.plugins.trade_coordination import handle_trade_report
         
-        # 1. 尝试处理交易快报
         await handle_trade_report(event)
 
-        # 2. 执行常规的日志和回复处理
         log_type = LogType.MSG_SENT_SELF if event.out else LogType.MSG_RECV
         await log_event(log_type, event)
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))

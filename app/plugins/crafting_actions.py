@@ -9,6 +9,7 @@ from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
 from app.inventory_manager import inventory_manager
 from app.plugins.logic.recipe_logic import CRAFTING_RECIPES_KEY
+from app.logger import format_and_log
 
 HELP_TEXT_CRAFT_ITEM = """🛠️ **炼制物品 (带库存同步)**
 **说明**: 执行炼制操作，并在成功后自动更新内部的背包缓存，实现材料的减少和成品的增加。
@@ -45,22 +46,31 @@ async def _cmd_craft_item(event, parts):
         command += f" {quantity}"
 
     progress_message = await client.reply_to_admin(event, f"⏳ 正在执行炼制指令: `{command}`...")
-    if not progress_message: return
+    if not progress_message: 
+        format_and_log("DEBUG", "_cmd_craft_item", {'阶段': '启动失败', '原因': '未能创建进度消息'})
+        return
     client.pin_message(progress_message)
 
     final_text = ""
     try:
+        format_and_log("DEBUG", "_cmd_craft_item", {'阶段': '开始调用 client.send_and_wait_for_edit', '指令': command})
         _sent_msg, final_reply = await client.send_and_wait_for_edit(
             command, 
             initial_reply_pattern=r"你凝神静气"
         )
+        format_and_log("DEBUG", "_cmd_craft_item", {'阶段': 'send_and_wait_for_edit 执行完毕，开始解析结果'})
+        
+        raw_text = final_reply.raw_text
 
-        if "炼制结束！" in final_reply.text and "最终获得" in final_reply.text:
-            gain_match = re.search(r"最终获得【(.+?)】x\*\*(\d+)\*\*", final_reply.text)
+        if "炼制结束！" in raw_text and "最终获得" in raw_text:
+            format_and_log("DEBUG", "_cmd_craft_item", {'阶段': '检测到成功关键字，准备提取数据'})
+            gain_match = re.search(r"最终获得【([^】]+)】[^\d]*(\d+)", raw_text)
             if not gain_match:
+                format_and_log("DEBUG", "_cmd_craft_item", {'阶段': '解析失败', '原因': '正则表达式未能匹配', '原始文本': raw_text})
                 raise ValueError("无法从成功回复中解析出获得的物品和数量。")
             
             gained_item, gained_quantity = gain_match.group(1), int(gain_match.group(2))
+            format_and_log("DEBUG", "_cmd_craft_item", {'阶段': '解析成功', '获得物品': gained_item, '数量': gained_quantity})
 
             if not app.redis_db:
                 raise ConnectionError("Redis未连接，无法获取配方以计算材料消耗。")
@@ -84,7 +94,8 @@ async def _cmd_craft_item(event, parts):
                 final_text += "\n".join(consumed_text)
 
         else:
-            final_text = f"ℹ️ **炼制未成功** (库存未变动)\n\n**游戏返回**:\n`{final_reply.text}`"
+            format_and_log("DEBUG", "_cmd_craft_item", {'阶段': '任务未成功', '原因': '未在最终回复中找到成功关键字', '原始文本': raw_text})
+            final_text = f"ℹ️ **炼制未成功** (库存未变动)\n\n**游戏返回**:\n`{raw_text}`"
 
     except CommandTimeoutError as e:
         final_text = create_error_reply("炼制物品", "游戏指令超时", details=str(e))
@@ -94,8 +105,7 @@ async def _cmd_craft_item(event, parts):
         client.unpin_message(progress_message)
         try:
             await client._cancel_message_deletion(progress_message)
-            edited_message = await progress_message.edit(final_text)
-            client._schedule_message_deletion(edited_message, settings.AUTO_DELETE.get('delay_admin_command'), "炼制结果")
+            await progress_message.edit(final_text)
         except MessageEditTimeExpiredError:
             await client.reply_to_admin(event, final_text)
 
