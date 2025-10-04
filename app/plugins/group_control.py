@@ -17,7 +17,6 @@ async def _handle_help_command(event, parts):
     client = app.client
     prefix = settings.COMMAND_PREFIXES[0]
     
-    # 场景1: 查询单个指令的详细用法
     if len(parts) > 1:
         cmd_name_to_find = parts[1]
         command_info = app.commands.get(cmd_name_to_find.lower())
@@ -28,7 +27,6 @@ async def _handle_help_command(event, parts):
             await client.reply_to_admin(event, f"❓ 未找到指令: `{cmd_name_to_find}`")
         return
 
-    # 场景2: 显示所有指令的概览菜单
     categorized_cmds = {}
     unique_cmds = {}
     for name, data in app.commands.items():
@@ -114,29 +112,38 @@ async def execute_command(event):
     if not command_info or not command_info.get("handler"):
         return
 
-    # --- [最终修复版] 权限检查逻辑 ---
+    # --- [最终修复版 v2] 权限与指挥逻辑 ---
     is_admin_sender = str(event.sender_id) == str(settings.ADMIN_USER_ID)
     my_id = str(client.me.id)
     is_main_bot = my_id == str(settings.ADMIN_USER_ID)
 
     can_execute = False
-    
-    # 规则1: 指令来自管理员
+
     if is_admin_sender:
-        # 只要是管理员发的，这个指令对于接收到事件的bot就是可执行的。
-        # Telethon的事件分发机制确保了：
-        # - 私聊时，只有对话方能收到事件。
-        # - 群聊时，群内所有bot都能收到事件。
-        can_execute = True
-        
-    # 规则2: 指令来自助手自己 (在收藏夹里)
+        # 规则1: 管理员在私聊中发指令 -> 只有对话方执行
+        if event.is_private:
+            if str(event.chat_id) == my_id:
+                can_execute = True
+        # 规则2: 管理员在控制群中发指令
+        elif event.is_group and event.chat_id == settings.CONTROL_GROUP_ID:
+            # 2a: 如果是回复 -> 只有被回复的号执行
+            if event.is_reply:
+                reply_to_msg = await event.get_reply_message()
+                if reply_to_msg and str(reply_to_msg.sender_id) == my_id:
+                    can_execute = True
+            # 2b: 如果不是回复 -> 所有号都执行 (广播)
+            else:
+                can_execute = True
+    
+    # 规则3: 助手自己在收藏夹里发指令
     elif str(event.sender_id) == my_id and event.is_private and str(event.chat_id) == my_id:
         can_execute = True
 
     if can_execute:
-        # [防刷屏逻辑] 对于会产生长回复的指令，如果是在群里由管理员发出，则只有主控号回复
+        # [防刷屏逻辑] 对于会产生长回复的指令，如果是在群里广播，则只有主控号回复
         noisy_commands = ["任务列表", "查看配置", "日志开关", "任务开关", "帮助", "菜单", "help", "menu", "状态", "查看背包", "查看宝库", "查看角色", "查看阵法"]
-        if is_admin_sender and event.is_group and cmd_name in noisy_commands and not is_main_bot:
+        is_broadcast_in_group = is_admin_sender and event.is_group and not event.is_reply
+        if is_broadcast_in_group and cmd_name in noisy_commands and not is_main_bot:
             format_and_log("INFO", "指令忽略", {'指令': cmd_name, '执行者': my_id, '原因': '非主控号，避免群内刷屏'})
             return
 

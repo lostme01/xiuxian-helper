@@ -49,13 +49,19 @@ class TelegramClient:
     async def reply_to_admin(self, event, text: str, **kwargs):
         from app.logger import format_and_log
         try:
+            # 优先回复到当前事件的位置 (群聊或私聊)
+            target_chat = event.chat_id
             reply_message = await event.reply(text, **kwargs)
             self._schedule_message_deletion(reply_message, settings.AUTO_DELETE.get('delay_admin_command'), "助手对管理员的回复")
             return reply_message
         except Exception as e:
             format_and_log("SYSTEM", "回复管理员失败", {'错误': str(e)}, level=logging.ERROR)
             try:
-                await self.client.send_message(self.admin_id, f"⚠️ 在群组 {getattr(event, 'chat_id', 'N/A')} 中回复指令失败: {e}")
+                # [核心修改] 降级方案：如果回复失败，则尝试直接发送到控制群
+                if settings.CONTROL_GROUP_ID:
+                    chat_type = "群组" if event.is_group else "私聊"
+                    chat_id = getattr(event, 'chat_id', 'N/A')
+                    await self.client.send_message(settings.CONTROL_GROUP_ID, f"⚠️ 在 {chat_type} (`{chat_id}`) 中回复指令失败: `{e}`")
             except Exception: pass
             return None
 
@@ -224,8 +230,15 @@ class TelegramClient:
         except Exception: pass
 
     async def send_admin_notification(self, message: str):
-        try: await self.client.send_message(self.admin_id, message, parse_mode='md')
-        except Exception: pass
+        """[核心修改] 将所有通知发送到控制群"""
+        try:
+            if settings.CONTROL_GROUP_ID:
+                await self.client.send_message(settings.CONTROL_GROUP_ID, message, parse_mode='md')
+            else:
+                # 降级方案：如果未配置控制群，仍然发送给管理员私聊
+                await self.client.send_message(self.admin_id, message, parse_mode='md')
+        except Exception: 
+            pass
 
     async def _sleep_and_delete(self, delay: int, message: Message):
         await asyncio.sleep(delay)
@@ -328,3 +341,4 @@ class TelegramClient:
         if chat_id and chat_id in all_groups:
             fake_event = type('FakeEvent', (object,), {'chat_id': chat_id})
             await log_event(LogType.MSG_DELETE, fake_event, deleted_ids=update.messages)
+
