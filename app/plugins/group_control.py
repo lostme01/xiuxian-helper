@@ -120,16 +120,16 @@ async def execute_command(event):
     is_main_bot = my_id == str(settings.ADMIN_USER_ID)
 
     can_execute = False
-    # 规则1: 只要是管理员发的指令，原则上都可以执行
+    
+    # 规则1: 指令来自管理员
     if is_admin_sender:
-        # [核心修复] 在私聊中，只有收到消息的那个号能执行
-        if event.is_private:
-            if str(event.chat_id) == my_id:
-                can_execute = True
-        else: # 在群里，所有号都能执行（但后续有防刷屏逻辑）
-            can_execute = True
-            
-    # 规则2: 如果不是管理员发的，那必须是助手自己在收藏夹里发给自己的
+        # 只要是管理员发的，这个指令对于接收到事件的bot就是可执行的。
+        # Telethon的事件分发机制确保了：
+        # - 私聊时，只有对话方能收到事件。
+        # - 群聊时，群内所有bot都能收到事件。
+        can_execute = True
+        
+    # 规则2: 指令来自助手自己 (在收藏夹里)
     elif str(event.sender_id) == my_id and event.is_private and str(event.chat_id) == my_id:
         can_execute = True
 
