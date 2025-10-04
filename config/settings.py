@@ -106,6 +106,8 @@ GAME_COMMANDS = _merge_config('game_commands', { 'taiyi_yindao': '.引道 水' }
 HUANGFENG_VALLEY_CONFIG = config.get('huangfeng_valley', {})
 TAIYI_SECT_CONFIG = config.get('taiyi_sect', {})
 EXAM_SOLVER_CONFIG = config.get('exam_solver', {})
+# [新增] AI聊天配置
+AI_CHATTER_CONFIG = config.get('ai_chatter', {})
 XUANGU_EXAM_CONFIG = config.get('xuangu_exam_solver', {'enabled': False})
 TIANJI_EXAM_CONFIG = config.get('tianji_exam_solver', {'enabled': False})
 LOG_ROTATION_CONFIG = config.get('log_rotation', {'max_bytes': 1048576, 'backup_count': 9})
@@ -137,7 +139,7 @@ def check_startup_settings():
         if not value:
             missing_info.append(key)
 
-    if XUANGU_EXAM_CONFIG.get('enabled') or TIANJI_EXAM_CONFIG.get('enabled'):
+    if XUANGU_EXAM_CONFIG.get('enabled') or TIANJI_EXAM_CONFIG.get('enabled') or AI_CHATTER_CONFIG.get('enabled'):
         if not EXAM_SOLVER_CONFIG.get('gemini_api_keys'):
              missing_info.append('gemini_api_keys')
              required_settings['gemini_api_keys'] = (None, "在 prod.yaml 中设置 gemini_api_keys 列表")

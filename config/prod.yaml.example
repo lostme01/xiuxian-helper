@@ -23,7 +23,7 @@ command_prefixes: [',', '，']
 # 时区，用于日志和任务调度
 timezone: 'Asia/Shanghai'
 
-# ----------------- AI 答题配置 -----------------
+# ----------------- AI 功能配置 -----------------
 exam_solver:
   # 使用的Gemini模型名称
   gemini_model_name: 'gemini-1.5-pro-latest'
@@ -39,6 +39,14 @@ xuangu_exam_solver:
 # 天机考验自动答题开关
 tianji_exam_solver:
   enabled: true
+
+# [新功能] AI聊天
+ai_chatter:
+  enabled: true
+  # AI的人设, 越详细越好
+  personality_prompt: '你是一个玩世不恭的修仙老油条，说话有点贱兮兮的，喜欢吐槽，偶尔也羡慕一下别人的好运气。'
+  # 随机插话的概率 (0.05 = 5%)
+  random_chat_probability: 0.05
 
 # ----------------- 周期任务开关 -----------------
 task_switches:
@@ -58,76 +66,50 @@ send_delay: { min: 12, max: 16 }
 command_timeout: 60
 
 # ----------------- 周期任务微调 -----------------
-# 为各类任务增加随机延迟，避免行为过于规律
 task_jitter:
   biguan: { min: 30, max: 90 }
   taiyi_yindao: { min: 300, max: 1200 }
   huangfeng_garden: { min: 5, max: 15 }
   learn_recipes: { min: 3, max: 7 }
 
-# 定时任务的执行时间点（24小时制）
 task_schedules:
   dianmao: [ '08:15', '20:15' ]
 
 # ----------------- 游戏指令配置 -----------------
-# 可自定义部分游戏指令
 game_commands:
   taiyi_yindao: '.引道 水'
 
 # ----------------- 高级配置 -----------------
 redis:
   enabled: true
-  host: 'host.docker.internal' # Docker环境通常用这个
+  host: 'host.docker.internal'
   port: 6379
   password: null
   db: 0
   xuangu_db_name: 'xuangu_qa'
   tianji_db_name: 'tianji_qa'
 
-# 消息自动删除配置
 auto_delete:
   enabled: true
-  delay_admin_command: 30 # 助手回复您的消息，30秒后删除
+  delay_admin_command: 30
 
-# 消息自动删除策略
 auto_delete_strategies:
-  fire_and_forget:
-    delay_self: 5
-  request_response:
-    delay_self_on_reply: 5
-    delay_self_on_timeout: 60
-  long_task:
-    delay_self: 0
-    delay_anchor: 30 # [新增] 长任务的"锚点"消息(如.宗门点卯)，在任务链结束后30秒删除
+  fire_and_forget: { delay_self: 5 }
+  request_response: { delay_self_on_reply: 5, delay_self_on_timeout: 60 }
+  long_task: { delay_self: 0, delay_anchor: 30 }
 
-# 交易协同配置
 trade_coordination:
   focus_fire_auto_delist: true
 
-# ----------------- [新功能] 高级自动化 -----------------
-# 智能资源管理
 auto_resource_management:
   enabled: false
-  interval_minutes: 120  # 每120分钟检查一次规则
-  rules:
-    # 规则1: 自动捐献多余的草药
-    - action: "donate"
-      item: "凝血草"
-      threshold: 500       # 当凝血草的数量 > 500 时
-      amount: 100          # 每次捐献 100 个
-    # 规则2: 自动用贡献兑换短缺的种子
-    - action: "exchange"
-      item: "凝血草种子"
-      condition: "contribution > 1000 and item < 20" 
-      amount: 5
+  interval_minutes: 120
+  rules: []
 
-# 自动化知识共享
 auto_knowledge_sharing:
   enabled: false
-  interval_minutes: 240 # 每240分钟（4小时）检查一次共享机会
-  # 黑名单，这些物品即使满足条件也不会被自动共享
-  blacklist:
-    - "某个珍贵的图纸"
+  interval_minutes: 240
+  blacklist: []
 
 # ----------------- 宗门专属配置 -----------------
 huangfeng_valley:
@@ -141,7 +123,6 @@ log_rotation:
   max_bytes: 5242880
   backup_count: 9
 
-# 各模块日志开关
 logging_switches:
   system_activity: true
   task_activity: true
