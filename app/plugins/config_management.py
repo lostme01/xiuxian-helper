@@ -2,7 +2,6 @@
 from config import settings
 from app.context import get_application
 from .logic import config_logic
-# [核心修复] 只导入需要的高级函数
 from app.config_manager import update_setting, update_nested_setting
 from app.logger import LOG_DESC_TO_SWITCH, LOG_SWITCH_TO_DESC
 
@@ -35,7 +34,6 @@ MODIFIABLE_CONFIG_MAP = {
     "最小发送延迟": "send_delay.min",
     "最大发送延迟": "send_delay.max",
     "指令全局超时": "command_timeout",
-    "客户端心跳超时": "heartbeat_timeout",
     "AI答题延迟-最小": "exam_solver.reply_delay.min",
     "AI答题延迟-最大": "exam_solver.reply_delay.max",
     "AI模型名称": "exam_solver.gemini_model_name",
@@ -79,32 +77,24 @@ async def _cmd_toggle_log(event, parts):
         await client.reply_to_admin(event, f"❌ 未知的日志类型: `{log_type_desc}`\n\n**可用类型**: {available_types}")
         return
         
-    await client.reply_to_admin(event, update_setting(root_key='logging_switches', sub_key=log_switch_name, value=new_status, success_message=f"**{log_type_desc}** 日志已 **{switch}**"))
+    msg = await update_setting('logging_switches', log_switch_name, new_status, f"**{log_type_desc}** 日志已 **{switch}**")
+    await client.reply_to_admin(event, msg)
 
 async def _cmd_toggle_task(event, parts):
     client = get_application().client
     
-    # [优化] 将 root_key 调整为 settings.py 中定义的变量名，提高代码可读性和健壮性
     task_map = {
-        '玄骨': ('玄骨考校', 'xuangu_exam_solver', 'enabled'),
-        '天机': ('天机考验', 'tianji_exam_solver', 'enabled'),
-        '闭关': ('自动闭关', 'task_switches', 'biguan'),
-        '点卯': ('自动点卯', 'task_switches', 'dianmao'),
-        '学习': ('自动学习', 'task_switches', 'learn_recipes'),
-        '药园': ('自动药园', 'task_switches', 'garden_check'),
-        '背包': ('自动刷新背包', 'task_switches', 'inventory_refresh'),
-        '闯塔': ('自动闯塔', 'task_switches', 'chuang_ta'),
-        '宝库': ('自动宗门宝库', 'task_switches', 'sect_treasury'),
-        '阵法': ('自动更新阵法', 'task_switches', 'formation_update'),
-        '魔君': ('自动应对魔君', 'task_switches', 'mojun_arrival'),
-        '自动删除': ('消息自动删除', 'auto_delete', 'enabled'),
+        '玄骨': ('玄骨考校', 'xuangu_exam_solver', 'enabled'), '天机': ('天机考验', 'tianji_exam_solver', 'enabled'),
+        '闭关': ('自动闭关', 'task_switches', 'biguan'), '点卯': ('自动点卯', 'task_switches', 'dianmao'),
+        '学习': ('自动学习', 'task_switches', 'learn_recipes'), '药园': ('自动药园', 'task_switches', 'garden_check'),
+        '背包': ('自动刷新背包', 'task_switches', 'inventory_refresh'), '闯塔': ('自动闯塔', 'task_switches', 'chuang_ta'),
+        '宝库': ('自动宗门宝库', 'task_switches', 'sect_treasury'), '阵法': ('自动更新阵法', 'task_switches', 'formation_update'),
+        '魔君': ('自动应对魔君', 'task_switches', 'mojun_arrival'), '自动删除': ('消息自动删除', 'auto_delete', 'enabled'),
         '集火下架': ('集火后自动下架', 'trade_coordination', 'focus_fire_auto_delist'),
-        '智能资源': ('智能资源管理', 'auto_resource_management', 'enabled'),
-        '知识共享': ('自动化知识共享', 'auto_knowledge_sharing', 'enabled'),
+        '智能资源': ('智能资源管理', 'auto_resource_management', 'enabled'), '知识共享': ('自动化知识共享', 'auto_knowledge_sharing', 'enabled'),
     }
     
     if len(parts) == 1:
-        # [BUG修复] 从 app.config_manager 导入 _get_settings_object
         from app.config_manager import _get_settings_object
         status_lines = ["🔧 **各功能开关状态**:\n"]
         for key, (friendly_name, root_key, sub_key) in sorted(task_map.items()):
@@ -124,7 +114,6 @@ async def _cmd_toggle_task(event, parts):
     friendly_name, root_key, sub_key = task_map[task_name]
     
     if len(parts) == 2:
-        # [BUG修复] 从 app.config_manager 导入 _get_settings_object
         from app.config_manager import _get_settings_object
         config_obj = _get_settings_object(root_key) or {}
         current_value = config_obj.get(sub_key)
@@ -134,10 +123,9 @@ async def _cmd_toggle_task(event, parts):
     if len(parts) == 3 and parts[2] in ["开", "关"]:
         new_status = (parts[2] == "开")
         success_msg = f"**{friendly_name}** 功能已 **{parts[2]}**"
-        if root_key in ['auto_resource_management', 'auto_knowledge_sharing']:
-            success_msg += "\n_(注意：此项修改将在下次程序重启后完全生效)_"
-
-        await client.reply_to_admin(event, update_setting(root_key=root_key, sub_key=sub_key, value=new_status, success_message=success_msg))
+        
+        msg = await update_setting(root_key, sub_key, new_status, success_msg)
+        await client.reply_to_admin(event, msg)
     else:
         await client.reply_to_admin(event, f"❌ 参数格式错误！\n\n{HELP_TEXT_TOGGLE_TASK}")
 
@@ -162,7 +150,7 @@ async def _cmd_set_config(event, parts):
         return
         
     path = MODIFIABLE_CONFIG_MAP[alias]
-    result = update_nested_setting(path, value)
+    result = await update_nested_setting(path, value)
     await client.reply_to_admin(event, result)
 
 def initialize(app):
