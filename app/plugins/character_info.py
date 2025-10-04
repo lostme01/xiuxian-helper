@@ -14,15 +14,16 @@ from app.utils import create_error_reply
 
 STATE_KEY_PROFILE = "character_profile"
 
+# --- [核心修复] 更新正则表达式以兼容负数丹毒 ---
 PROFILE_PATTERN = re.compile(
-    r"@(?P<user>\w+)\** 的天命玉牒\s*"
+    r"@(?P<user>\w+)\**\s+的天命玉牒\s*"
     r"(?:[*\s]*称号[*\s]*: *【(?P<title>[^】]*)】)?\s*"
     r"[*\s]*宗门[*\s]*: *【(?P<sect>[^】]*)】\s*"
     r"(?:[*\s]*道号[*\s]*: *(?P<dao_name>.+?))?\s*"
     r"(?:[*\s]*灵根[*\s]*: *(?P<root>.+?))?\s*"
     r"[*\s]*境界[*\s]*: *(?P<realm>.+?)\s*"
     r"[*\s]*修为[*\s]*: *(?P<exp_cur>\d+) */ *(?P<exp_max>\d+)\s*"
-    r"[*\s]*丹毒[*\s]*: *(?P<pill_poison>\d+) *点\s*"
+    r"[*\s]*丹毒[*\s]*: *(-?\d+) *点\s*"  # <--- 修改点: 将 \d+ 改为 -?\d+
     r"[*\s]*杀戮[*\s]*: *(?P<kills>\d+) *人",
     re.S
 )
@@ -32,7 +33,9 @@ def _parse_profile_text(text: str) -> dict:
     if not match:
         return {}
 
+    # 提取丹毒时，因为它现在没有命名组，需要单独提取
     raw_profile = {k: v.strip() if v else v for k, v in match.groupdict().items()}
+    raw_profile['pill_poison'] = match.group(match.lastindex) # 获取最后一个匹配组（即丹毒值）
     
     profile = {
         "user": raw_profile.get("user"),
@@ -77,12 +80,6 @@ def _format_profile_reply(profile_data: dict, title: str) -> str:
 
 
 async def trigger_update_profile():
-    """
-    [优化版]
-    查询角色信息的核心逻辑。
-    - 成功时返回格式化好的成功消息字符串。
-    - 失败时直接抛出异常，由调用者处理。
-    """
     app = get_application()
     client = app.client
     command = ".我的灵根"
@@ -111,20 +108,16 @@ async def trigger_update_profile():
                 final_message = await asyncio.wait_for(edit_future, timeout=remaining_timeout)
                 profile_data = _parse_profile_text(final_message.raw_text)
             else:
-                # [优化] 抛出特定异常，而不是返回错误字符串
                 raise RuntimeError(f"游戏机器人返回的初始消息与预期不符: {initial_reply.text}")
 
         if not profile_data.get("境界"):
-            # [优化] 抛出特定异常
             raise ValueError(f"无法从最终返回的信息中解析出角色数据: {getattr(final_message, 'raw_text', '无最终消息')}")
 
         await set_state(STATE_KEY_PROFILE, profile_data)
         return _format_profile_reply(profile_data, "✅ **角色信息已更新并缓存**:")
 
-    # [优化] 将超时异常直接向上抛出，让调用者处理
     except (CommandTimeoutError, asyncio.TimeoutError) as e:
         raise CommandTimeoutError(f"等待游戏机器人响应或更新信息超时(超过 {settings.COMMAND_TIMEOUT} 秒)。") from e
-    # [优化] 捕获所有其他异常并向上抛出
     except Exception as e:
         raise e
     finally:
@@ -133,10 +126,6 @@ async def trigger_update_profile():
 
 
 async def _cmd_query_profile(event, parts):
-    """
-    [优化版]
-    处理 ,我的灵根 指令，现在负责捕获异常并生成标准化的用户反馈。
-    """
     app = get_application()
     client = app.client
     progress_message = await client.reply_to_admin(event, "⏳ 正在发送指令并等待查询结果...")
@@ -147,17 +136,14 @@ async def _cmd_query_profile(event, parts):
     
     final_text = ""
     try:
-        # 核心逻辑现在只在成功时返回字符串
         final_text = await trigger_update_profile()
 
-    # [优化] 捕获特定超时异常
     except CommandTimeoutError as e:
         final_text = create_error_reply(
             command_name="我的灵根",
             reason="等待游戏机器人响应超时",
             details=str(e)
         )
-    # [优化] 捕获所有其他异常
     except Exception as e:
         final_text = create_error_reply(
             command_name="我的灵根",
