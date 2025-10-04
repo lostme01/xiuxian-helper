@@ -24,7 +24,7 @@ async def publish_task(task: dict) -> bool:
     try:
         payload = json.dumps(task)
         receiver_count = await redis_client.db.publish(TASK_CHANNEL, payload)
-        log_data = {'频道': TASK_CHANNEL, '任务': task, '接收者数量': receiver_count}
+        log_data = {'频道': TASK_CHANNEL, '任务': task['task_type'], '接收者数量': receiver_count}
         if receiver_count > 0:
             format_and_log("INFO", "Redis-任务已发布", log_data)
         else:
@@ -72,7 +72,7 @@ async def find_any_executor(exclude_id: str) -> str | None:
         format_and_log("ERROR", "扫描执行者时发生异常", {'错误': str(e)})
     return None
 
-async def execute_listing_task(requester_id: str, **kwargs):
+async def execute_listing_task(requester_account_id: str, **kwargs):
     app = get_application()
     
     sell_str = f"{kwargs['item_to_sell_name']}*{kwargs['item_to_sell_quantity']}"
@@ -108,7 +108,7 @@ async def execute_listing_task(requester_id: str, **kwargs):
                     "quantity": kwargs.get('item_to_buy_quantity', 1)
                 }
             }
-            result_task = {"task_type": "purchase_item", "target_account_id": requester_id, "payload": task_payload}
+            result_task = {"task_type": "purchase_item", "target_account_id": requester_account_id, "payload": task_payload}
             await publish_task(result_task)
 
         else:
@@ -141,8 +141,11 @@ async def execute_unlisting_task(item_id: str, is_auto: bool = False):
 
 async def execute_purchase_task(payload: dict):
     app = get_application()
+    my_id = str(app.client.me.id)
     item_id = payload.get("item_id")
     cost = payload.get("cost")
+    crafting_session_id = payload.get("crafting_session_id") # 获取会话ID
+
     command = f".购买 {item_id}"
     format_and_log("TASK", "协同任务-购买", {'阶段': '开始执行', '指令': command})
     try:
@@ -161,6 +164,17 @@ async def execute_purchase_task(payload: dict):
                 await inventory_manager.remove_item(cost['name'], cost['quantity'])
 
             await app.client.send_admin_notification(f"✅ **协同购买成功** (挂单ID: `{item_id}`)\n库存已实时更新。")
+
+            # --- [新增] 如果是炼制任务的一部分，发送送达回执 ---
+            if crafting_session_id:
+                receipt_task = {
+                    "task_type": "crafting_material_delivered",
+                    "target_account_id": crafting_session_id.split('_')[1], # 从session_id中解析出发起者ID
+                    "session_id": crafting_session_id,
+                    "supplier_id": my_id
+                }
+                await publish_task(receipt_task)
+                format_and_log("DEBUG", "智能炼制-回执", {'状态': '已发送送达回执', '会话ID': crafting_session_id})
 
         else:
             error_reason = "未知"

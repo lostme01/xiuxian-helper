@@ -6,6 +6,7 @@ import shlex
 import asyncio
 import random
 import pytz
+import time
 from datetime import datetime, timedelta
 from telethon import events
 from app.context import get_application
@@ -17,22 +18,19 @@ from app.task_scheduler import scheduler
 from app.plugins.common_tasks import update_inventory_cache
 from app.utils import create_error_reply
 from app.inventory_manager import inventory_manager
+from app.plugins.crafting_actions import _cmd_craft_item as execute_craft_item
 
-HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令 (P2P最终版)**
+HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令**
 **说明**: 在控制群或私聊中，使用想发起任务的账号发送此指令。该账号将成为发起者，并自动协调网络中其他助手完成交易。
 **用法 1 (换灵石)**: 
   `,集火 <要买的物品> <数量>`
-  *示例*: `,集火 金精矿 10`
-
 **用法 2 (以物易物)**:
   `,集火 <要买的物品> <数量> <用于交换的物品> <数量>`
-  *示例*: `,集火 百年铁木 2 凝血草 20`
 """
 
-HELP_TEXT_RECEIVE_GOODS = """📦 **收货指令 (P2P最终版)**
+HELP_TEXT_RECEIVE_GOODS = """📦 **收货指令**
 **说明**: 在控制群或私聊中，使用想发起任务的账号发送此指令。该账号将上架物品，并通知网络中拥有足够物品的另一个助手购买。
 **用法**: `,收货 <物品名称> <数量>`
-**示例**: `,收货 凝血草 100`
 """
 
 async def _cmd_focus_fire(event, parts):
@@ -159,7 +157,8 @@ async def redis_message_handler(message):
             for handler in app.extra_redis_handlers:
                 if await handler(data):
                     return
-
+        
+        # --- 广播指令处理 ---
         if task_type == "broadcast_command":
             if my_id == str(settings.ADMIN_USER_ID): return
             target_sect = data.get("target_sect")
@@ -171,14 +170,57 @@ async def redis_message_handler(message):
                 await app.client.send_game_command_fire_and_forget(command_to_run)
             return
 
+        # --- 非本机任务，直接忽略 ---
         if my_id != data.get("target_account_id"): return
         
         format_and_log("INFO", "Redis 任务匹配成功", {'任务类型': task_type, '详情': str(data)})
+        
+        # --- 交易协同任务 ---
         if task_type == "list_item":
             payload = {k: v for k, v in data.items() if k not in ['task_type', 'target_account_id']}
             await trade_logic.execute_listing_task(**payload)
         elif task_type == "purchase_item":
             await trade_logic.execute_purchase_task(data.get("payload", {}))
+        
+        # --- [新增] 全自动炼制流程 ---
+        elif task_type == "crafting_material_delivered":
+            session_id = data.get("session_id")
+            supplier_id = data.get("supplier_id")
+            session_json = await app.redis_db.hget("crafting_sessions", session_id)
+            if session_json:
+                session_data = json.loads(session_json)
+                session_data["needed_from"][supplier_id] = True
+                
+                # 检查是否所有材料都已送达
+                if all(session_data["needed_from"].values()):
+                    session_data["status"] = "ready_to_craft"
+                    final_craft_task = {
+                        "task_type": "trigger_final_craft",
+                        "target_account_id": my_id,
+                        "session_id": session_id
+                    }
+                    await trade_logic.publish_task(final_craft_task)
+                    await app.client.send_admin_notification(f"✅ **智能炼制**: 材料已全部收齐 (会话: `{session_id[-6:]}`)\n⏳ 即将自动执行最终炼制...")
+                
+                await app.redis_db.hset("crafting_sessions", session_id, json.dumps(session_data))
+
+        elif task_type == "trigger_final_craft":
+            session_id = data.get("session_id")
+            session_json = await app.redis_db.hget("crafting_sessions", session_id)
+            if session_json:
+                session_data = json.loads(session_json)
+                item = session_data['item']
+                quantity = session_data['quantity']
+                
+                # 伪造一个 event 对象来调用
+                fake_event = type('FakeEvent', (object,), {
+                    'reply': app.client.send_admin_notification, # 最终结果发给管理员
+                })()
+
+                craft_parts = ["炼制物品", item, str(quantity)]
+                await execute_craft_item(fake_event, craft_parts)
+                await app.redis_db.hdel("crafting_sessions", session_id) # 清理会话
+
             
     except Exception as e:
         format_and_log("ERROR", "Redis 任务处理器", {'状态': '执行异常', '错误': str(e)})
@@ -216,9 +258,11 @@ async def handle_trade_report(event):
                 await inventory_manager.add_item(item, quantity)
                 await client.send_admin_notification(f"✅ **交易售出通知 (`@{my_username}`)**\n库存已实时增加: `{item} x{quantity}`")
 
-    await client.send_admin_notification(f"ℹ️ **交易售出通知 (`@{my_username}`)**\n库存已实时更新。")
+    # 这条通用通知可以去掉，因为上面已经有更详细的通知了
+    # await client.send_admin_notification(f"ℹ️ **交易售出通知 (`@{my_username}`)**\n库存已实时更新。")
 
 
 def initialize(app):
     app.register_command("集火", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="协同", usage=HELP_TEXT_FOCUS_FIRE)
     app.register_command("收货", _cmd_receive_goods, help_text="📦 协同助手接收物品。", category="协同", usage=HELP_TEXT_RECEIVE_GOODS)
+
