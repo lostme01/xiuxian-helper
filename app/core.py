@@ -96,7 +96,6 @@ class Application:
         raw_logger.propagate = False
         if raw_logger.hasHandlers(): raw_logger.handlers.clear()
         
-        # [核心修改] 使用更简洁的 formatter，因为上下文信息将在 log_manager 中动态添加
         raw_log_formatter = TimezoneFormatter(
             fmt='%(asctime)s\n%(message)s\n', datefmt='%Y-%m-%d %H:%M:%S %Z', tz_name=settings.TZ
         )
@@ -170,7 +169,8 @@ class Application:
     def register_command(self, name, handler, help_text="", category="默认", aliases=None, usage=None):
         if aliases is None: aliases = []
         usage = usage or help_text
-        command_data = { "handler": handler, "help": help_text, "category": category, "aliases": aliases, "usage": usage }
+        # [核心修复] 将指令的原始名称'name'添加到字典中
+        command_data = { "name": name, "handler": handler, "help": help_text, "category": category, "aliases": aliases, "usage": usage }
         for cmd_name in [name] + aliases:
             self.commands[cmd_name.lower()] = command_data
 
@@ -223,3 +223,4 @@ class Application:
         self.load_plugins_and_commands(is_reload=True)
         asyncio.create_task(self._run_startup_checks())
         format_and_log("SYSTEM", "热重载", {'阶段': '完成'})
+

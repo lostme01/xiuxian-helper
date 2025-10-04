@@ -9,7 +9,6 @@ from app.utils import create_error_reply
 from app.inventory_manager import inventory_manager
 from app.plugins.logic import crafting_logic, trade_logic
 from app.plugins.crafting_actions import _cmd_craft_item as execute_craft_item
-# [核心修改] 导入新的、不带权限检查的内部函数
 from app.plugins.crafting_material_gathering import _internal_gather_materials as execute_gather_materials
 
 HELP_TEXT_SMART_CRAFT = """✨ **智能炼制 (全自动版)**
@@ -51,34 +50,69 @@ async def _cmd_smart_craft(event, parts):
 
         if not required_materials:
             await progress_message.edit(f"✅ **本地材料充足**\n正在为您执行炼制操作...")
-            # 因为材料充足，直接调用基础炼制指令
             craft_parts = ["炼制物品", item_to_craft, str(quantity)]
             await execute_craft_item(event, craft_parts)
-            # execute_craft_item 会自己处理消息，这里无需再操作
             return 
 
         # --- 材料不足，启动全自动收集与炼制流程 ---
-        await progress_message.edit(f"⚠️ **本地材料不足**\n正在启动P2P协同，向其他助手收集材料...")
+        await progress_message.edit(f"⚠️ **本地材料不足**\n正在启动P2P协同，规划材料收集...")
         
-        # [核心优化] 直接通过函数参数调用，不再拼接parts列表
-        await execute_gather_materials(event, item_to_craft, quantity)
-        
-        # 因为 execute_gather_materials 会处理自己的进度消息，这里在它完成后追加提示
-        final_text = (f"✅ **材料收集任务已分派!**\n"
-                      f"⏳ 请在材料到账后，手动执行最终的炼制指令:\n"
-                      f"`,炼制物品 {item_to_craft} {quantity}`")
-        await progress_message.edit(final_text)
+        # 1. 制定收集计划
+        plan = await crafting_logic.logic_plan_crafting_session(item_to_craft, my_id, quantity)
+        if isinstance(plan, str): raise RuntimeError(plan)
+        if not plan:
+            await progress_message.edit(f"ℹ️ **无需收集**: 网络中没有其他助手需要为此任务贡献材料。")
+            client.unpin_message(progress_message)
+            return
 
+        # 2. 创建一个炼制会话
+        session_id = f"craft_{my_id}_{int(time.time())}"
+        session_data = {
+            "item": item_to_craft, "quantity": quantity, "status": "gathering",
+            "needed_from": {executor_id: False for executor_id in plan.keys()}
+        }
+        await app.redis_db.hset("crafting_sessions", session_id, json.dumps(session_data))
+        
+        # 3. 分派任务
+        report_lines = [f"✅ **规划完成 (会话ID: `{session_id[-6:]}`)**:"]
+        for executor_id, materials in plan.items():
+            materials_str = " ".join([f"{name}*{count}" for name, count in materials.items()])
+            report_lines.append(f"\n向 `...{executor_id[-4:]}` 收取: `{materials_str}`")
+            
+            try:
+                await progress_message.edit("\n".join(report_lines) + f"\n- 正在上架交易...")
+                
+                list_command = f".上架 灵石*1 换 {materials_str}"
+                _sent, reply = await client.send_game_command_request_response(list_command)
+                
+                match = re.search(r"挂单ID\D+(\d+)", reply.raw_text)
+                if "上架成功" in reply.raw_text and match:
+                    listing_id = match.group(1)
+                    report_lines[-1] += f" -> 挂单ID: `{listing_id}` (已通知)"
+                    
+                    task = {
+                        "task_type": "purchase_item", "target_account_id": executor_id,
+                        "payload": { 
+                            "item_id": listing_id, "cost": { "name": "灵石", "quantity": 1 },
+                            "crafting_session_id": session_id
+                        }
+                    }
+                    await trade_logic.publish_task(task)
+                else:
+                    report_lines[-1] += f" -> ❌ **上架失败**"
+                    session_data["needed_from"][executor_id] = "failed"
+            except Exception as e:
+                report_lines[-1] += f" -> ❌ **上架异常**: `{e}`"
+                session_data["needed_from"][executor_id] = "failed"
+            
+            await progress_message.edit("\n".join(report_lines))
+            await app.redis_db.hset("crafting_sessions", session_id, json.dumps(session_data))
+
+        final_text = "\n".join(report_lines) + "\n\n⏳ **所有收集任务已分派，等待材料全部送达后将自动炼制...**"
+        await progress_message.edit(final_text)
 
     except Exception as e:
         error_text = create_error_reply("智能炼制", "任务失败", details=str(e))
         await progress_message.edit(error_text)
-    finally:
         client.unpin_message(progress_message)
-
-
-def initialize(app):
-    app.register_command(
-        name="智能炼制", handler=_cmd_smart_craft, help_text="✨ 自动检查、收集并炼制物品。", category="协同", usage=HELP_TEXT_SMART_CRAFT
-    )
 

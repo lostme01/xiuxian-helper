@@ -10,15 +10,16 @@ from app.utils import get_display_width
 
 async def _handle_help_command(event, parts):
     """
-    生成帮助菜单。
+    [最终布局版 v2]
+    - 严格按照用户定义的多重优先级规则进行排版。
     """
     app = get_application()
     client = app.client
     prefix = settings.COMMAND_PREFIXES[0]
     
+    # 场景1: 查询单个指令的详细用法
     if len(parts) > 1:
         cmd_name_to_find = parts[1]
-        # [核心修改] 别名查找也在这里处理
         command_info = app.commands.get(cmd_name_to_find.lower())
         if command_info:
             usage_text = command_info.get('usage', '该指令没有提供详细的帮助信息。')
@@ -27,13 +28,15 @@ async def _handle_help_command(event, parts):
             await client.reply_to_admin(event, f"❓ 未找到指令: `{cmd_name_to_find}`")
         return
 
+    # 场景2: 显示所有指令的概览菜单
     categorized_cmds = {}
     unique_cmds = {}
     for name, data in app.commands.items():
+        canonical_name = data.get("name")
         handler = data.get('handler')
         if handler and handler not in unique_cmds:
             unique_cmds[handler] = {
-                "name": name, 
+                "name": canonical_name, 
                 "category": data.get("category", "默认")
             }
     
@@ -43,23 +46,50 @@ async def _handle_help_command(event, parts):
             categorized_cmds[category] = []
         categorized_cmds[category].append(f"`{prefix}{cmd_info['name']}`")
 
-    COLUMN_COUNT = 3
-    help_lines = [f"🤖 **TG 游戏助手指令菜单**\n\n_使用 `{prefix}帮助 <指令名>` 查看具体用法。_\n"]
-    
-    category_order = ["系统", "查询", "动作", "协同", "知识"]
-    
-    for category in category_order:
+    help_lines = [f"🤖 **TG 游戏助手指令菜单**\n"]
+    category_order = ["系统", "查询", "动作", "协同", "知识", "数据查询"]
+    category_icons = {
+        "系统": "⚙️", "查询": "🔍", "动作": "⚡️",
+        "协同": "🤝", "知识": "📚", "数据查询": "📊", "默认": "🔸"
+    }
+
+    def format_commands_with_final_rules(commands):
+        lines = []
+        cmd_prefix_len = len(prefix)
+        two_char_cmds = sorted([cmd for cmd in commands if len(cmd.strip('`')) - cmd_prefix_len == 2])
+        four_char_cmds = sorted([cmd for cmd in commands if len(cmd.strip('`')) - cmd_prefix_len == 4])
+        other_cmds = sorted([cmd for cmd in commands if cmd not in two_char_cmds and cmd not in four_char_cmds])
+
+        while len(four_char_cmds) >= 3 and len(two_char_cmds) >= 1:
+            lines.append('  '.join(four_char_cmds[:3] + [two_char_cmds[0]]))
+            four_char_cmds = four_char_cmds[3:]
+            two_char_cmds = two_char_cmds[1:]
+
+        while len(four_char_cmds) >= 1 and len(two_char_cmds) >= 3:
+            lines.append('  '.join([four_char_cmds[0]] + two_char_cmds[:3]))
+            four_char_cmds = four_char_cmds[1:]
+            two_char_cmds = two_char_cmds[3:]
+            
+        while len(four_char_cmds) >= 3:
+            lines.append('  '.join(four_char_cmds[:3]))
+            four_char_cmds = four_char_cmds[3:]
+
+        leftovers = sorted(four_char_cmds + two_char_cmds + other_cmds)
+        if leftovers:
+            for i in range(0, len(leftovers), 4):
+                lines.append('  '.join(leftovers[i:i + 4]))
+        
+        return lines
+
+    all_categories = category_order + [cat for cat in categorized_cmds if cat not in category_order]
+    for category in all_categories:
         if category in categorized_cmds:
-            help_lines.append(f"**{category}**")
-            sorted_cmds = sorted(categorized_cmds[category])
-            for i in range(0, len(sorted_cmds), COLUMN_COUNT):
-                row_items = sorted_cmds[i:i + COLUMN_COUNT]
-                line = '  '.join(row_items)
-                help_lines.append(line)
+            icon = category_icons.get(category, "🔸")
+            help_lines.append(f"**{icon} {category}**")
+            formatted_lines = format_commands_with_final_rules(categorized_cmds[category])
+            help_lines.extend(formatted_lines)
             help_lines.append("")
-
     await client.reply_to_admin(event, "\n".join(help_lines))
-
 
 async def execute_command(event):
     app = get_application()
@@ -84,38 +114,44 @@ async def execute_command(event):
     if not command_info or not command_info.get("handler"):
         return
 
-    is_admin = str(event.sender_id) == str(settings.ADMIN_USER_ID)
+    # --- [最终修复版] 权限检查逻辑 ---
+    is_admin_sender = str(event.sender_id) == str(settings.ADMIN_USER_ID)
     my_id = str(client.me.id)
-
-    # [核心修改] 更新受限指令列表
-    restricted_commands = ["炼制物品", "炼制集材", "智能炼制"]
-    is_restricted = command_info['name'] in restricted_commands
+    is_main_bot = my_id == str(settings.ADMIN_USER_ID)
 
     can_execute = False
-    if is_admin:
-        can_execute = True
-    elif is_restricted:
-        if event.is_private and str(event.chat_id) == my_id:
+    # 规则1: 只要是管理员发的指令，原则上都可以执行
+    if is_admin_sender:
+        # [核心修复] 在私聊中，只有收到消息的那个号能执行
+        if event.is_private:
+            if str(event.chat_id) == my_id:
+                can_execute = True
+        else: # 在群里，所有号都能执行（但后续有防刷屏逻辑）
             can_execute = True
-    else:
-        if (event.is_private and str(event.chat_id) == my_id) or (event.is_group and str(event.sender_id) == my_id):
-             can_execute = True
+            
+    # 规则2: 如果不是管理员发的，那必须是助手自己在收藏夹里发给自己的
+    elif str(event.sender_id) == my_id and event.is_private and str(event.chat_id) == my_id:
+        can_execute = True
 
     if can_execute:
-        format_and_log("INFO", "指令执行", {'指令': cmd_name, '执行者': my_id, '来源': 'Admin' if is_admin else 'Self'})
+        # [防刷屏逻辑] 对于会产生长回复的指令，如果是在群里由管理员发出，则只有主控号回复
+        noisy_commands = ["任务列表", "查看配置", "日志开关", "任务开关", "帮助", "菜单", "help", "menu", "状态", "查看背包", "查看宝库", "查看角色", "查看阵法"]
+        if is_admin_sender and event.is_group and cmd_name in noisy_commands and not is_main_bot:
+            format_and_log("INFO", "指令忽略", {'指令': cmd_name, '执行者': my_id, '原因': '非主控号，避免群内刷屏'})
+            return
+
+        format_and_log("INFO", "指令执行", {'指令': cmd_name, '执行者': my_id, '来源': 'Admin' if is_admin_sender else 'Self'})
         handler = command_info.get("handler")
         await handler(event, parts)
-
 
 def initialize(app):
     client = app.client
     
-    listen_chats = [settings.ADMIN_USER_ID]
+    listen_chats = [settings.ADMIN_USER_ID, 'me']
     if settings.CONTROL_GROUP_ID:
         listen_chats.append(settings.CONTROL_GROUP_ID)
     
-    # [新增] 助手号也需要监听自己的收藏夹
-    listen_chats.append('me')
+    listen_chats = list(set(listen_chats))
 
     app.register_command(
         "帮助", 
