@@ -101,7 +101,8 @@ async def execute_command(event):
     try:
         parts = shlex.split(command_body)
     except ValueError:
-        await client.reply_to_admin(event, "❌ 参数解析错误，请检查您的引号是否匹配。")
+        if str(client.me.id) == str(settings.ADMIN_USER_ID):
+            await client.reply_to_admin(event, "❌ 参数解析错误，请检查您的引号是否匹配。")
         return
 
     if not parts: return
@@ -112,37 +113,35 @@ async def execute_command(event):
     if not command_info or not command_info.get("handler"):
         return
 
-    # --- [最终修复版 v3] 权限与指挥逻辑 ---
     is_admin_sender = str(event.sender_id) == str(settings.ADMIN_USER_ID)
     my_id = str(client.me.id)
     is_main_bot = my_id == str(settings.ADMIN_USER_ID)
 
     can_execute = False
     
-    # 规则1: 指令来自管理员
     if is_admin_sender:
-        # 场景A: 管理员在私聊中发指令
         if event.is_private:
-            # 只有收到这个私聊事件的助手才能执行
             can_execute = True
-        
-        # 场景B: 管理员在控制群中发指令
-        elif event.is_group and event.chat_id == settings.CONTROL_GROUP_ID:
-            # B1: 如果是回复 -> 只有被回复的号执行 (精确指挥)
+        elif event.is_group:
             if event.is_reply:
                 reply_to_msg = await event.get_reply_message()
                 if reply_to_msg and str(reply_to_msg.sender_id) == my_id:
                     can_execute = True
-            # B2: 如果不是回复 -> 所有号都执行 (广播)
             else:
                 can_execute = True
-    
-    # 规则2: 助手自己在收藏夹里发指令
     elif str(event.sender_id) == my_id and event.is_private and str(event.chat_id) == my_id:
         can_execute = True
 
     if can_execute:
-        # [防刷屏逻辑]
+        # --- [核心修改] 自动删除管理员发出的指令 ---
+        # 只有主控号负责删除，避免重复操作
+        if is_admin_sender and is_main_bot:
+            client._schedule_message_deletion(
+                event.message, 
+                settings.AUTO_DELETE.get('delay_admin_command'), 
+                "管理员指令原文"
+            )
+
         noisy_commands = ["任务列表", "查看配置", "日志开关", "任务开关", "帮助", "菜单", "help", "menu", "状态", "查看背包", "查看宝库", "查看角色", "查看阵法"]
         is_broadcast_in_group = is_admin_sender and event.is_group and not event.is_reply
         if is_broadcast_in_group and cmd_name in noisy_commands and not is_main_bot:
