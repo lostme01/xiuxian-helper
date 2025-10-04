@@ -72,7 +72,6 @@ async def trigger_dianmao_chuangong(force_run=False):
     finally:
         if sent_dianmao:
             client.unpin_message(sent_dianmao)
-            # [核心修复] 使用新的专用配置项
             delay = settings.AUTO_DELETE_STRATEGIES['long_task']['delay_anchor']
             client._schedule_message_deletion(sent_dianmao, delay, "宗门点卯(任务链结束)")
 
@@ -146,8 +145,6 @@ async def trigger_biguan_xiulian(force_run=False):
         scheduler.add_job(trigger_biguan_xiulian, 'date', run_date=next_run_time, id=TASK_ID_BIGUAN, replace_existing=True)
         await set_state(STATE_KEY_BIGUAN, next_run_time.isoformat())
         format_and_log("TASK", "闭关修炼", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
-
-# ... (剩余的 check_*_startup 和 initialize 函数保持不变) ...
 
 async def active_status_heartbeat():
     client = get_application().client
@@ -244,7 +241,9 @@ def initialize(app):
     app.register_task(task_key="dianmao", function=trigger_dianmao_chuangong, command_name="立即点卯", help_text="...")
     app.register_task(task_key="chuang_ta", function=trigger_chuang_ta, command_name="立即闯塔", help_text="...")
     app.register_task(task_key="update_inventory", function=update_inventory_cache, command_name="立即刷新背包", help_text="...")
+    
+    # [核心修改] 从启动检查列表中移除两个心跳任务
     app.startup_checks.extend([
         check_biguan_startup, check_dianmao_startup, check_chuang_ta_startup, 
-        check_inventory_refresh_startup, check_heartbeat_startup, check_active_heartbeat_startup
+        check_inventory_refresh_startup
     ])
