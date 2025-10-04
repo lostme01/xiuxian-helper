@@ -155,13 +155,11 @@ async def redis_message_handler(message):
         data = json.loads(message['data'])
         task_type = data.get("task_type")
 
-        # [核心优化] 依次调用所有额外的处理器
         if hasattr(app, 'extra_redis_handlers'):
             for handler in app.extra_redis_handlers:
                 if await handler(data):
-                    return # 如果被处理，则提前返回
+                    return
 
-        # --- 原有的处理器逻辑 ---
         if task_type == "broadcast_command":
             if my_id == str(settings.ADMIN_USER_ID): return
             target_sect = data.get("target_sect")
@@ -222,5 +220,5 @@ async def handle_trade_report(event):
 
 
 def initialize(app):
-    app.register_command("集火", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="高级协同", usage=HELP_TEXT_FOCUS_FIRE)
-    app.register_command("收货", _cmd_receive_goods, help_text="📦 协同助手接收物品。", category="高级协同", usage=HELP_TEXT_RECEIVE_GOODS)
+    app.register_command("集火", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="协同", usage=HELP_TEXT_FOCUS_FIRE)
+    app.register_command("收货", _cmd_receive_goods, help_text="📦 协同助手接收物品。", category="协同", usage=HELP_TEXT_RECEIVE_GOODS)

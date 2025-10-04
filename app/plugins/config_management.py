@@ -2,6 +2,7 @@
 from config import settings
 from app.context import get_application
 from .logic import config_logic
+# [核心修复] 只导入需要的高级函数
 from app.config_manager import update_setting, update_nested_setting
 from app.logger import LOG_DESC_TO_SWITCH, LOG_SWITCH_TO_DESC
 
@@ -22,7 +23,6 @@ HELP_TEXT_TOGGLE_TASK = """🔧 **动态管理功能开关**
 - 不带参数发送可查看所有开关的当前状态。
 **用法**: `,任务开关 <功能名> [<开|关>]`"""
 
-# --- 核心修改：更新帮助文本和配置映射 ---
 HELP_TEXT_SET_CONFIG = """⚙️ **动态修改详细配置**
 **说明**: 无需重启，即时修改 `prod.yaml` 中的指定参数。
 - 不带参数发送可查看所有支持动态修改的配置项。
@@ -42,17 +42,6 @@ MODIFIABLE_CONFIG_MAP = {
     "黄枫谷-药园播种": "huangfeng_valley.garden_sow_seed",
     "太一门-引道冷却": "taiyi_sect.yindao_success_cooldown_hours",
 }
-
-def _get_settings_object(root_key: str) -> dict | None:
-    if hasattr(settings, root_key.upper()):
-        return getattr(settings, root_key.upper())
-    if hasattr(settings, f"{root_key.upper()}_CONFIG"):
-        return getattr(settings, f"{root_key.upper()}_CONFIG")
-    if root_key.endswith('_solver'):
-        base_name = root_key.replace('_solver', '')
-        if hasattr(settings, f"{base_name.upper()}_CONFIG"):
-            return getattr(settings, f"{base_name.upper()}_CONFIG")
-    return None
 
 async def _cmd_get_config(event, parts):
     key_to_query = parts[1] if len(parts) > 1 else None
@@ -94,6 +83,8 @@ async def _cmd_toggle_log(event, parts):
 
 async def _cmd_toggle_task(event, parts):
     client = get_application().client
+    
+    # [优化] 将 root_key 调整为 settings.py 中定义的变量名，提高代码可读性和健壮性
     task_map = {
         '玄骨': ('玄骨考校', 'xuangu_exam_solver', 'enabled'),
         '天机': ('天机考验', 'tianji_exam_solver', 'enabled'),
@@ -108,13 +99,17 @@ async def _cmd_toggle_task(event, parts):
         '魔君': ('自动应对魔君', 'task_switches', 'mojun_arrival'),
         '自动删除': ('消息自动删除', 'auto_delete', 'enabled'),
         '集火下架': ('集火后自动下架', 'trade_coordination', 'focus_fire_auto_delist'),
+        '智能资源': ('智能资源管理', 'auto_resource_management', 'enabled'),
+        '知识共享': ('自动化知识共享', 'auto_knowledge_sharing', 'enabled'),
     }
     
     if len(parts) == 1:
+        # [BUG修复] 从 app.config_manager 导入 _get_settings_object
+        from app.config_manager import _get_settings_object
         status_lines = ["🔧 **各功能开关状态**:\n"]
         for key, (friendly_name, root_key, sub_key) in sorted(task_map.items()):
-            config_obj = _get_settings_object(root_key) or {}
-            is_enabled = config_obj.get(sub_key, False)
+            config_obj = _get_settings_object(root_key)
+            is_enabled = config_obj.get(sub_key, False) if isinstance(config_obj, dict) else False
             status = "✅ 开启" if is_enabled else "❌ 关闭"
             status_lines.append(f"- **{friendly_name}** (`{key}`): {status}")
         status_lines.append(f"\n**用法**: `,任务开关 <功能名> [<开|关>]`")
@@ -129,6 +124,8 @@ async def _cmd_toggle_task(event, parts):
     friendly_name, root_key, sub_key = task_map[task_name]
     
     if len(parts) == 2:
+        # [BUG修复] 从 app.config_manager 导入 _get_settings_object
+        from app.config_manager import _get_settings_object
         config_obj = _get_settings_object(root_key) or {}
         current_value = config_obj.get(sub_key)
         await client.reply_to_admin(event, f"ℹ️ 当前 **{friendly_name}** 功能状态: **{'开启' if current_value else '关闭'}**")
@@ -136,7 +133,11 @@ async def _cmd_toggle_task(event, parts):
         
     if len(parts) == 3 and parts[2] in ["开", "关"]:
         new_status = (parts[2] == "开")
-        await client.reply_to_admin(event, update_setting(root_key=root_key, sub_key=sub_key, value=new_status, success_message=f"**{friendly_name}** 功能已 **{parts[2]}**"))
+        success_msg = f"**{friendly_name}** 功能已 **{parts[2]}**"
+        if root_key in ['auto_resource_management', 'auto_knowledge_sharing']:
+            success_msg += "\n_(注意：此项修改将在下次程序重启后完全生效)_"
+
+        await client.reply_to_admin(event, update_setting(root_key=root_key, sub_key=sub_key, value=new_status, success_message=success_msg))
     else:
         await client.reply_to_admin(event, f"❌ 参数格式错误！\n\n{HELP_TEXT_TOGGLE_TASK}")
 
@@ -161,11 +162,11 @@ async def _cmd_set_config(event, parts):
         return
         
     path = MODIFIABLE_CONFIG_MAP[alias]
-    result = update_nested_setting(path, value) # update_nested_setting is not async
+    result = update_nested_setting(path, value)
     await client.reply_to_admin(event, result)
 
 def initialize(app):
-    app.register_command("查看配置", _cmd_get_config, help_text="🔍 查看当前配置项。", category="系统配置", aliases=['getconfig'], usage=HELP_TEXT_GET_CONFIG)
-    app.register_command("日志开关", _cmd_toggle_log, help_text="📝 动态管理日志开关。", category="系统配置", usage=HELP_TEXT_TOGGLE_LOG)
-    app.register_command("任务开关", _cmd_toggle_task, help_text="🔧 动态管理功能开关。", category="系统配置", usage=HELP_TEXT_TOGGLE_TASK)
-    app.register_command("修改配置", _cmd_set_config, help_text="⚙️ 动态修改详细配置。", category="系统配置", aliases=['setconfig'], usage=HELP_TEXT_SET_CONFIG)
+    app.register_command("查看配置", _cmd_get_config, help_text="🔍 查看当前配置项。", category="系统", aliases=['getconfig'], usage=HELP_TEXT_GET_CONFIG)
+    app.register_command("日志开关", _cmd_toggle_log, help_text="📝 动态管理日志开关。", category="系统", usage=HELP_TEXT_TOGGLE_LOG)
+    app.register_command("任务开关", _cmd_toggle_task, help_text="🔧 动态管理功能开关。", category="系统", usage=HELP_TEXT_TOGGLE_TASK)
+    app.register_command("修改配置", _cmd_set_config, help_text="⚙️ 动态修改详细配置。", category="系统", aliases=['setconfig'], usage=HELP_TEXT_SET_CONFIG)

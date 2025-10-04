@@ -5,7 +5,18 @@ from collections import namedtuple
 from datetime import datetime
 from config import settings
 
-# --- 日志分类的“真理之源” (Single Source of Truth) ---
+# [核心修复] 将 get_display_width 函数直接放在 logger 内部，因为它主要用于日志格式化
+# 这样可以彻底断开与 utils.py 的循环依赖
+def get_display_width(text: str) -> int:
+    width = 0
+    for char in text:
+        if '\u4e00' <= char <= '\u9fff' or char in '，。？！；：《》【】':
+            width += 2
+        else:
+            width += 1
+    return width
+
+# --- 日志分类的“真理之源” ---
 LogCategory = namedtuple('LogCategory', ['key', 'switch_name', 'description'])
 
 LOG_CATEGORIES = [
@@ -19,15 +30,12 @@ LOG_CATEGORIES = [
     LogCategory("MSG_DELETE",   "log_deletes",          "消息删除"),
 ]
 
-# 动态生成 LOG_TYPES 和其他映射，确保一致性
 LOG_TYPES = {cat.key: cat.switch_name for cat in LOG_CATEGORIES}
 LOG_SWITCH_TO_DESC = {cat.switch_name: cat.description for cat in LOG_CATEGORIES}
-# --- 核心BUG修复：修正此处的变量引用错误 ---
 LOG_DESC_TO_SWITCH = {cat.description: cat.switch_name for cat in LOG_CATEGORIES}
 
 
 class TimezoneFormatter(logging.Formatter):
-    """自定义 Formatter, 用于将日志时间转换为指定时区"""
     def __init__(self, fmt, datefmt=None, tz_name='UTC'):
         super().__init__(fmt, datefmt)
         self.tz = pytz.timezone(tz_name)
@@ -40,13 +48,6 @@ class TimezoneFormatter(logging.Formatter):
 
 LINE_WIDTH = 50
 
-def get_display_width(text: str) -> int:
-    width = 0
-    for char in text:
-        if '\u4e00' <= char <= '\u9fff' or char in '，。？！；：《》【】': width += 2
-        else: width += 1
-    return width
-    
 def format_and_log(log_type_key: str, title: str, data: dict, level=logging.INFO):
     log_switch_name = LOG_TYPES.get(log_type_key)
     if not (log_switch_name and settings.LOGGING_SWITCHES.get(log_switch_name, True)): 

@@ -10,7 +10,7 @@ from app.context import get_application
 from app.state_manager import set_state, get_state
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
-from app.utils import send_paginated_message, create_error_reply
+from app.utils import send_paginated_message, create_error_reply, get_display_width
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 from app.character_stats_manager import stats_manager
 
@@ -46,9 +46,8 @@ async def trigger_update_treasury(force_run=False):
         if not treasury_data["items"]:
             raise ValueError("无法从返回的信息中解析出宝库物品。")
 
-        # [核心优化] 使用新的管理器来更新贡献值和物品列表
         await stats_manager.set_contribution(treasury_data["contribution"])
-        await set_state(STATE_KEY_TREASURY, treasury_data) # 物品列表依然存在这里
+        await set_state(STATE_KEY_TREASURY, treasury_data)
         
         format_and_log("TASK", "更新宗门宝库", {'阶段': '任务成功', '贡献': treasury_data["contribution"], '物品数量': len(treasury_data["items"])})
         if force_run:
@@ -83,16 +82,8 @@ async def _cmd_query_treasury(event, parts):
         except MessageEditTimeExpiredError:
             await client.reply_to_admin(event, final_text)
 
-def get_display_width(text: str) -> int:
-    width = 0
-    for char in text:
-        if '\u4e00' <= char <= '\u9fff': width += 2
-        else: width += 1
-    return width
-
 async def _cmd_view_cached_treasury(event, parts):
     treasury_data = await get_state(STATE_KEY_TREASURY, is_json=True)
-    # [优化] 从新的管理器获取最新的贡献值
     contribution = await stats_manager.get_contribution()
 
     if not treasury_data or not treasury_data.get('items'):
@@ -123,6 +114,6 @@ async def check_treasury_startup():
         format_and_log("SYSTEM", "任务调度", {'任务': '每日自动更新宗门宝库', '状态': '已计划', '预计时间': run_time.strftime('%H:%M')})
 
 def initialize(app):
-    app.register_command("宗门宝库", _cmd_query_treasury, help_text="主动查询并刷新宗门宝库的物品列表和贡献。", category="游戏查询")
-    app.register_command("查看宝库", _cmd_view_cached_treasury, help_text="查看已缓存的宗门宝库信息。", category="游戏查询")
+    app.register_command("宗门宝库", _cmd_query_treasury, help_text="主动查询并刷新宗门宝库的物品列表和贡献。", category="查询")
+    app.register_command("查看宝库", _cmd_view_cached_treasury, help_text="查看已缓存的宗门宝库信息。", category="查询")
     app.startup_checks.append(check_treasury_startup)

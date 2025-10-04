@@ -39,7 +39,9 @@ async def _cmd_status(event, parts):
             f"- **修为**: `{profile_data.get('当前修为', 'N/A')} / {profile_data.get('修为上限', 'N/A')}`\n"
             f"- **灵石**: `{ling_shi_count}`\n"
             f"- **贡献**: `{contribution}`\n\n"
-            f"使用 `,状态 <模块>` 查看更多详情。"
+            # [核心优化] 增加子模块提示
+            f"**使用 `,状态 <模块>` 查看更多详情。**\n"
+            f"**可用模块**: `背包`, `宝库`, `角色`, `阵法`"
         )
         await app.client.reply_to_admin(event, summary)
         
@@ -62,7 +64,10 @@ async def _cmd_status(event, parts):
             error_msg = create_error_reply("状态", "未知的模块", details=f"可用模块: 背包, 宝库, 角色, 阵法", usage_text=HELP_TEXT_STATUS)
             await app.client.reply_to_admin(event, error_msg)
     else:
-        await app.client.reply_to_admin(event, HELP_TEXT_STATUS)
+        # 对于错误的参数数量，也给予清晰提示
+        usage = app.commands.get('状态', {}).get('usage')
+        error_msg = create_error_reply("状态", "参数格式错误", usage_text=usage)
+        await app.client.reply_to_admin(event, error_msg)
 
 def initialize(app):
     app.register_command(

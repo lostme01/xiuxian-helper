@@ -20,14 +20,14 @@ from app.logger import format_and_log, TimezoneFormatter
 from app.context import set_application, set_scheduler, get_application
 from app.utils import create_error_reply
 from app.inventory_manager import inventory_manager
-from app.character_stats_manager import stats_manager # 导入全局数值管理器
+from app.character_stats_manager import stats_manager
 
 class Application:
     def __init__(self):
         self.client: TelegramClient = None
         self.redis_db = None
         self.inventory_manager = inventory_manager
-        self.stats_manager = stats_manager # [新增] 将实例附加到app上
+        self.stats_manager = stats_manager
         self.startup_checks = []
         self.commands = {}
         self.task_functions = {}
@@ -116,7 +116,6 @@ class Application:
         load_all_plugins(self)
 
     async def _run_startup_checks(self):
-        """A helper function to run all startup checks."""
         format_and_log("SYSTEM", "核心服务", {'阶段': '开始执行启动检查任务...'})
         if self.startup_checks:
             await asyncio.gather(*(check() for check in self.startup_checks if check), return_exceptions=True)
@@ -206,7 +205,7 @@ class Application:
                 except MessageEditTimeExpiredError:
                     await client.reply_to_admin(event, final_text)
 
-        self.register_command(command_name, task_trigger_handler, help_text=help_text, category="游戏任务")
+        self.register_command(command_name, task_trigger_handler, help_text=help_text, category="动作")
 
     async def reload_plugins_and_commands(self):
         format_and_log("SYSTEM", "热重载", {'阶段': '开始...'})

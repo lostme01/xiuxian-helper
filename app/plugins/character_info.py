@@ -14,7 +14,6 @@ from app.utils import create_error_reply
 
 STATE_KEY_PROFILE = "character_profile"
 
-# --- [核心修复] 更新正则表达式以兼容负数丹毒 ---
 PROFILE_PATTERN = re.compile(
     r"@(?P<user>\w+)\**\s+的天命玉牒\s*"
     r"(?:[*\s]*称号[*\s]*: *【(?P<title>[^】]*)】)?\s*"
@@ -23,7 +22,7 @@ PROFILE_PATTERN = re.compile(
     r"(?:[*\s]*灵根[*\s]*: *(?P<root>.+?))?\s*"
     r"[*\s]*境界[*\s]*: *(?P<realm>.+?)\s*"
     r"[*\s]*修为[*\s]*: *(?P<exp_cur>\d+) */ *(?P<exp_max>\d+)\s*"
-    r"[*\s]*丹毒[*\s]*: *(-?\d+) *点\s*"  # <--- 修改点: 将 \d+ 改为 -?\d+
+    r"[*\s]*丹毒[*\s]*: *(-?\d+) *点\s*"
     r"[*\s]*杀戮[*\s]*: *(?P<kills>\d+) *人",
     re.S
 )
@@ -33,9 +32,8 @@ def _parse_profile_text(text: str) -> dict:
     if not match:
         return {}
 
-    # 提取丹毒时，因为它现在没有命名组，需要单独提取
     raw_profile = {k: v.strip() if v else v for k, v in match.groupdict().items()}
-    raw_profile['pill_poison'] = match.group(match.lastindex) # 获取最后一个匹配组（即丹毒值）
+    raw_profile['pill_poison'] = match.group(match.lastindex)
     
     profile = {
         "user": raw_profile.get("user"),
@@ -171,5 +169,5 @@ async def _cmd_view_cached_profile(event, parts):
 
 
 def initialize(app):
-    app.register_command("我的灵根", _cmd_query_profile, help_text="查询并刷新当前角色的详细信息。", category="游戏查询")
-    app.register_command("查看角色", _cmd_view_cached_profile, help_text="查看已缓存的最新角色信息。", category="游戏查询")
+    app.register_command("我的灵根", _cmd_query_profile, help_text="查询并刷新当前角色的详细信息。", category="查询")
+    app.register_command("查看角色", _cmd_view_cached_profile, help_text="查看已缓存的最新角色信息。", category="查询")

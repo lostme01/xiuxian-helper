@@ -6,12 +6,24 @@ import os
 import shlex
 import functools
 import asyncio
-import random
-from datetime import timedelta
+from datetime import datetime, timedelta
 from telethon.tl.types import Message
-from app.logger import format_and_log
+# [核心修复] 不再从顶部导入 app.logger
 from app.context import get_application
 from config import settings
+
+def get_display_width(text: str) -> int:
+    """
+    计算字符串在终端中的显示宽度。
+    一个中文字符宽度为2，一个英文字符宽度为1。
+    """
+    width = 0
+    for char in text:
+        if '\u4e00' <= char <= '\u9fff' or char in '，。？！；：《》【】':
+            width += 2
+        else:
+            width += 1
+    return width
 
 def create_error_reply(command_name: str, reason: str, details: str = None, usage_text: str = None) -> str:
     command_prefix = settings.COMMAND_PREFIXES[0]
@@ -60,40 +72,24 @@ def require_args(count: int, usage: str):
     return decorator
 
 def resilient_task(retry_delay_minutes: int = 15):
-    """
-    [新增] “弹性任务”装饰器。
-    用于包裹后台自动任务，实现统一的超时和异常处理及重试逻辑。
-    """
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            # 自动任务不应该由 `force_run` 触发，但我们保留它以兼容手动调用
+            from app.logger import format_and_log
+            from app.telegram_client import CommandTimeoutError
             is_forced = kwargs.get('force_run', False)
             task_name = func.__name__
             try:
                 return await func(*args, **kwargs)
             except Exception as e:
-                # 只有在非手动强制执行的情况下才记录错误并准备重试
-                if not is_forced:
-                    log_level = logging.WARNING if isinstance(e, CommandTimeoutError) else logging.ERROR
-                    format_and_log("TASK", f"后台任务异常: {task_name}", {'错误': str(e)}, level=log_level)
-                    
-                    # 可以在这里加入更复杂的重试逻辑，例如指数退避
-                    # 目前仅记录日志，依赖于调度器自身的下一次执行
-                    # 或者，我们可以重新调度一个一次性的任务
-                    # from app.context import get_scheduler
-                    # from datetime import datetime, timedelta
-                    # import pytz
-                    # scheduler = get_scheduler()
-                    # next_run = datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=retry_delay_minutes)
-                    # scheduler.add_job(wrapper, 'date', run_date=next_run, args=args, kwargs=kwargs)
-                    # format_and_log("TASK", "后台任务重试", {'任务': task_name, '下次重试': next_run.strftime('%Y-%m-%d %H:%M:%S')})
-                else:
-                    # 如果是手动触发的，则将异常向上抛出，由指令处理器向用户反馈
+                if is_forced:
                     raise e
+                
+                log_level = logging.WARNING if isinstance(e, CommandTimeoutError) else logging.ERROR
+                format_and_log("TASK", f"后台任务异常: {task_name}", {'错误': str(e)}, level=log_level)
+
         return wrapper
     return decorator
-
 
 async def send_paginated_message(event, text: str, max_length: int = 3500, prefix_message=None):
     client = get_application().client
@@ -127,6 +123,7 @@ def mask_string(text: str, head: int = 4, tail: int = 4) -> str:
     return f"{text[:head]}...{text[-tail:]}"
 
 def parse_cooldown_time(message: Message) -> timedelta | None:
+    from app.logger import format_and_log
     try:
         text = message.text
         pattern = r'\**(\d+)\**\s*(小时|时|分钟|分|秒)'
@@ -145,12 +142,14 @@ def parse_cooldown_time(message: Message) -> timedelta | None:
         return None
 
 def write_state(file_path: str, content: str):
+    from app.logger import format_and_log
     try:
         with open(file_path, 'w', encoding='utf-8') as f: f.write(content)
     except Exception as e:
         format_and_log("SYSTEM", "状态写入失败", {'文件': file_path, '错误': str(e)}, level=logging.ERROR)
 
 def read_state(file_path: str) -> str | None:
+    from app.logger import format_and_log
     try:
         with open(file_path, 'r', encoding='utf-8') as f: return f.read().strip()
     except FileNotFoundError: return None
@@ -159,6 +158,7 @@ def read_state(file_path: str) -> str | None:
         return None
 
 def write_json_state(file_path: str, data: dict):
+    from app.logger import format_and_log
     temp_file_path = file_path + ".tmp"
     try:
         with open(temp_file_path, 'w', encoding='utf-8') as f:
@@ -189,6 +189,7 @@ def get_qa_answer_from_redis(redis_db, db_name: str, question: str) -> str | Non
     except Exception as e: return None
 
 def save_qa_answer_to_redis(redis_db, db_name: str, question: str, answer: str):
+    from app.logger import format_and_log
     if not redis_db: return
     try:
         redis_db.hset(db_name, question, answer)

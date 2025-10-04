@@ -8,7 +8,7 @@ from app.context import get_application
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
 from app.inventory_manager import inventory_manager
-from app.plugins.logic.recipe_logic import CRAFTING_RECIPES_KEY # 借用配方逻辑的常量
+from app.plugins.logic.recipe_logic import CRAFTING_RECIPES_KEY
 
 HELP_TEXT_CRAFT_ITEM = """🛠️ **炼制物品 (带库存同步)**
 **说明**: 执行炼制操作，并在成功后自动更新内部的背包缓存，实现材料的减少和成品的增加。
@@ -50,22 +50,18 @@ async def _cmd_craft_item(event, parts):
 
     final_text = ""
     try:
-        # 使用 send_and_wait_for_edit 来处理炼制这种需要等待消息编辑的场景
         _sent_msg, final_reply = await client.send_and_wait_for_edit(
             command, 
             initial_reply_pattern=r"你凝神静气"
         )
 
-        # 场景一: 炼制成功
         if "炼制结束！" in final_reply.text and "最终获得" in final_reply.text:
-            # 1. 解析产出
             gain_match = re.search(r"最终获得【(.+?)】x\*\*(\d+)\*\*", final_reply.text)
             if not gain_match:
                 raise ValueError("无法从成功回复中解析出获得的物品和数量。")
             
             gained_item, gained_quantity = gain_match.group(1), int(gain_match.group(2))
 
-            # 2. 获取配方以计算消耗
             if not app.redis_db:
                 raise ConnectionError("Redis未连接，无法获取配方以计算材料消耗。")
 
@@ -75,7 +71,6 @@ async def _cmd_craft_item(event, parts):
             
             recipe = json.loads(recipe_json)
             
-            # 3. 更新库存
             final_text = f"✅ **炼制成功**!\n\n**产出**:\n- `{gained_item}` x `{gained_quantity}` (已入库)\n\n"
             await inventory_manager.add_item(gained_item, gained_quantity)
 
@@ -88,7 +83,6 @@ async def _cmd_craft_item(event, parts):
                     consumed_text.append(f"- `{material}` x `{total_consumed}` (已出库)")
                 final_text += "\n".join(consumed_text)
 
-        # 场景二: 材料不足或其他直接失败
         else:
             final_text = f"ℹ️ **炼制未成功** (库存未变动)\n\n**游戏返回**:\n`{final_reply.text}`"
 
@@ -107,9 +101,5 @@ async def _cmd_craft_item(event, parts):
 
 def initialize(app):
     app.register_command(
-        name="炼制物品",
-        handler=_cmd_craft_item,
-        help_text="🛠️ 炼制物品并自动同步库存。",
-        category="游戏动作",
-        usage=HELP_TEXT_CRAFT_ITEM
+        name="炼制物品", handler=_cmd_craft_item, help_text="🛠️ 炼制物品并自动同步库存。", category="动作", usage=HELP_TEXT_CRAFT_ITEM
     )

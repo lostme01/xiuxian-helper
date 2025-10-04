@@ -38,6 +38,6 @@ async def _cmd_delete_kb(event, parts):
     await get_application().client.reply_to_admin(event, await kb_logic.logic_delete_kb_entry(key))
 
 def initialize(app):
-    app.register_command("添加知识", _cmd_add_kb, help_text="向知识库添加新条目", category="知识库", usage=HELP_TEXT_KB)
-    app.register_command("查询知识", _cmd_get_kb, help_text="查询知识库内容", category="知识库", usage=HELP_TEXT_KB)
-    app.register_command("删除知识", _cmd_delete_kb, help_text="从知识库删除条目", category="知识库", usage=HELP_TEXT_KB)
+    app.register_command("添加知识", _cmd_add_kb, help_text="向知识库添加新条目", category="知识", usage=HELP_TEXT_KB)
+    app.register_command("查询知识", _cmd_get_kb, help_text="查询知识库内容", category="知识", usage=HELP_TEXT_KB)
+    app.register_command("删除知识", _cmd_delete_kb, help_text="从知识库删除条目", category="知识", usage=HELP_TEXT_KB)

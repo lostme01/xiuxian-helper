@@ -68,8 +68,9 @@ TASK_SWITCHES = _merge_config('task_switches', {
     'mojun_arrival': False, 'sect_treasury': True
 })
 
-AUTO_RESOURCE_MANAGEMENT = config.get('auto_resource_management', {})
-AUTO_KNOWLEDGE_SHARING = config.get('auto_knowledge_sharing', {})
+# [优化] 使用 _merge_config 确保新配置的健壮性
+AUTO_RESOURCE_MANAGEMENT = _merge_config('auto_resource_management', {'enabled': False})
+AUTO_KNOWLEDGE_SHARING = _merge_config('auto_knowledge_sharing', {'enabled': False})
 
 
 LOGGING_SWITCHES = _merge_config('logging_switches', {
@@ -126,9 +127,6 @@ SESSION_FILE_PATH = f'{DATA_DIR}/user.session'
 SCHEDULER_DB = f'sqlite:///{DATA_DIR}/jobs.sqlite'
 
 def check_startup_settings():
-    """
-    [优化版] 检查所有必需的配置项是否都已设置。
-    """
     missing_info = []
     required_settings = {
         'api_id': (API_ID, "api_id: 12345678"),
@@ -137,21 +135,16 @@ def check_startup_settings():
         'game_group_ids': (GAME_GROUP_IDS, "game_group_ids:\n  - -1001234567890"),
     }
 
-    # 检查基础配置
     for key, (value, _) in required_settings.items():
-        if not value: # 对 None, 0, "", [], {} 等都有效
+        if not value:
             missing_info.append(key)
 
-    # 检查条件依赖配置
     if XUANGU_EXAM_CONFIG.get('enabled') or TIANJI_EXAM_CONFIG.get('enabled'):
-        # 确保 gemini_api_keys 存在且不为空列表
         if not EXAM_SOLVER_CONFIG.get('gemini_api_keys'):
              missing_info.append('gemini_api_keys')
              required_settings['gemini_api_keys'] = (None, "在 prod.yaml 中设置 gemini_api_keys 列表")
     
-    # 如果有缺失项，则构建详细错误报告并退出
     if missing_info:
-        # 使用 set 去重，防止重复报告
         error_message = f"严重错误: 您的 `config/prod.yaml` 或 `.env` 配置文件中缺少或未正确配置以下必须的设置：\n"
         error_message += "--------------------------------------------------\n"
         for key in sorted(list(set(missing_info))):

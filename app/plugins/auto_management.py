@@ -209,7 +209,8 @@ def initialize(app):
             _execute_resource_management, 
             'interval', 
             minutes=interval, 
-            id='auto_resource_management_task'
+            id='auto_resource_management_task',
+            replace_existing=True  # [核心修复]
         )
     
     # 调度自动化知识共享任务
@@ -219,5 +220,6 @@ def initialize(app):
             _execute_knowledge_sharing, 
             'interval', 
             minutes=interval, 
-            id='auto_knowledge_sharing_task'
+            id='auto_knowledge_sharing_task',
+            replace_existing=True  # [核心修复]
         )

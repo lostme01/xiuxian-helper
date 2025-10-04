@@ -267,8 +267,9 @@ class TelegramClient:
             format_and_log("DEBUG", "取消消息删除", {"消息ID": message.id})
 
     def pin_message(self, message: Message):
-        from app.logger import format_and_log
+        # [核心修复] 增加对 None 的安全检查
         if not message: return
+        from app.logger import format_and_log
         task_key = (message.chat_id, message.id)
         self._pinned_messages.add(task_key)
         
@@ -280,8 +281,9 @@ class TelegramClient:
             format_and_log("DEBUG", "消息保护", {"操作": "钉住", "消息ID": message.id})
 
     def unpin_message(self, message: Message):
-        from app.logger import format_and_log
+        # [核心修复] 增加对 None 的安全检查
         if not message: return
+        from app.logger import format_and_log
         task_key = (message.chat_id, message.id)
         self._pinned_messages.discard(task_key)
         

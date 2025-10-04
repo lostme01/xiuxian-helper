@@ -10,13 +10,9 @@ HELP_TEXT_CHECK_KNOWLEDGE = """✨ **盘点学习进度**
 """
 
 async def _cmd_check_knowledge(event, parts):
-    """
-    处理 ,盘点 指令。
-    """
     app = get_application()
     client = app.client
 
-    # 权限检查：只有管理员号自己能执行
     if str(client.me.id) != str(settings.ADMIN_USER_ID):
         return
 
@@ -24,15 +20,10 @@ async def _cmd_check_knowledge(event, parts):
     
     result_text = await knowledge_logic.logic_check_knowledge_all_accounts()
     
-    # 使用分页发送长消息
     await send_paginated_message(event, result_text, prefix_message=progress_msg)
 
 
 def initialize(app):
     app.register_command(
-        name="盘点",
-        handler=_cmd_check_knowledge,
-        help_text="✨ 盘点所有助手的学习进度。",
-        category="数据查询",
-        usage=HELP_TEXT_CHECK_KNOWLEDGE
+        name="盘点", handler=_cmd_check_knowledge, help_text="✨ 盘点所有助手的学习进度。", category="协同", usage=HELP_TEXT_CHECK_KNOWLEDGE
     )

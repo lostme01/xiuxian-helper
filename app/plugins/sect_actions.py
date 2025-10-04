@@ -58,14 +58,13 @@ async def _cmd_exchange_item(event, parts):
 
         if "**兑换成功！**" in reply.text:
             gain_match = re.search(r"获得了【(.+?)】x([\d,]+)", reply.text)
-            cost_match = re.search(r"消耗了 \*\*([\d,]+)\*\* 点贡献", reply.text) # [逻辑修复] 匹配消耗的贡献
+            cost_match = re.search(r"消耗了 \*\*([\d,]+)\*\* 点贡献", reply.text)
 
             if gain_match and cost_match:
                 gained_item, gained_quantity_str = gain_match.groups()
                 gained_quantity = int(gained_quantity_str.replace(',', ''))
                 cost = int(cost_match.group(1).replace(',', ''))
                 
-                # [逻辑修复] 同时更新物品和贡献
                 await inventory_manager.add_item(gained_item, gained_quantity)
                 await stats_manager.remove_contribution(cost)
                 
@@ -156,19 +155,10 @@ async def _cmd_donate_item(event, parts):
         except MessageEditTimeExpiredError:
             await client.reply_to_admin(event, final_text)
 
-
 def initialize(app):
     app.register_command(
-        name="兑换",
-        handler=_cmd_exchange_item,
-        help_text="🔄 从宗门宝库兑换物品并同步库存。",
-        category="游戏动作",
-        usage=HELP_TEXT_EXCHANGE_ITEM
+        name="兑换", handler=_cmd_exchange_item, help_text="🔄 从宗门宝库兑换物品并同步库存。", category="动作", usage=HELP_TEXT_EXCHANGE_ITEM
     )
     app.register_command(
-        name="捐献",
-        handler=_cmd_donate_item,
-        help_text="💸 向宗门捐献物品并同步库存与贡献。",
-        category="游戏动作",
-        usage=HELP_TEXT_DONATE_ITEM
+        name="捐献", handler=_cmd_donate_item, help_text="💸 向宗门捐献物品并同步库存与贡献。", category="动作", usage=HELP_TEXT_DONATE_ITEM
     )

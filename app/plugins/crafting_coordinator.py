@@ -11,8 +11,8 @@ from config import settings
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
 
-HELP_TEXT_CRAFT_GATHER = """🛠️ **协同炼制 (效率优化版)**
-**说明**: 由当前账号发起，自动规划并集齐网络中所有助手号的材料来炼制指定物品。现在会将同一个助手的多个材料合并到一个订单中。
+HELP_TEXT_CRAFT_GATHER = """🛠️ **协同炼制 (P2P收菜)**
+**说明**: 由当前账号发起，自动规划并集齐网络中所有助手号的材料来炼制指定物品。
 **用法**: `,炼制 <物品名称>`
 **示例**: `,炼制 风雷翅`
 """
@@ -29,13 +29,13 @@ async def _cmd_craft_gather(event, parts):
         
     item_to_craft = " ".join(parts[1:])
     
-    progress_msg = await client.reply_to_admin(event, f"⏳ `[{my_username}] 炼制任务启动`\n正在规划“{item_to_craft}”的材料收集计划...")
+    progress_msg = await client.reply_to_admin(event, f"⏳ `[{my_username}] 收菜任务启动`\n正在规划“{item_to_craft}”的材料收集计划...")
     client.pin_message(progress_msg)
     
     try:
         plan = await crafting_logic.logic_plan_crafting_session(item_to_craft, my_id)
         
-        if isinstance(plan, str): # 如果logic层直接返回错误信息
+        if isinstance(plan, str):
             raise RuntimeError(plan)
 
         if not plan:
@@ -75,12 +75,11 @@ async def _cmd_craft_gather(event, parts):
             except Exception as e:
                 report_lines[-1] += f" -> ❌ **上架异常**: `{e}`"
                 await progress_msg.edit("\n".join(report_lines))
-                continue # 单个助手失败不中断整个流程
+                continue
         
         await progress_msg.edit("\n".join(report_lines) + "\n\n✅ **所有材料收集任务已分派完毕！**")
 
     except Exception as e:
-        # [优化] 使用标准错误回复格式
         error_text = create_error_reply("炼制", "任务失败", details=str(e))
         await progress_msg.edit(error_text)
     finally:
@@ -88,4 +87,4 @@ async def _cmd_craft_gather(event, parts):
 
 
 def initialize(app):
-    app.register_command("炼制", _cmd_craft_gather, help_text="🛠️ 协同助手凑材料炼制物品。", category="高级协同", usage=HELP_TEXT_CRAFT_GATHER)
+    app.register_command("炼制", _cmd_craft_gather, help_text="🛠️ 协同助手凑材料炼制物品。", category="协同", usage=HELP_TEXT_CRAFT_GATHER)

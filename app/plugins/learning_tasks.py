@@ -12,24 +12,17 @@ from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
 from app.context import get_application
 from app.inventory_manager import inventory_manager
+from app.utils import resilient_task
 
 TASK_ID_LEARN_RECIPES = 'learn_recipes_task'
 STATE_KEY_LEARNED = "learned_recipes"
 
+@resilient_task()
 async def trigger_learn_recipes(force_run=False):
-    """
-    [最终优化版]
-    检查并学习背包中的图纸和丹方，并根据学习结果实时更新库存。
-    """
     client = get_application().client
     format_and_log("TASK", "自动学习", {'阶段': '任务开始', '强制执行': force_run})
 
-    try:
-        _sent_msg, reply = await client.send_game_command_request_response(".炼制")
-    except CommandTimeoutError:
-        format_and_log("TASK", "自动学习", {'阶段': '任务失败', '原因': '获取已学列表超时'}, level=logging.ERROR)
-        if force_run: raise
-        return
+    _sent_msg, reply = await client.send_game_command_request_response(".炼制")
     
     learned_recipes = re.findall(r'\(来自:\s*([^)]*(?:图纸|丹方))\)', reply.raw_text)
     await set_state(STATE_KEY_LEARNED, learned_recipes)
@@ -54,7 +47,6 @@ async def trigger_learn_recipes(force_run=False):
             format_and_log("TASK", "自动学习", {'阶段': '发送学习指令', '物品': recipe})
             _sent_learn, reply_learn = await client.send_game_command_request_response(f".学习 {recipe}", timeout=10)
             
-            # [核心优化] 检查学习是否成功并更新库存
             if "成功领悟了" in reply_learn.text:
                 match = re.search(r"消耗了【(.+?)】", reply_learn.text)
                 if match:
@@ -62,7 +54,6 @@ async def trigger_learn_recipes(force_run=False):
                     await inventory_manager.remove_item(consumed_item, 1)
                     format_and_log("TASK", "自动学习", {'阶段': '学习成功', '物品': consumed_item, '详情': '已从库存扣减'})
                 else:
-                    # 如果成功但无法解析，为安全起见也扣减
                     await inventory_manager.remove_item(recipe, 1)
                     format_and_log("WARNING", "自动学习", {'阶段': '解析消耗品失败', '物品': recipe, '详情': '已按指令名称扣减库存'})
             else:
@@ -70,7 +61,7 @@ async def trigger_learn_recipes(force_run=False):
 
         except CommandTimeoutError:
             format_and_log("TASK", "自动学习", {'阶段': '学习超时', '物品': recipe}, level=logging.WARNING)
-            continue # 单个物品学习超时不应中断整个任务
+            continue
         finally:
             delay = random.uniform(jitter_config['min'], jitter_config['max'])
             await asyncio.sleep(delay)
@@ -78,13 +69,14 @@ async def trigger_learn_recipes(force_run=False):
     format_and_log("TASK", "自动学习", {'阶段': '任务完成', '详情': '所有可学物品均已尝试。'})
 
 async def check_learn_recipes_startup():
-    if settings.TASK_SWITCHES.get('learn_recipes') and not scheduler.get_job(TASK_ID_LEARN_RECIPES):
+    if settings.TASK_SWITCHES.get('learn_recipes'):
         scheduler.add_job(
             trigger_learn_recipes, 
             'interval', 
             hours=random.randint(4, 6), 
             id=TASK_ID_LEARN_RECIPES, 
-            next_run_time=datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=5)
+            next_run_time=datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=5),
+            replace_existing=True # [核心修复]
         )
 
 def initialize(app):
