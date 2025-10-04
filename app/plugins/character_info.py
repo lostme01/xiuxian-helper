@@ -10,10 +10,10 @@ from app.logger import format_and_log
 from app.context import get_application
 from app.state_manager import set_state, get_state
 from app.telegram_client import CommandTimeoutError
+from app.utils import create_error_reply
 
 STATE_KEY_PROFILE = "character_profile"
 
-# --- 核心修复：将正则表达式中的 \*+ 更改为 \**，以匹配带或不带星号的用户名 ---
 PROFILE_PATTERN = re.compile(
     r"@(?P<user>\w+)\** 的天命玉牒\s*"
     r"(?:[*\s]*称号[*\s]*: *【(?P<title>[^】]*)】)?\s*"
@@ -76,7 +76,13 @@ def _format_profile_reply(profile_data: dict, title: str) -> str:
     return "\n".join(lines)
 
 
-async def trigger_update_profile(force_run=False):
+async def trigger_update_profile():
+    """
+    [优化版]
+    查询角色信息的核心逻辑。
+    - 成功时返回格式化好的成功消息字符串。
+    - 失败时直接抛出异常，由调用者处理。
+    """
     app = get_application()
     client = app.client
     command = ".我的灵根"
@@ -105,25 +111,32 @@ async def trigger_update_profile(force_run=False):
                 final_message = await asyncio.wait_for(edit_future, timeout=remaining_timeout)
                 profile_data = _parse_profile_text(final_message.raw_text)
             else:
-                return False, f"❌ **查询失败**: 游戏机器人返回的初始消息与预期不符。\n\n**收到的初始消息**:\n`{initial_reply.text}`"
+                # [优化] 抛出特定异常，而不是返回错误字符串
+                raise RuntimeError(f"游戏机器人返回的初始消息与预期不符: {initial_reply.text}")
 
         if not profile_data.get("境界"):
-            return False, f"❌ **解析失败**: 无法从最终返回的信息中解析出角色数据。\n\n**原始返回**:\n`{getattr(final_message, 'raw_text', '无最终消息')}`"
+            # [优化] 抛出特定异常
+            raise ValueError(f"无法从最终返回的信息中解析出角色数据: {getattr(final_message, 'raw_text', '无最终消息')}")
 
         await set_state(STATE_KEY_PROFILE, profile_data)
-        reply_text = _format_profile_reply(profile_data, "✅ **角色信息已更新并缓存**:")
-        return True, reply_text
+        return _format_profile_reply(profile_data, "✅ **角色信息已更新并缓存**:")
 
-    except (CommandTimeoutError, asyncio.TimeoutError):
-        return False, f"❌ **查询失败**: 等待游戏机器人响应或更新信息超时(超过 {settings.COMMAND_TIMEOUT} 秒)。"
+    # [优化] 将超时异常直接向上抛出，让调用者处理
+    except (CommandTimeoutError, asyncio.TimeoutError) as e:
+        raise CommandTimeoutError(f"等待游戏机器人响应或更新信息超时(超过 {settings.COMMAND_TIMEOUT} 秒)。") from e
+    # [优化] 捕获所有其他异常并向上抛出
     except Exception as e:
-        return False, f"❌ **发生意外错误**: `{str(e)}`"
+        raise e
     finally:
         if initial_reply:
             client.pending_edit_by_id.pop(initial_reply.id, None)
 
 
 async def _cmd_query_profile(event, parts):
+    """
+    [优化版]
+    处理 ,我的灵根 指令，现在负责捕获异常并生成标准化的用户反馈。
+    """
     app = get_application()
     client = app.client
     progress_message = await client.reply_to_admin(event, "⏳ 正在发送指令并等待查询结果...")
@@ -132,16 +145,33 @@ async def _cmd_query_profile(event, parts):
 
     client.pin_message(progress_message)
     
-    _is_success, result = await trigger_update_profile()
-    
-    client.unpin_message(progress_message)
-
+    final_text = ""
     try:
-        await client._cancel_message_deletion(progress_message)
-        edited_message = await progress_message.edit(result)
-        client._schedule_message_deletion(edited_message, settings.AUTO_DELETE.get('delay_admin_command'), "角色查询结果")
-    except MessageEditTimeExpiredError:
-        await client.reply_to_admin(event, result)
+        # 核心逻辑现在只在成功时返回字符串
+        final_text = await trigger_update_profile()
+
+    # [优化] 捕获特定超时异常
+    except CommandTimeoutError as e:
+        final_text = create_error_reply(
+            command_name="我的灵根",
+            reason="等待游戏机器人响应超时",
+            details=str(e)
+        )
+    # [优化] 捕获所有其他异常
+    except Exception as e:
+        final_text = create_error_reply(
+            command_name="我的灵根",
+            reason="发生意外错误",
+            details=str(e)
+        )
+    finally:
+        client.unpin_message(progress_message)
+        try:
+            await client._cancel_message_deletion(progress_message)
+            edited_message = await progress_message.edit(final_text)
+            client._schedule_message_deletion(edited_message, settings.AUTO_DELETE.get('delay_admin_command'), "角色查询结果")
+        except MessageEditTimeExpiredError:
+            await client.reply_to_admin(event, final_text)
 
 
 async def _cmd_view_cached_profile(event, parts):

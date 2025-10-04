@@ -11,25 +11,59 @@ from app.logger import format_and_log
 from app.context import get_application
 from config import settings
 
+def create_error_reply(command_name: str, reason: str, details: str = None, usage_text: str = None) -> str:
+    """
+    [新增] 创建一个标准格式的错误回复消息。
+    """
+    command_prefix = settings.COMMAND_PREFIXES[0]
+    
+    lines = [f"❌ **指令 [{command_prefix}{command_name}] 执行失败**\n"]
+    lines.append(f"**原因**: {reason}")
+
+    if details:
+        lines.append(f"**详情**: `{details}`")
+    
+    if usage_text:
+        lines.append("\n" + "-"*15)
+        lines.append(f"**用法参考**:\n{usage_text}")
+        
+    return "\n".join(lines)
+
+
 def require_args(count: int, usage: str):
     """
+    [优化版]
     一个装饰器，用于检查指令处理器接收到的参数列表长度是否足够。
+    现在使用 create_error_reply 生成标准错误消息。
     """
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(event, parts: list):
+            cmd_name = parts[0]
             if len(parts) < count:
                 app = get_application()
-                cmd_name = parts[0]
                 command_info = app.commands.get(cmd_name.lower(), {})
                 usage_text = command_info.get('usage', '该指令没有提供详细的用法说明。')
                 
-                await get_application().client.reply_to_admin(event, f"❌ 参数不足！\n\n{usage_text}")
+                # 使用新的标准化错误回复
+                error_msg = create_error_reply(
+                    command_name=cmd_name,
+                    reason="参数不足",
+                    usage_text=usage_text
+                )
+                await app.client.reply_to_admin(event, error_msg)
                 return
+
             try:
                 return await func(event, parts)
             except ValueError:
-                 await get_application().client.reply_to_admin(event, f"❌ 参数解析错误！\n请检查您的引号是否匹配。\n\n{usage}")
+                # 使用新的标准化错误回复
+                error_msg = create_error_reply(
+                    command_name=cmd_name,
+                    reason="参数解析错误，请检查您的引号是否匹配",
+                    usage_text=usage
+                )
+                await get_application().client.reply_to_admin(event, error_msg)
         return wrapper
     return decorator
 

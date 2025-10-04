@@ -12,17 +12,20 @@ import redis.asyncio as redis
 
 from config import settings
 from app.task_scheduler import scheduler, shutdown
-from app.telegram_client import TelegramClient
+from app.telegram_client import TelegramClient, CommandTimeoutError
 from app.redis_client import initialize_redis
 from app import gemini_client
 from app.plugins import load_all_plugins
 from app.logger import format_and_log, TimezoneFormatter
 from app.context import set_application, set_scheduler, get_application
+from app.utils import create_error_reply
+from app.inventory_manager import inventory_manager # 导入全局库存管理器
 
 class Application:
     def __init__(self):
         self.client: TelegramClient = None
         self.redis_db = None
+        self.inventory_manager = inventory_manager # [新增] 将实例附加到app上
         self.startup_checks = []
         self.commands = {}
         self.task_functions = {}
@@ -165,35 +168,42 @@ class Application:
         if aliases is None: aliases = []
         usage = usage or help_text
         command_data = { "handler": handler, "help": help_text, "category": category, "aliases": aliases, "usage": usage }
-        # --- 核心修复：注册指令时，统一使用小写 ---
         for cmd_name in [name] + aliases:
             self.commands[cmd_name.lower()] = command_data
 
     def register_task(self, task_key, function, command_name, help_text):
         self.task_functions[task_key] = function
+        
         async def task_trigger_handler(event, parts):
             app = get_application()
             client = app.client
-            progress_message = await client.reply_to_admin(event, f"⏳ 好的，正在手动执行 **[{command_name}]** 任务...")
+            progress_message = await client.reply_to_admin(event, f"⏳ 正在手动执行 **[{command_name}]** 任务...")
             if not progress_message: return
+
             client.pin_message(progress_message)
-            final_text = f"✅ **[{command_name}]** 任务已成功执行完毕。"
+            final_text = ""
             try:
                 task_func = self.task_functions.get(task_key)
                 if task_func:
-                    result_text = await task_func(force_run=True)
-                    if isinstance(result_text, str): final_text = result_text
-                else: final_text = f"❌ 错误: 未找到与 `{task_key}` 关联的任务实现。"
+                    result = await task_func(force_run=True)
+                    final_text = result if isinstance(result, str) else f"✅ **[{command_name}]** 任务已成功触发。"
+                else:
+                    raise ValueError(f"未找到与 `{task_key}` 关联的任务实现。")
+            
+            except CommandTimeoutError as e:
+                final_text = create_error_reply(command_name, "游戏指令超时", details=str(e))
             except Exception as e:
-                final_text = f"❌ **[{command_name}]** 任务在执行过程中发生意外错误: `{e}`"
-                format_and_log("SYSTEM", "任务执行失败", {'任务': command_name, '错误': str(e)}, level=logging.ERROR)
+                final_text = create_error_reply(command_name, "任务执行期间发生意外错误", details=str(e))
+                format_and_log("SYSTEM", "手动任务执行失败", {'任务': command_name, '错误': str(e)}, level=logging.ERROR)
             finally:
                 client.unpin_message(progress_message)
                 try:
                     await client._cancel_message_deletion(progress_message)
                     edited_message = await progress_message.edit(final_text)
                     client._schedule_message_deletion(edited_message, settings.AUTO_DELETE.get('delay_admin_command'), "编辑后的助手回复")
-                except MessageEditTimeExpiredError: await client.reply_to_admin(event, final_text)
+                except MessageEditTimeExpiredError:
+                    await client.reply_to_admin(event, final_text)
+
         self.register_command(command_name, task_trigger_handler, help_text=help_text, category="游戏任务")
 
     async def reload_plugins_and_commands(self):

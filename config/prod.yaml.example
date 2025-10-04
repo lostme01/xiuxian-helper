@@ -89,7 +89,20 @@ redis:
 # 消息自动删除配置
 auto_delete:
   enabled: true
-  delay_admin_command: 30 # 管理员指令和助手的回复在30秒后删除
+  delay_admin_command: 30 # [推荐] 助手回复您的消息，30秒后删除，确保您有足够时间查看
+
+# 消息自动删除策略
+auto_delete_strategies:
+  # 发送后不管的指令
+  fire_and_forget:
+    delay_self: 5
+  # 发送并等待回复的指令
+  request_response:
+    delay_self_on_reply: 5      # [推荐] 收到游戏回复后，5秒后删除助手自己发的指令，保持游戏群整洁
+    delay_self_on_timeout: 60   # 指令超时后，60秒后删除
+  # 需要固定的长时间任务消息
+  long_task:
+    delay_self: 0 # 0表示不自动删除
 
 # 交易协同配置
 trade_coordination:

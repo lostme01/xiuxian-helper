@@ -10,7 +10,7 @@ from app.context import get_application
 from app.state_manager import set_state, get_state
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
-from app.utils import send_paginated_message
+from app.utils import send_paginated_message, create_error_reply
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 
 STATE_KEY_TREASURY = "sect_treasury"
@@ -43,18 +43,19 @@ async def trigger_update_treasury(force_run=False):
 
         treasury_data = _parse_treasury_text(reply_message.text)
         if not treasury_data["items"]:
-            format_and_log("TASK", "更新宗门宝库", {'阶段': '任务失败', '原因': '未能解析出任何物品信息'}, level=logging.WARNING)
-            return False, "❌ **解析失败**: 无法从返回的信息中解析出宝库物品。"
+            # [优化] 抛出异常
+            raise ValueError("无法从返回的信息中解析出宝库物品。")
 
         await set_state(STATE_KEY_TREASURY, treasury_data)
         format_and_log("TASK", "更新宗门宝库", {'阶段': '任务成功', '贡献': treasury_data["contribution"], '物品数量': len(treasury_data["items"])})
-        return True, f"✅ **宗门宝库信息已更新**：\n- **当前贡献**: `{treasury_data['contribution']}`\n- **宝库物品**: 共 `{len(treasury_data['items'])}` 件"
-    except CommandTimeoutError:
-        format_and_log("TASK", "更新宗门宝库", {'阶段': '任务失败', '原因': '等待宝库回复超时'}, level=logging.ERROR)
-        return False, "❌ **查询失败**: 发送指令后，游戏机器人无响应。"
+        if force_run:
+            return f"✅ **宗门宝库信息已更新**：\n- **当前贡献**: `{treasury_data['contribution']}`\n- **宝库物品**: 共 `{len(treasury_data['items'])}` 件"
     except Exception as e:
-        format_and_log("TASK", "更新宗门宝库", {'阶段': '任务异常', '错误': str(e)}, level=logging.CRITICAL)
-        return False, f"❌ **发生意外错误**: `{str(e)}`"
+        if force_run:
+            raise e
+        else:
+             format_and_log("TASK", "更新宗门宝库", {'阶段': '任务异常', '错误': str(e)}, level=logging.CRITICAL)
+
 
 async def _cmd_query_treasury(event, parts):
     app = get_application()
@@ -65,16 +66,21 @@ async def _cmd_query_treasury(event, parts):
     
     client.pin_message(progress_message)
     
-    _is_success, result = await trigger_update_treasury(force_run=True)
-    
-    client.unpin_message(progress_message)
-
+    final_text = ""
     try:
-        await client._cancel_message_deletion(progress_message)
-        edited_message = await progress_message.edit(result)
-        client._schedule_message_deletion(edited_message, settings.AUTO_DELETE.get('delay_admin_command'), "宝库查询结果")
-    except MessageEditTimeExpiredError:
-        await client.reply_to_admin(event, result)
+        final_text = await trigger_update_treasury(force_run=True)
+    except CommandTimeoutError as e:
+        final_text = create_error_reply("宗门宝库", "游戏指令超时", details=str(e))
+    except Exception as e:
+        final_text = create_error_reply("宗门宝库", "任务执行期间发生意外错误", details=str(e))
+    finally:
+        client.unpin_message(progress_message)
+        try:
+            await client._cancel_message_deletion(progress_message)
+            edited_message = await progress_message.edit(final_text)
+            client._schedule_message_deletion(edited_message, settings.AUTO_DELETE.get('delay_admin_command'), "宝库查询结果")
+        except MessageEditTimeExpiredError:
+            await client.reply_to_admin(event, final_text)
 
 def get_display_width(text: str) -> int:
     width = 0

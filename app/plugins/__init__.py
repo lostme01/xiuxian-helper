@@ -12,17 +12,17 @@ def load_all_plugins(app):
     - app: Application 的实例，传递给每个插件以便注册。
     """
     plugins_dir = os.path.dirname(__file__)
-    for filename in os.listdir(plugins_dir):
+    # 确保有一个固定的加载顺序，例如按文件名
+    for filename in sorted(os.listdir(plugins_dir)):
         if filename.endswith(".py") and not filename.startswith("__"):
             module_name = f"app.plugins.{filename[:-3]}"
             try:
                 module = importlib.import_module(module_name)
                 
-                # --- 核心修复：检查宗门专属元数据 ---
                 plugin_sect = getattr(module, '__plugin_sect__', None)
                 if plugin_sect and plugin_sect != settings.SECT_NAME:
                     format_and_log("SYSTEM", "插件加载", {'模块': module_name, '状态': '已跳过', '原因': f'宗门不匹配 (需要 {plugin_sect}, 当前配置为 {settings.SECT_NAME})'})
-                    continue # 正确跳过该插件的后续所有初始化步骤
+                    continue
 
                 if hasattr(module, "initialize") and callable(getattr(module, "initialize")):
                     module.initialize(app)

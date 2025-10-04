@@ -116,6 +116,10 @@ class TelegramClient:
             reply_message = await asyncio.wait_for(reply_future, timeout=timeout)
             
             self._schedule_message_deletion(sent_message, strategy['delay_self_on_reply'], "游戏指令(问答-成功)")
+            
+            # (这个功能在上一个修复中被移除，因为它无法删除机器人消息)
+            # self._schedule_message_deletion(reply_message, strategy['delay_bot_reply'], "游戏Bot的回复")
+            
             return sent_message, reply_message
         except asyncio.TimeoutError:
             if sent_message:
@@ -137,15 +141,47 @@ class TelegramClient:
             await self._cancel_message_deletion(sent_message)
         return sent_message, reply_message
 
-    async def send_and_wait_for_edit(self, command: str, initial_reply_pattern: str, timeout: int = None) -> tuple[Message | None, Message | None]:
+    async def send_and_wait_for_edit(self, command: str, initial_reply_pattern: str, timeout: int = None) -> tuple[Message, Message]:
+        """
+        [最终修复版]
+        发送一个指令，等待其初始回复，然后继续等待该回复被编辑，并返回最终编辑后的消息。
+        """
         if timeout is None:
             timeout = settings.COMMAND_TIMEOUT
         
+        sent_message = None
+        initial_reply = None
         try:
+            # 1. 发送指令并获取初始回复
             sent_message, initial_reply = await self.send_game_command_request_response(command, timeout=timeout)
-            return sent_message, initial_reply
-        except (CommandTimeoutError, asyncio.TimeoutError):
-            raise asyncio.TimeoutError(f"等待指令 '{command}' 的响应超时(总时长 {timeout} 秒)。")
+
+            # 2. 检查初始回复是否符合预期模式
+            if not re.search(initial_reply_pattern, initial_reply.text):
+                # 如果不符合，说明游戏逻辑可能已变，直接返回这个“意外”的回复
+                return sent_message, initial_reply
+
+            # 3. 设置一个 Future 来监听此消息的编辑事件
+            edit_future = asyncio.Future()
+            self.pending_edit_by_id[initial_reply.id] = edit_future
+
+            # 4. 计算剩余的等待时间
+            time_elapsed = (datetime.now(pytz.utc) - sent_message.date).total_seconds()
+            remaining_timeout = timeout - time_elapsed
+            
+            if remaining_timeout <= 0:
+                raise CommandTimeoutError("获取初始回复后没有剩余时间等待编辑。")
+
+            # 5. 等待编辑事件，或直到剩余时间耗尽
+            final_message = await asyncio.wait_for(edit_future, timeout=remaining_timeout)
+            return sent_message, final_message
+
+        except (CommandTimeoutError, asyncio.TimeoutError) as e:
+            # 统一将所有超时错误归为 CommandTimeoutError 并向上抛出
+            raise CommandTimeoutError(f"等待指令 '{command}' 的响应或编辑超时 (总时长 {timeout} 秒)。") from e
+        finally:
+            # 确保清理监听器
+            if initial_reply:
+                self.pending_edit_by_id.pop(initial_reply.id, None)
 
     async def start(self):
         await self.client.start()
