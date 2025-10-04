@@ -36,7 +36,6 @@ def _merge_config(key: str, defaults: dict) -> dict:
 API_ID = config.get('api_id', None)
 API_HASH = config.get('api_hash', None)
 ADMIN_USER_ID = config.get('admin_user_id', None)
-# [核心修改] 从单个ID升级为ID列表
 GAME_BOT_IDS = config.get('game_bot_ids', []) 
 GAME_GROUP_IDS = config.get('game_group_ids', [])
 CONTROL_GROUP_ID = config.get('control_group_id', None)

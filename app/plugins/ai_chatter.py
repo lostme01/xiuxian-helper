@@ -37,7 +37,7 @@ async def ai_chat_handler(event):
     sender = await event.get_sender()
     message_text = event.text.strip()
     
-    # --- [核心修改 v2] 过滤规则 ---
+    # --- [核心修改 v3] 过滤规则 ---
     # 1. 忽略自己、空消息、以及被Telegram标记为bot的账号
     if event.sender_id == my_info.id or not message_text or (sender and sender.bot):
         return
@@ -46,7 +46,12 @@ async def ai_chat_handler(event):
     if settings.GAME_BOT_IDS and event.sender_id in settings.GAME_BOT_IDS:
         return
 
-    # 3. 忽略游戏指令和助手指令
+    # 3. [新增] 忽略聊天黑名单中的用户
+    blacklist = settings.AI_CHATTER_CONFIG.get('blacklist', [])
+    if event.sender_id in blacklist:
+        return
+
+    # 4. 忽略游戏指令和助手指令
     if message_text.startswith('.') or any(message_text.startswith(p) for p in settings.COMMAND_PREFIXES):
         return
 
