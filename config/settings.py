@@ -68,7 +68,6 @@ TASK_SWITCHES = _merge_config('task_switches', {
     'mojun_arrival': False, 'sect_treasury': True
 })
 
-# [优化] 使用 _merge_config 确保新配置的健壮性
 AUTO_RESOURCE_MANAGEMENT = _merge_config('auto_resource_management', {'enabled': False})
 AUTO_KNOWLEDGE_SHARING = _merge_config('auto_knowledge_sharing', {'enabled': False})
 
@@ -95,7 +94,6 @@ else:
     REDIS_CONFIG['enabled'] = config.get('redis', {}).get('enabled', False)
 
 SEND_DELAY = config.get('send_delay', {'min': 12, 'max': 16})
-HEARTBEAT_TIMEOUT = config.get('heartbeat_timeout', 1200)
 TASK_JITTER = _merge_config('task_jitter', {
     'biguan': {'min': 30, 'max': 90},
     'taiyi_yindao': {'min': 300, 'max': 1200},

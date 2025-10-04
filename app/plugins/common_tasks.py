@@ -11,7 +11,6 @@ from app.utils import parse_cooldown_time, parse_inventory_text, resilient_task
 from config import settings
 from app.logger import format_and_log
 from app.task_scheduler import scheduler
-from telethon.tl.functions.account import UpdateStatusRequest
 from app.telegram_client import CommandTimeoutError
 from app.context import get_application
 from app.inventory_manager import inventory_manager
@@ -19,12 +18,10 @@ from app.character_stats_manager import stats_manager
 
 TASK_ID_BIGUAN = 'biguan_xiulian_task'
 STATE_KEY_BIGUAN = "biguan"
-TASK_ID_HEARTBEAT = 'heartbeat_check_task'
 TASK_ID_CHUANG_TA_BASE = 'chuang_ta_task_'
 STATE_KEY_CHUANG_TA = "chuang_ta"
 TASK_ID_INVENTORY_REFRESH = 'inventory_refresh_task'
 STATE_KEY_INVENTORY = "inventory"
-TASK_ID_ACTIVE_HEARTBEAT = 'active_status_heartbeat_task'
 
 def _parse_and_update_contribution(reply_text: str):
     contrib_match = re.search(r"获得了 \*\*([\d,]+)\*\* 点宗门贡献", reply_text)
@@ -146,20 +143,6 @@ async def trigger_biguan_xiulian(force_run=False):
         await set_state(STATE_KEY_BIGUAN, next_run_time.isoformat())
         format_and_log("TASK", "闭关修炼", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
 
-async def active_status_heartbeat():
-    client = get_application().client
-    if client and client.is_connected():
-        await client.client(UpdateStatusRequest(offline=False))
-
-async def heartbeat_check():
-    client = get_application().client
-    heartbeat_timeout_seconds = settings.HEARTBEAT_TIMEOUT
-    time_since_last_update = datetime.now(pytz.timezone(settings.TZ)) - client.last_update_timestamp
-    if time_since_last_update > timedelta(seconds=heartbeat_timeout_seconds):
-        format_and_log("SYSTEM", "心跳检查", {'状态': '超时', '详情': f'超过 {heartbeat_timeout_seconds} 秒无活动，准备重启...'}, level=logging.CRITICAL)
-        await client.send_admin_notification(f"🚨 **告警：助手会话可能已沉睡，正在自动重启...**")
-        await asyncio.sleep(2); sys.exit(1)
-
 async def check_biguan_startup():
     if not settings.TASK_SWITCHES.get('biguan'): return
     if scheduler.get_job(TASK_ID_BIGUAN): return
@@ -188,14 +171,6 @@ async def check_dianmao_startup():
                 format_and_log("TASK", "宗门点卯", {'阶段': '调度计划', '任务': f'每日第{i+1}次', '运行时间': run_time.strftime('%Y-%m-%d %H:%M:%S')})
             except ValueError:
                 format_and_log("SYSTEM", "配置错误", {'模块': '宗门点卯', '错误': f'时间格式不正确: {time_str}'}, level=logging.ERROR)
-
-async def check_active_heartbeat_startup():
-    if not scheduler.get_job(TASK_ID_ACTIVE_HEARTBEAT):
-        scheduler.add_job(active_status_heartbeat, 'interval', minutes=5, id=TASK_ID_ACTIVE_HEARTBEAT)
-
-async def check_heartbeat_startup():
-    if not scheduler.get_job(TASK_ID_HEARTBEAT):
-        scheduler.add_job(heartbeat_check, 'interval', minutes=15, id=TASK_ID_HEARTBEAT)
 
 async def check_inventory_refresh_startup():
     if settings.TASK_SWITCHES.get('inventory_refresh', True) and not scheduler.get_job(TASK_ID_INVENTORY_REFRESH):
@@ -242,7 +217,6 @@ def initialize(app):
     app.register_task(task_key="chuang_ta", function=trigger_chuang_ta, command_name="立即闯塔", help_text="...")
     app.register_task(task_key="update_inventory", function=update_inventory_cache, command_name="立即刷新背包", help_text="...")
     
-    # [核心修改] 从启动检查列表中移除两个心跳任务
     app.startup_checks.extend([
         check_biguan_startup, check_dianmao_startup, check_chuang_ta_startup, 
         check_inventory_refresh_startup
