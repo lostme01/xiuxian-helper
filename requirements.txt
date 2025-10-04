@@ -19,3 +19,6 @@ tzlocal==5.3.1
 # thefuzz[speedup] 会自动安装 thefuzz 和 rapidfuzz
 typer==0.19.2
 thefuzz[speedup]==0.22.1
+
+# === [新增] 高级自动化功能 ===
+asteval==0.9.32
