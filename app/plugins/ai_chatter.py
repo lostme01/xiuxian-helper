@@ -14,9 +14,7 @@ from app import gemini_client
 from app.state_manager import get_state
 
 # --- 全局变量 ---
-# 使用双端队列存储最近的聊天记录，设定一个最大长度
 chat_history = deque(maxlen=20) 
-# 用于防止短时间内重复触发随机聊天
 last_random_chat_time = 0
 
 def initialize(app):
@@ -25,7 +23,6 @@ def initialize(app):
         return
 
     client = app.client
-    # 监听所有游戏群组的入站消息
     client.client.on(events.NewMessage(incoming=True, chats=settings.GAME_GROUP_IDS))(
         lambda event: ai_chat_handler(event)
     )
@@ -38,24 +35,29 @@ async def ai_chat_handler(event):
     if not my_info: return
 
     sender = await event.get_sender()
-    sender_name = getattr(sender, 'first_name', '未知用户')
     message_text = event.text.strip()
     
-    # 忽略机器人自己发的消息和空消息
-    if event.sender_id == my_info.id or not message_text:
+    # --- [核心修改 v2] 过滤规则 ---
+    # 1. 忽略自己、空消息、以及被Telegram标记为bot的账号
+    if event.sender_id == my_info.id or not message_text or (sender and sender.bot):
+        return
+        
+    # 2. 忽略所有在配置列表中定义的游戏机器人/频道/用户
+    if settings.GAME_BOT_IDS and event.sender_id in settings.GAME_BOT_IDS:
         return
 
-    # 将新消息存入历史记录
+    # 3. 忽略游戏指令和助手指令
+    if message_text.startswith('.') or any(message_text.startswith(p) for p in settings.COMMAND_PREFIXES):
+        return
+
+    sender_name = getattr(sender, 'first_name', '未知用户')
     chat_history.append(f"{sender_name}: {message_text}")
     
     # --- 触发条件判断 ---
     mentioned_me = f"@{my_info.username}" in message_text if my_info.username else False
-    
-    # 计算随机聊天的概率
     random_chat_prob = settings.AI_CHATTER_CONFIG.get('random_chat_probability', 0.05)
     should_random_chat = random.random() < random_chat_prob
     
-    # 冷却时间，避免随机聊天过于频繁
     global last_random_chat_time
     is_cooled_down = (asyncio.get_running_loop().time() - last_random_chat_time) > 120 # 2分钟冷却
 
@@ -63,25 +65,17 @@ async def ai_chat_handler(event):
         return
         
     if should_random_chat and is_cooled_down:
-        last_random_chat_time = asyncio.get_running_loop().time() # 更新时间戳
+        last_random_chat_time = asyncio.get_running_loop().time()
 
     try:
-        # --- 构建 Prompt ---
         prompt = await build_prompt(my_info)
         
-        # --- 请求AI生成回复 ---
         format_and_log("TASK", "AI聊天", {'状态': '触发成功', '原因': '@提及' if mentioned_me else '随机闲聊'})
         response = await gemini_client.generate_content_with_rotation(prompt)
         reply_text = response.text.strip().replace('"', '')
 
         if reply_text:
-            # --- 模拟真人行为 ---
-            # 1. 模拟正在输入
-            await app.client.client(SetTypingRequest(
-                peer=event.chat_id,
-                action=SendMessageTypingAction()
-            ))
-            # 2. 随机延迟
+            await app.client.client(SetTypingRequest(peer=event.chat_id, action=SendMessageTypingAction()))
             await asyncio.sleep(random.uniform(2, 5))
             
             await event.reply(reply_text)
@@ -92,21 +86,16 @@ async def ai_chat_handler(event):
 
 async def build_prompt(my_info):
     """构建用于生成回复的详细Prompt"""
-    # 1. 获取AI人设
     personality = settings.AI_CHATTER_CONFIG.get('personality_prompt', "你是一名游戏玩家。")
     
-    # 2. 获取AI自己的角色信息
     profile = await get_state("character_profile", is_json=True, default={})
     my_name = profile.get('道号', my_info.first_name)
     my_realm = profile.get('境界', '萌新')
     my_sect = profile.get('宗门', '无门无派')
     
     my_status = f"我的名字叫 {my_name}，现在的境界是 {my_realm}，属于 {my_sect}。"
-
-    # 3. 获取聊天上下文
     context = "\n".join(chat_history)
     
-    # 4. 组装最终的Prompt
     prompt = f"""
 你正在一个修仙游戏聊天群里扮演一个玩家。请严格遵守以下规则：
 1.  **你的身份**: {personality}

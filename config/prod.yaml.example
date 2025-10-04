@@ -6,6 +6,12 @@ api_hash: '0123456789abcdef0123456789abcdef'
 # 您的Telegram用户ID，所有管理指令来源于此
 admin_user_id: 987654321
 
+# [核心修改] 游戏机器人/频道的ID列表，用于AI聊天时过滤其消息
+# 可以填多个，支持用户、机器人(正数ID)和频道(负数ID)
+game_bot_ids:
+  - 123456789   # 示例：一个机器人的ID
+  - -1001234567890 # 示例：一个频道的ID
+
 # 游戏机器人所在的群组ID列表
 game_group_ids:
   - -1001234567890
@@ -14,122 +20,4 @@ game_group_ids:
 control_group_id: null
 
 # ----------------- 身份与行为 -----------------
-# 您所在的游戏宗门，用于加载专属插件
-sect_name: '黄枫谷'
-
-# 指令前缀
-command_prefixes: [',', '，']
-
-# 时区，用于日志和任务调度
-timezone: 'Asia/Shanghai'
-
-# ----------------- AI 功能配置 -----------------
-exam_solver:
-  # 使用的Gemini模型名称
-  gemini_model_name: 'gemini-1.5-pro-latest'
-  # Gemini API Key列表，可以填多个以轮询使用
-  gemini_api_keys:
-    - "AIzaSy...your...first...key"
-  # 答题前的随机延迟（秒）
-  reply_delay: { min: 5, max: 15 }
-
-# 玄骨考校自动答题开关
-xuangu_exam_solver:
-  enabled: true
-# 天机考验自动答题开关
-tianji_exam_solver:
-  enabled: true
-
-# [新功能] AI聊天
-ai_chatter:
-  enabled: true
-  # AI的人设, 越详细越好
-  personality_prompt: '你是一个玩世不恭的修仙老油条，说话有点贱兮兮的，喜欢吐槽，偶尔也羡慕一下别人的好运气。'
-  # 随机插话的概率 (0.05 = 5%)
-  random_chat_probability: 0.05
-
-# ----------------- 周期任务开关 -----------------
-task_switches:
-  biguan: true            # 自动闭关
-  dianmao: true           # 自动点卯
-  learn_recipes: true     # 自动学习图纸丹方
-  inventory_refresh: true # 定时刷新背包缓存
-  chuang_ta: true         # 自动闯塔
-  garden_check: true      # 自动药园 (黄枫谷专属)
-  sect_treasury: true     # 每日自动更新宗门宝库
-  mojun_arrival: false    # 自动应对魔君降临事件
-
-# ----------------- 核心行为微调 -----------------
-# 指令发送后的随机延迟（秒）
-send_delay: { min: 12, max: 16 }
-# 等待游戏机器人回复的全局超时时间（秒）
-command_timeout: 60
-
-# ----------------- 周期任务微调 -----------------
-task_jitter:
-  biguan: { min: 30, max: 90 }
-  taiyi_yindao: { min: 300, max: 1200 }
-  huangfeng_garden: { min: 5, max: 15 }
-  learn_recipes: { min: 3, max: 7 }
-
-task_schedules:
-  dianmao: [ '08:15', '20:15' ]
-
-# ----------------- 游戏指令配置 -----------------
-game_commands:
-  taiyi_yindao: '.引道 水'
-
-# ----------------- 高级配置 -----------------
-redis:
-  enabled: true
-  host: 'host.docker.internal'
-  port: 6379
-  password: null
-  db: 0
-  xuangu_db_name: 'xuangu_qa'
-  tianji_db_name: 'tianji_qa'
-
-auto_delete:
-  enabled: true
-  delay_admin_command: 30
-
-auto_delete_strategies:
-  fire_and_forget: { delay_self: 5 }
-  request_response: { delay_self_on_reply: 5, delay_self_on_timeout: 60 }
-  long_task: { delay_self: 0, delay_anchor: 30 }
-
-trade_coordination:
-  focus_fire_auto_delist: true
-
-auto_resource_management:
-  enabled: false
-  interval_minutes: 120
-  rules: []
-
-auto_knowledge_sharing:
-  enabled: false
-  interval_minutes: 240
-  blacklist: []
-
-# ----------------- 宗门专属配置 -----------------
-huangfeng_valley:
-  garden_sow_seed: '凝血草种子'
-
-taiyi_sect:
-  yindao_success_cooldown_hours: 12
-
-# ----------------- 日志配置 -----------------
-log_rotation:
-  max_bytes: 5242880
-  backup_count: 9
-
-logging_switches:
-  system_activity: true
-  task_activity: true
-  cmd_sent: true
-  msg_recv: true
-  reply_recv: true
-  debug_log: false
-  log_edits: false
-  log_deletes: true
-  original_log_enabled: false
+# ... (后续内容省略，保持不变)

@@ -36,6 +36,8 @@ def _merge_config(key: str, defaults: dict) -> dict:
 API_ID = config.get('api_id', None)
 API_HASH = config.get('api_hash', None)
 ADMIN_USER_ID = config.get('admin_user_id', None)
+# [核心修改] 从单个ID升级为ID列表
+GAME_BOT_IDS = config.get('game_bot_ids', []) 
 GAME_GROUP_IDS = config.get('game_group_ids', [])
 CONTROL_GROUP_ID = config.get('control_group_id', None)
 TEST_GROUP_ID = config.get('test_group_id', None)
@@ -106,7 +108,6 @@ GAME_COMMANDS = _merge_config('game_commands', { 'taiyi_yindao': '.引道 水' }
 HUANGFENG_VALLEY_CONFIG = config.get('huangfeng_valley', {})
 TAIYI_SECT_CONFIG = config.get('taiyi_sect', {})
 EXAM_SOLVER_CONFIG = config.get('exam_solver', {})
-# [新增] AI聊天配置
 AI_CHATTER_CONFIG = config.get('ai_chatter', {})
 XUANGU_EXAM_CONFIG = config.get('xuangu_exam_solver', {'enabled': False})
 TIANJI_EXAM_CONFIG = config.get('tianji_exam_solver', {'enabled': False})
