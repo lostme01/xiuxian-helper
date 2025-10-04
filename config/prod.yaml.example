@@ -89,36 +89,34 @@ redis:
 # 消息自动删除配置
 auto_delete:
   enabled: true
-  delay_admin_command: 30 # [推荐] 助手回复您的消息，30秒后删除，确保您有足够时间查看
+  delay_admin_command: 30 # 助手回复您的消息，30秒后删除
 
 # 消息自动删除策略
 auto_delete_strategies:
-  # 发送后不管的指令
   fire_and_forget:
     delay_self: 5
-  # 发送并等待回复的指令
   request_response:
-    delay_self_on_reply: 5      # [推荐] 收到游戏回复后，5秒后删除助手自己发的指令，保持游戏群整洁
-    delay_self_on_timeout: 60   # 指令超时后，60秒后删除
-  # 需要固定的长时间任务消息
+    delay_self_on_reply: 5
+    delay_self_on_timeout: 60
   long_task:
-    delay_self: 0 # 0表示不自动删除
+    delay_self: 0
+    delay_anchor: 30 # [新增] 长任务的"锚点"消息(如.宗门点卯)，在任务链结束后30秒删除
 
 # 交易协同配置
 trade_coordination:
-  focus_fire_auto_delist: true # 集火时，助手上架物品后是否立即下架以防被抢
+  focus_fire_auto_delist: true
 
 # ----------------- 宗门专属配置 -----------------
 huangfeng_valley:
-  garden_sow_seed: '凝血草种子' # 药园优先播种的种子
+  garden_sow_seed: '凝血草种子'
 
 taiyi_sect:
-  yindao_success_cooldown_hours: 12 # 引道成功后的冷却时间
+  yindao_success_cooldown_hours: 12
 
 # ----------------- 日志配置 -----------------
 log_rotation:
-  max_bytes: 5242880 # 单个日志文件最大5MB
-  backup_count: 9    # 保留9个备份
+  max_bytes: 5242880
+  backup_count: 9
 
 # 各模块日志开关
 logging_switches:

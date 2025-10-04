@@ -5,6 +5,8 @@ import logging
 import os
 import shlex
 import functools
+import asyncio
+import random
 from datetime import timedelta
 from telethon.tl.types import Message
 from app.logger import format_and_log
@@ -12,9 +14,6 @@ from app.context import get_application
 from config import settings
 
 def create_error_reply(command_name: str, reason: str, details: str = None, usage_text: str = None) -> str:
-    """
-    [新增] 创建一个标准格式的错误回复消息。
-    """
     command_prefix = settings.COMMAND_PREFIXES[0]
     
     lines = [f"❌ **指令 [{command_prefix}{command_name}] 执行失败**\n"]
@@ -31,11 +30,6 @@ def create_error_reply(command_name: str, reason: str, details: str = None, usag
 
 
 def require_args(count: int, usage: str):
-    """
-    [优化版]
-    一个装饰器，用于检查指令处理器接收到的参数列表长度是否足够。
-    现在使用 create_error_reply 生成标准错误消息。
-    """
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(event, parts: list):
@@ -45,7 +39,6 @@ def require_args(count: int, usage: str):
                 command_info = app.commands.get(cmd_name.lower(), {})
                 usage_text = command_info.get('usage', '该指令没有提供详细的用法说明。')
                 
-                # 使用新的标准化错误回复
                 error_msg = create_error_reply(
                     command_name=cmd_name,
                     reason="参数不足",
@@ -57,7 +50,6 @@ def require_args(count: int, usage: str):
             try:
                 return await func(event, parts)
             except ValueError:
-                # 使用新的标准化错误回复
                 error_msg = create_error_reply(
                     command_name=cmd_name,
                     reason="参数解析错误，请检查您的引号是否匹配",
@@ -67,13 +59,43 @@ def require_args(count: int, usage: str):
         return wrapper
     return decorator
 
+def resilient_task(retry_delay_minutes: int = 15):
+    """
+    [新增] “弹性任务”装饰器。
+    用于包裹后台自动任务，实现统一的超时和异常处理及重试逻辑。
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            # 自动任务不应该由 `force_run` 触发，但我们保留它以兼容手动调用
+            is_forced = kwargs.get('force_run', False)
+            task_name = func.__name__
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                # 只有在非手动强制执行的情况下才记录错误并准备重试
+                if not is_forced:
+                    log_level = logging.WARNING if isinstance(e, CommandTimeoutError) else logging.ERROR
+                    format_and_log("TASK", f"后台任务异常: {task_name}", {'错误': str(e)}, level=log_level)
+                    
+                    # 可以在这里加入更复杂的重试逻辑，例如指数退避
+                    # 目前仅记录日志，依赖于调度器自身的下一次执行
+                    # 或者，我们可以重新调度一个一次性的任务
+                    # from app.context import get_scheduler
+                    # from datetime import datetime, timedelta
+                    # import pytz
+                    # scheduler = get_scheduler()
+                    # next_run = datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=retry_delay_minutes)
+                    # scheduler.add_job(wrapper, 'date', run_date=next_run, args=args, kwargs=kwargs)
+                    # format_and_log("TASK", "后台任务重试", {'任务': task_name, '下次重试': next_run.strftime('%Y-%m-%d %H:%M:%S')})
+                else:
+                    # 如果是手动触发的，则将异常向上抛出，由指令处理器向用户反馈
+                    raise e
+        return wrapper
+    return decorator
+
+
 async def send_paginated_message(event, text: str, max_length: int = 3500, prefix_message=None):
-    """
-    [修复版]
-    发送长消息，自动分页。
-    - text: 要发送的完整文本。
-    - prefix_message: (可选) 如果提供，将编辑此消息作为第一页，而不是发送新消息。
-    """
     client = get_application().client
     chunks = [text[i:i + max_length] for i in range(0, len(text), max_length)]
     
@@ -84,17 +106,15 @@ async def send_paginated_message(event, text: str, max_length: int = 3500, prefi
 
     last_message = None
     
-    # 处理第一页
     if prefix_message:
         try:
             await prefix_message.edit(chunks[0])
             last_message = prefix_message
-        except Exception: # 如果编辑失败（例如消息太旧），则改为直接回复
+        except Exception:
             last_message = await client.reply_to_admin(event, chunks[0])
     else:
         last_message = await client.reply_to_admin(event, chunks[0])
 
-    # 处理后续页面
     if last_message:
         for chunk in chunks[1:]:
             new_message = await last_message.reply(chunk)

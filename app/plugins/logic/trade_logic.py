@@ -111,7 +111,6 @@ async def execute_listing_task(requester_id: str, **kwargs):
             result_task = {"task_type": "purchase_item", "target_account_id": requester_id, "payload": task_payload}
             await publish_task(result_task)
 
-        # [优化] 将已知失败情况和未知情况统一报告给管理员
         else:
             format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '游戏返回上架失败信息', '回复': raw_reply_text})
             await app.client.send_admin_notification(f"❌ **集火-上架失败**\n助手号上架 `{kwargs['item_to_sell_name']}` 时，游戏返回错误:\n`{raw_reply_text}`")
@@ -163,7 +162,6 @@ async def execute_purchase_task(payload: dict):
 
             await app.client.send_admin_notification(f"✅ **协同购买成功** (挂单ID: `{item_id}`)\n库存已实时更新。")
 
-        # [优化] 将所有已知的失败情况和未知的回复都报告给管理员
         else:
             error_reason = "未知"
             if "你还缺少" in raw_reply_text: 

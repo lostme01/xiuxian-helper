@@ -45,20 +45,22 @@ TZ = config.get('timezone', 'Asia/Shanghai')
 
 COMMAND_TIMEOUT = config.get('command_timeout', 60)
 
-# --- 最终优化方案: 管理员交互延迟恢复为30秒 ---
 AUTO_DELETE = _merge_config('auto_delete', {
     'enabled': True, 
     'delay_admin_command': 30
 })
 
-# --- 最终优化方案: 游戏群指令清理延迟设为5秒 ---
+# --- 核心优化: 引入 delay_anchor 配置 ---
 AUTO_DELETE_STRATEGIES = _merge_config('auto_delete_strategies', {
     'fire_and_forget': { 'delay_self': 5 },
     'request_response': { 
         'delay_self_on_reply': 5, 
         'delay_self_on_timeout': 60,
     },
-    'long_task': { 'delay_self': 0 }
+    'long_task': { 
+        'delay_self': 0,
+        'delay_anchor': 30
+    }
 })
 
 

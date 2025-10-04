@@ -7,7 +7,7 @@ import sys
 import re
 from datetime import datetime, timedelta, date, time
 from app.state_manager import get_state, set_state
-from app.utils import parse_cooldown_time, parse_inventory_text
+from app.utils import parse_cooldown_time, parse_inventory_text, resilient_task
 from config import settings
 from app.logger import format_and_log
 from app.task_scheduler import scheduler
@@ -27,19 +27,14 @@ STATE_KEY_INVENTORY = "inventory"
 TASK_ID_ACTIVE_HEARTBEAT = 'active_status_heartbeat_task'
 
 def _parse_and_update_contribution(reply_text: str):
-    """辅助函数，用于从回复中解析贡献并更新"""
     contrib_match = re.search(r"获得了 \*\*([\d,]+)\*\* 点宗门贡献", reply_text)
     if contrib_match:
         gained_contrib = int(contrib_match.group(1).replace(',', ''))
-        # 使用 asyncio.create_task 在后台更新，不阻塞主流程
         asyncio.create_task(stats_manager.add_contribution(gained_contrib))
         format_and_log("DEBUG", "贡献度更新", {'来源': '点卯/传功', '增加': gained_contrib})
 
+@resilient_task()
 async def trigger_dianmao_chuangong(force_run=False):
-    """
-    [最终优化版 v2]
-    增加对点卯和传功获得贡献的实时追踪。
-    """
     client = get_application().client
     format_and_log("TASK", "宗门点卯", {'阶段': '任务开始', '强制执行': force_run})
     sent_dianmao = None
@@ -50,7 +45,6 @@ async def trigger_dianmao_chuangong(force_run=False):
         log_text = reply_dianmao.text.replace('\n', ' ')
         format_and_log("TASK", "宗门点卯", {'阶段': '点卯指令', '返回': log_text})
         
-        # [核心优化] 如果点卯成功，解析并增加贡献
         if "获得了" in log_text:
             _parse_and_update_contribution(reply_dianmao.text)
         
@@ -65,26 +59,24 @@ async def trigger_dianmao_chuangong(force_run=False):
             log_text_cg = reply_cg.text.replace('\n', ' ')
             format_and_log("TASK", "宗门点卯", {'阶段': f'传功 {i+1}/{len(chuangong_commands)}', '返回': log_text_cg})
 
-            # [核心优化] 如果传功成功，解析并增加贡献
             if "获得了" in log_text_cg:
                 _parse_and_update_contribution(reply_cg.text)
 
             if "过于频繁" in log_text_cg:
                 format_and_log("TASK", "宗门点卯", {'阶段': '传功已达上限', '详情': '任务链正常结束。'})
-                return "✅ **[立即点卯]** 任务已成功执行完毕（点卯和传功均已完成）。"
-        
-        return "✅ **[立即点卯]** 任务已成功执行完毕。"
+                if force_run: return "✅ **[立即点卯]** 任务已成功执行完毕（点卯和传功均已完成）。"
+                return
 
-    except Exception as e:
-        if force_run:
-            raise e
-        else:
-            format_and_log("TASK", "宗门点卯", {'阶段': '任务失败', '原因': f'执行过程中出错: {e}'}, level=logging.ERROR)
+        if force_run: return "✅ **[立即点卯]** 任务已成功执行完毕。"
+
     finally:
         if sent_dianmao:
             client.unpin_message(sent_dianmao)
-            client._schedule_message_deletion(sent_dianmao, 30, "宗门点卯(任务链结束)")
+            # [核心修复] 使用新的专用配置项
+            delay = settings.AUTO_DELETE_STRATEGIES['long_task']['delay_anchor']
+            client._schedule_message_deletion(sent_dianmao, delay, "宗门点卯(任务链结束)")
 
+@resilient_task()
 async def update_inventory_cache(force_run=False):
     client = get_application().client
     format_and_log("TASK", "刷新背包", {'阶段': '任务开始', '强制执行': force_run})
@@ -99,42 +91,20 @@ async def update_inventory_cache(force_run=False):
                 return f"✅ **[立即刷新背包]** 任务完成，已校准 {len(inventory)} 种物品。"
         else:
             raise ValueError("未能从游戏返回信息中解析到任何物品。")
-    except Exception as e:
-        if force_run:
-            raise e
-        else:
-            format_and_log("TASK", "刷新背包", {'阶段': '任务异常', '错误': str(e)}, level=logging.ERROR)
     finally:
         if not force_run and settings.TASK_SWITCHES.get('inventory_refresh', True):
-            random_interval_hours = random.uniform(12, 24) # 降低校准频率
+            random_interval_hours = random.uniform(12, 24)
             next_run_time = datetime.now(pytz.timezone(settings.TZ)) + timedelta(hours=random_interval_hours)
             scheduler.add_job(update_inventory_cache, 'date', run_date=next_run_time, id=TASK_ID_INVENTORY_REFRESH, replace_existing=True)
             format_and_log("TASK", "刷新背包", {'阶段': '任务完成', '详情': f'已计划下次校准时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
 
-
-async def active_status_heartbeat():
-    client = get_application().client
-    if client and client.is_connected():
-        await client.client(UpdateStatusRequest(offline=False))
-
-async def heartbeat_check():
-    client = get_application().client
-    heartbeat_timeout_seconds = settings.HEARTBEAT_TIMEOUT
-    time_since_last_update = datetime.now(pytz.timezone(settings.TZ)) - client.last_update_timestamp
-    if time_since_last_update > timedelta(seconds=heartbeat_timeout_seconds):
-        format_and_log("SYSTEM", "心跳检查", {'状态': '超时', '详情': f'超过 {heartbeat_timeout_seconds} 秒无活动，准备重启...'}, level=logging.CRITICAL)
-        await client.send_admin_notification(f"🚨 **告警：助手会话可能已沉睡，正在自动重启...**")
-        await asyncio.sleep(2); sys.exit(1)
-
+@resilient_task()
 async def trigger_chuang_ta(force_run=False):
     client = get_application().client
     format_and_log("TASK", "自动闯塔", {'阶段': '任务开始', '强制执行': force_run})
     
     try:
-        _sent, final_reply = await client.send_and_wait_for_edit(
-            ".闯塔",
-            initial_reply_pattern=r"踏入了古塔"
-        )
+        _sent, final_reply = await client.send_and_wait_for_edit(".闯塔", initial_reply_pattern=r"踏入了古塔")
         
         if "【试炼古塔 - 战报】" in final_reply.text and "总收获" in final_reply.text:
             gain_match = re.search(r"获得了【(.+?)】x([\d,]+)", final_reply.text)
@@ -147,12 +117,6 @@ async def trigger_chuang_ta(force_run=False):
                 format_and_log("TASK", "自动闯塔", {'阶段': '完成', '详情': '本次闯塔无物品奖励。'})
         else:
             format_and_log("WARNING", "自动闯塔", {'阶段': '解析失败', '原因': '未收到预期的战报格式', '返回': final_reply.text})
-            
-    except Exception as e:
-        log_level = logging.ERROR if not force_run else logging.DEBUG
-        format_and_log("TASK", "自动闯塔", {'阶段': '任务异常', '错误': str(e)}, level=log_level)
-        if force_run:
-            raise e
     finally:
         if not force_run:
             today_str = date.today().isoformat()
@@ -162,6 +126,7 @@ async def trigger_chuang_ta(force_run=False):
             await set_state(STATE_KEY_CHUANG_TA, state)
             format_and_log("TASK", "自动闯塔", {'阶段': '状态更新', '今日已完成': state["completed_count"]})
 
+@resilient_task()
 async def trigger_biguan_xiulian(force_run=False):
     client = get_application().client
     format_and_log("TASK", "闭关修炼", {'阶段': '任务开始', '强制执行': force_run})
@@ -176,16 +141,27 @@ async def trigger_biguan_xiulian(force_run=False):
             next_run_time = datetime.now(beijing_tz) + cooldown + timedelta(seconds=jitter)
             format_and_log("TASK", "闭关修炼", {'阶段': '解析成功', '冷却时间': str(cooldown), '下次运行': next_run_time.strftime('%Y-%m-%d %H:%M:%S')})
         else:
-            format_and_log("TASK", "闭关修炼", {'阶段': '解析失败', '详情': '未找到冷却时间，将在15分钟后重试。', '原始返回': reply.text.replace('\n', ' ')})
-    except Exception as e:
-        if force_run:
-            raise e
-        else:
-            format_and_log("TASK", "闭关修炼", {'阶段': '任务异常', '错误': str(e)}, level=logging.ERROR)
+            format_and_log("TASK", "闭关修炼", {'阶段': '解析失败', '详情': '未找到冷却时间，将在15分钟后重试。'})
     finally:
         scheduler.add_job(trigger_biguan_xiulian, 'date', run_date=next_run_time, id=TASK_ID_BIGUAN, replace_existing=True)
         await set_state(STATE_KEY_BIGUAN, next_run_time.isoformat())
         format_and_log("TASK", "闭关修炼", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
+
+# ... (剩余的 check_*_startup 和 initialize 函数保持不变) ...
+
+async def active_status_heartbeat():
+    client = get_application().client
+    if client and client.is_connected():
+        await client.client(UpdateStatusRequest(offline=False))
+
+async def heartbeat_check():
+    client = get_application().client
+    heartbeat_timeout_seconds = settings.HEARTBEAT_TIMEOUT
+    time_since_last_update = datetime.now(pytz.timezone(settings.TZ)) - client.last_update_timestamp
+    if time_since_last_update > timedelta(seconds=heartbeat_timeout_seconds):
+        format_and_log("SYSTEM", "心跳检查", {'状态': '超时', '详情': f'超过 {heartbeat_timeout_seconds} 秒无活动，准备重启...'}, level=logging.CRITICAL)
+        await client.send_admin_notification(f"🚨 **告警：助手会话可能已沉睡，正在自动重启...**")
+        await asyncio.sleep(2); sys.exit(1)
 
 async def check_biguan_startup():
     if not settings.TASK_SWITCHES.get('biguan'): return

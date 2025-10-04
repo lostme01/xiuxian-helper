@@ -125,7 +125,7 @@ async def _cmd_receive_goods(event, parts):
                 raise ValueError("上架成功但无法解析挂单ID。")
             
             item_id = match_id.group(1)
-            await inventory_manager.remove_item("灵石", 1) # 主动扣减上架的物品
+            await inventory_manager.remove_item("灵石", 1)
 
             await progress_msg.edit(f"✅ `上架成功` (挂单ID: `{item_id}`)\n⏳ 正在通知助手购买...")
             
@@ -178,10 +178,6 @@ async def redis_message_handler(message):
         format_and_log("ERROR", "Redis 任务处理器", {'状态': '执行异常', '错误': str(e)})
 
 async def handle_trade_report(event):
-    """
-    [最终优化版]
-    监听并处理【万宝楼快报】，为售出方精确更新库存。
-    """
     app = get_application()
     client = app.client
     if not (client.me and client.me.username and event.text):
@@ -193,11 +189,9 @@ async def handle_trade_report(event):
         
     format_and_log("INFO", "万宝楼快报", {'状态': '匹配成功', '用户': my_username})
     
-    # 解析获得的物品
     gain_match = re.search(r"你获得了：(.+)", event.text)
     if gain_match:
         gained_items_str = gain_match.group(1).strip().rstrip('。')
-        # 正则表达式匹配格式如: 【物品名】x数量
         gained_items = re.findall(r"【(.+?)】x([\d,]+)", gained_items_str)
         
         if gained_items:
@@ -209,7 +203,6 @@ async def handle_trade_report(event):
             
             await client.send_admin_notification(f"✅ **交易售出通知 (`@{my_username}`)**\n库存已实时增加: {', '.join(update_details)}")
         else:
-            # 如果只获得一样东西，格式可能不同
             single_gain_match = re.search(r"你获得了：【(.+?)】x([\d,]+)", event.text)
             if single_gain_match:
                 item, quantity_str = single_gain_match.groups()
@@ -217,11 +210,9 @@ async def handle_trade_report(event):
                 await inventory_manager.add_item(item, quantity)
                 await client.send_admin_notification(f"✅ **交易售出通知 (`@{my_username}`)**\n库存已实时增加: `{item} x{quantity}`")
 
-    # 为了容错，仍然保留一个延迟的全局刷新任务
-    delay_minutes = random.randint(30, 60)
-    next_run_time = datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=delay_minutes)
-    job_id = f"post_sale_refresh_{client.me.id}"
-    scheduler.add_job(update_inventory_cache, 'date', run_date=next_run_time, id=job_id, replace_existing=True, args=[True])
+    # [核心优化] 移除冗余的刷新任务调度
+    # 保留此通知，但不再安排刷新
+    await client.send_admin_notification(f"ℹ️ **交易售出通知 (`@{my_username}`)**\n库存已实时更新。")
 
 
 def initialize(app):
