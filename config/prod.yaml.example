@@ -106,6 +106,31 @@ auto_delete_strategies:
 trade_coordination:
   focus_fire_auto_delist: true
 
+# ----------------- [新功能] 高级自动化 -----------------
+# 智能资源管理
+auto_resource_management:
+  enabled: false
+  interval_minutes: 120  # 每120分钟检查一次规则
+  rules:
+    # 规则1: 自动捐献多余的草药
+    - action: "donate"
+      item: "凝血草"
+      threshold: 500       # 当凝血草的数量 > 500 时
+      amount: 100          # 每次捐献 100 个
+    # 规则2: 自动用贡献兑换短缺的种子
+    - action: "exchange"
+      item: "凝血草种子"
+      condition: "contribution > 1000 and item < 20" 
+      amount: 5
+
+# 自动化知识共享
+auto_knowledge_sharing:
+  enabled: false
+  interval_minutes: 240 # 每240分钟（4小时）检查一次共享机会
+  # 黑名单，这些物品即使满足条件也不会被自动共享
+  blacklist:
+    - "某个珍贵的图纸"
+
 # ----------------- 宗门专属配置 -----------------
 huangfeng_valley:
   garden_sow_seed: '凝血草种子'

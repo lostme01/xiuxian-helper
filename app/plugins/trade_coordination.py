@@ -155,6 +155,13 @@ async def redis_message_handler(message):
         data = json.loads(message['data'])
         task_type = data.get("task_type")
 
+        # [核心优化] 依次调用所有额外的处理器
+        if hasattr(app, 'extra_redis_handlers'):
+            for handler in app.extra_redis_handlers:
+                if await handler(data):
+                    return # 如果被处理，则提前返回
+
+        # --- 原有的处理器逻辑 ---
         if task_type == "broadcast_command":
             if my_id == str(settings.ADMIN_USER_ID): return
             target_sect = data.get("target_sect")
@@ -170,7 +177,8 @@ async def redis_message_handler(message):
         
         format_and_log("INFO", "Redis 任务匹配成功", {'任务类型': task_type, '详情': str(data)})
         if task_type == "list_item":
-            await trade_logic.execute_listing_task(**data)
+            payload = {k: v for k, v in data.items() if k not in ['task_type', 'target_account_id']}
+            await trade_logic.execute_listing_task(**payload)
         elif task_type == "purchase_item":
             await trade_logic.execute_purchase_task(data.get("payload", {}))
             
@@ -210,8 +218,6 @@ async def handle_trade_report(event):
                 await inventory_manager.add_item(item, quantity)
                 await client.send_admin_notification(f"✅ **交易售出通知 (`@{my_username}`)**\n库存已实时增加: `{item} x{quantity}`")
 
-    # [核心优化] 移除冗余的刷新任务调度
-    # 保留此通知，但不再安排刷新
     await client.send_admin_notification(f"ℹ️ **交易售出通知 (`@{my_username}`)**\n库存已实时更新。")
 
 

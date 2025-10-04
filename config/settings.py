@@ -50,7 +50,6 @@ AUTO_DELETE = _merge_config('auto_delete', {
     'delay_admin_command': 30
 })
 
-# --- 核心优化: 引入 delay_anchor 配置 ---
 AUTO_DELETE_STRATEGIES = _merge_config('auto_delete_strategies', {
     'fire_and_forget': { 'delay_self': 5 },
     'request_response': { 
@@ -63,12 +62,16 @@ AUTO_DELETE_STRATEGIES = _merge_config('auto_delete_strategies', {
     }
 })
 
-
 TASK_SWITCHES = _merge_config('task_switches', {
     'biguan': True, 'dianmao': True, 'learn_recipes': True, 
     'garden_check': True, 'inventory_refresh': True, 'chuang_ta': True,
     'mojun_arrival': False, 'sect_treasury': True
 })
+
+AUTO_RESOURCE_MANAGEMENT = config.get('auto_resource_management', {})
+AUTO_KNOWLEDGE_SHARING = config.get('auto_knowledge_sharing', {})
+
+
 LOGGING_SWITCHES = _merge_config('logging_switches', {
     'system_activity': True, 'task_activity': True, 'cmd_sent': True, 
     'msg_recv': True, 'reply_recv': True, 'original_log_enabled': False, 
@@ -130,13 +133,21 @@ def check_startup_settings():
         'admin_user_id': (ADMIN_USER_ID, "admin_user_id: 987654321"),
         'game_group_ids': (GAME_GROUP_IDS, "game_group_ids:\n  - -1001234567890"),
     }
+
+    for key, (value, _) in required_settings.items():
+        if not value:
+            missing_info.append(key)
+
     if XUANGU_EXAM_CONFIG.get('enabled') or TIANJI_EXAM_CONFIG.get('enabled'):
-        required_settings['gemini_api_keys'] = (EXAM_SOLVER_CONFIG.get('gemini_api_keys'), "在 prod.yaml 或 .env 文件中设置 gemini_api_keys")
-    for key in missing_info:
+        if not EXAM_SOLVER_CONFIG.get('gemini_api_keys'):
+             missing_info.append('gemini_api_keys')
+    
+    if missing_info:
         error_message = f"严重错误: 您的 `config/prod.yaml` 或 `.env` 配置文件中缺少或未正确配置以下必须的设置：\n"
         error_message += "--------------------------------------------------\n"
-        _, example = required_settings[key]
-        error_message += f"\n缺失项: {key}\n正确格式示例:\n{example}\n"
+        for key in missing_info:
+            _, example = required_settings[key]
+            error_message += f"\n缺失项: {key}\n正确格式示例:\n{example}\n"
         error_message += "\n--------------------------------------------------\n程序无法启动。"
         print(error_message)
         exit(1)
