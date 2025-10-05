@@ -103,13 +103,14 @@ async def ai_chat_handler(event):
     is_bot = hasattr(sender, 'bot') and sender.bot
     is_game_bot = sender_id in settings.GAME_BOT_IDS
 
+    # [核心修复] 游戏机器人的消息只用于分析情绪，绝不存入聊天记录
     if is_game_bot:
-        format_and_log("DEBUG", "AI聊天-处理", {'动作': '学习并分析游戏事件情绪', '来源': sender_name})
-        human_chat_history.append(f"{sender_name} (游戏机器人): {message_text}")
+        format_and_log("DEBUG", "AI聊天-处理", {'动作': '分析游戏事件情绪', '来源': sender_name})
         if settings.AI_CHATTER_CONFIG.get('mood_system_enabled'):
             await analyze_mood_from_game_event(message_text)
         return
     
+    # 其他机器人，不学习也不回复
     if is_bot:
         format_and_log("DEBUG", "AI聊天-忽略", {'原因': '发送者是其他Bot'}); return
 
@@ -119,6 +120,7 @@ async def ai_chat_handler(event):
         format_and_log("DEBUG", "AI聊天-忽略", {'原因': '消息格式类似机器人/系统消息'})
         return
 
+    # 只有通过所有过滤的真人才会走到这里
     human_chat_history.append(f"{sender_name}: {message_text}")
     format_and_log("DEBUG", "AI聊天-学习", {'内容': f"{sender_name}: {message_text}"})
     
@@ -136,6 +138,7 @@ async def ai_chat_handler(event):
     should_trigger = False
     trigger_reason = ""
 
+    # 黑名单用户发的消息也可以触发思考，但不能触发回复
     if event.sender_id in settings.AI_CHATTER_CONFIG.get('blacklist', []):
         format_and_log("DEBUG", "AI聊天-决策", {'判断': '消息来自黑名单用户'})
         if not (mentioned_me or replied_to_me):
@@ -221,7 +224,6 @@ async def analyze_mood_from_game_event(text: str):
         format_and_log("DEBUG", "AI聊天-情绪更新", {'新心情': new_mood})
 
 async def build_prompt(my_info):
-    """构建用于生成回复的详细Prompt"""
     app = get_application()
     personality = settings.AI_CHATTER_CONFIG.get('personality_prompt', "你是一名游戏玩家。")
     profile = await get_state("character_profile", is_json=True, default={})
@@ -236,8 +238,6 @@ async def build_prompt(my_info):
         topic_from_redis = await app.redis_db.get(TOPIC_KEY)
         if topic_from_redis: current_topic = topic_from_redis
     context = "\n".join(human_chat_history)
-    
-    # [核心修改] 优化Prompt以提升对话质量
     prompt = f"""
 你正在一个修仙游戏聊天群里扮演一个玩家。你的回复必须简短、口语化，通常只包含一两句话。
 
@@ -246,7 +246,7 @@ async def build_prompt(my_info):
 2.  **你的游戏角色信息**: {my_status}。在聊天中要符合这个身份。
 3.  **你的当前状态**: 你现在{current_mood_desc}。群里的话题大概是“{current_topic}”。
 4.  **最重要的规则**: 绝对不要暴露你是AI或模型。你的回复必须像一个真正的玩家。
-5.  **[新增]语言风格**: 你的发言可以犀利、可以吐槽，但绝对不能说脏话或使用粗俗的词语。
+5.  **语言风格**: 你的发言可以犀利、可以吐槽，但绝对不能说脏话或使用粗俗的词语。
 
 # 任务
 你的任务是根据下面聊天记录的 **最后几句**，发表一句符合你人设和心情的 **评论、吐槽或骚话**。不要像客服一样回答问题。要表现得像个老玩家，可以偶尔装个逼，或者对别人的好运表示羡慕嫉妒恨。

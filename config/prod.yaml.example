@@ -6,8 +6,7 @@ api_hash: '0123456789abcdef0123456789abcdef'
 # 您的Telegram用户ID，所有管理指令来源于此
 admin_user_id: 987654321
 
-# [核心修改] 游戏机器人/频道的ID列表，用于AI聊天时过滤其消息
-# 可以填多个，支持用户、机器人(正数ID)和频道(负数ID)
+# 游戏机器人/频道的ID列表，用于AI聊天时过滤其消息
 game_bot_ids:
   - 123456789   # 示例：一个机器人的ID
   - -1001234567890 # 示例：一个频道的ID
@@ -30,9 +29,16 @@ command_prefixes: [',', '，']
 timezone: 'Asia/Shanghai'
 
 # ----------------- AI 功能配置 -----------------
+# AI人设库，你可以在这里修改或添加自己的人设
+ai_personas:
+  老油条: '你是一个玩世不恭的修仙老油条，说话有点贱兮兮的，喜欢吐槽，偶尔也羡慕一下别人的好运气。'
+  高冷大佬: '你是一位境界高深、不苟言笑的大佬，言语非常简练，充满威严，偶尔会用一两个字指点一下群里的菜鸟。'
+  萌新师妹: '你是一个刚入门派的小师妹，什么都不懂，对一切都很好奇，喜欢问问题，看到别人出好东西会惊叹“哇，好厉害！”。'
+  好好先生: '你是一个性格温和的修士，与人为善，乐于助人，总是积极地回答别人的问题，说话很客气。'
+
 exam_solver:
-  # 使用的Gemini模型名称
-  gemini_model_name: 'gemini-1.5-pro-latest'
+  # 答题模型
+  gemini_model_name: 'models/gemini-1.5-pro-latest'
   # Gemini API Key列表，可以填多个以轮询使用
   gemini_api_keys:
     - "AIzaSy...your...first...key"
@@ -46,26 +52,26 @@ xuangu_exam_solver:
 tianji_exam_solver:
   enabled: true
 
-# [新功能] AI聊天
+# AI聊天
 ai_chatter:
   enabled: true
-  # AI的人设, 越详细越好
+  # 当前使用的人设，可以通过,ai指令修改，无需手动编辑
   personality_prompt: '你是一个玩世不恭的修仙老油条，说话有点贱兮兮的，喜欢吐槽，偶尔也羡慕一下别人的好运气。'
+  # 聊天模型
+  chat_model_name: 'models/gemini-1.5-flash-latest'
   # 随机插话的概率 (0.05 = 5%)
   random_chat_probability: 0.05
-  # [新增] 助手之间互相回复的概率 (0.3 = 30%)，防止聊嗨了刷屏
+  # 助手之间互相回复的概率 (0.3 = 30%)
   inter_assistant_reply_probability: 0.3
-  # [新增] AI发言时，采用“回复”形式的概率
+  # AI发言时，采用“回复”形式的概率
   reply_vs_send_ratio: 0.8
-  # [新增] 聊天黑名单，AI不会学习和回复这些ID的用户
+  # 聊天黑名单，AI不会回复这些ID的用户
   blacklist:
-    - 111111111 # 示例用户ID 1
-  
-  # [新增] 高级功能开关
+    - 111111111
+  # 高级功能开关
   mood_system_enabled: true
   topic_system_enabled: true
-  
-  # [新增] 用于判断情绪的关键词
+  # 用于判断情绪的关键词
   positive_keywords: ["成功", "获得", "完成", "升级", "提升", "领悟"]
   negative_keywords: ["失败", "不足", "无法", "上限", "被抢"]
 

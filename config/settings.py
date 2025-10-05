@@ -46,6 +46,12 @@ TZ = config.get('timezone', 'Asia/Shanghai')
 
 COMMAND_TIMEOUT = config.get('command_timeout', 60)
 
+EXAM_SOLVER_CONFIG = _merge_config('exam_solver', {
+    'gemini_model_name': 'models/gemini-1.5-pro-latest',
+    'gemini_api_keys': [],
+    'reply_delay': {'min': 5, 'max': 15}
+})
+
 AUTO_DELETE = _merge_config('auto_delete', {
     'enabled': True, 
     'delay_admin_command': 30
@@ -106,22 +112,33 @@ GAME_COMMANDS = _merge_config('game_commands', { 'taiyi_yindao': '.引道 水' }
 
 HUANGFENG_VALLEY_CONFIG = config.get('huangfeng_valley', {})
 TAIYI_SECT_CONFIG = config.get('taiyi_sect', {})
-EXAM_SOLVER_CONFIG = config.get('exam_solver', {})
-# [核心修改] 为AI聊天配置添加新选项
+
+AI_PERSONAS = _merge_config('ai_personas', {
+    '老油条': '你是一个玩世不恭的修仙老油条，说话有点贱兮兮的，喜欢吐槽，偶尔也羡慕一下别人的好运气。',
+    '高冷大佬': '你是一位境界高深、不苟言笑的大佬，言语非常简练，充满威严，偶尔会用一两个字指点一下群里的菜鸟。',
+    '萌新师妹': '你是一个刚入门派的小师妹，什么都不懂，对一切都很好奇，喜欢问问题，看到别人出好东西会惊叹“哇，好厉害！”。',
+    '好好先生': '你是一个性格温和的修士，与人为善，乐于助人，总是积极地回答别人的问题，说话很客气。'
+})
+
 AI_CHATTER_CONFIG = _merge_config('ai_chatter', {
     'enabled': False,
-    'personality_prompt': '你是一名游戏玩家。',
+    'personality_prompt': AI_PERSONAS.get('老油条'),
+    'chat_model_name': 'models/gemini-1.5-flash-latest',
     'random_chat_probability': 0.05,
-    'inter_assistant_reply_probability': 0.3, # 助手间回复的概率
-    'reply_vs_send_ratio': 0.8, # 回复和直接发送的比例
-    'blacklist': []
+    'inter_assistant_reply_probability': 0.3,
+    'reply_vs_send_ratio': 0.8,
+    'blacklist': [],
+    'mood_system_enabled': True,
+    'topic_system_enabled': True,
+    'positive_keywords': ["成功", "获得", "完成", "升级", "提升", "领悟"],
+    'negative_keywords': ["失败", "不足", "无法", "上限", "被抢"]
 })
 XUANGU_EXAM_CONFIG = config.get('xuangu_exam_solver', {'enabled': False})
 TIANJI_EXAM_CONFIG = config.get('tianji_exam_solver', {'enabled': False})
 LOG_ROTATION_CONFIG = config.get('log_rotation', {'max_bytes': 1048576, 'backup_count': 9})
 TRADE_COORDINATION_CONFIG = config.get('trade_coordination', {'focus_fire_auto_delist': True})
 
-GEMINI_MODEL_NAME = EXAM_SOLVER_CONFIG.get('gemini_model_name', 'gemini-2.5-pro')
+GEMINI_MODEL_NAME = EXAM_SOLVER_CONFIG.get('gemini_model_name')
 
 gemini_keys_from_env = os.getenv('GEMINI_API_KEYS')
 if gemini_keys_from_env:

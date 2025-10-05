@@ -5,7 +5,7 @@ from config import settings
 from app.config_manager import update_setting, update_nested_setting
 from app.utils import create_error_reply
 
-# [核心修改] 定义模型别名与完整名称的映射
+# 定义模型别名与完整名称的映射
 MODEL_ALIASES = {
     "pro": "models/gemini-2.5-pro",
     "flash": "models/gemini-2.5-flash",
@@ -35,9 +35,15 @@ HELP_TEXT_AI_CONFIG = """🤖 **AI 功能配置**
   `,ai 聊天模型 <pro|flash|lite>`
   *设置AI聊天使用的模型。*
 
-  `,ai 人设 "<新的人设描述>"`
-  *注意：人设描述需要用英文双引号包围。*
-  
+  `,ai 人设`
+  *列出所有可用的预设人设。*
+
+  `,ai 人设 <预设名称>`
+  *一键切换AI的性格。示例: `,ai 人设 高冷大佬`*
+
+  `,ai 人设 自定义 "<自定义内容>"`
+  *设置一个全新的、自定义的人设。*
+
   `,ai 概率 <0到1的小数>`
   *修改随机闲聊的概率。*
 
@@ -100,13 +106,16 @@ async def _cmd_ai_chatter_config(event, parts):
 
     sub_command = parts[1]
     
+    # 总开关
     if sub_command in ["开", "关"]:
         new_status = (sub_command == "开")
         msg = await update_setting('ai_chatter', 'enabled', new_status, f"AI聊天总开关已 **{sub_command}**")
-        if new_status is False: msg += "\n*注意: AI聊天功能将在下次重启后完全停止。*"
+        if new_status is False:
+            msg += "\n*注意: AI聊天功能将在下次重启后完全停止。*"
         await client.reply_to_admin(event, msg)
         return
 
+    # 情感和话题系统开关
     if sub_command in ["情感", "话题"] and len(parts) > 2 and parts[2] in ["开", "关"]:
         new_status = (parts[2] == "开")
         system_map = {"情感": ("mood_system_enabled", "情感系统"), "话题": ("topic_system_enabled", "话题系统")}
@@ -119,13 +128,20 @@ async def _cmd_ai_chatter_config(event, parts):
             await client.reply_to_admin(event, msg)
         return
 
+    # 模型配置
     if sub_command in ["答题模型", "聊天模型"] and len(parts) > 2:
         alias = parts[2].lower()
         if alias not in MODEL_ALIASES:
             await client.reply_to_admin(event, f"❌ **模型错误**: 无效的模型别名 `{alias}`。可用别名: `pro`, `flash`, `lite`")
             return
+            
         full_model_name = MODEL_ALIASES[alias]
-        path = 'exam_solver.gemini_model_name' if sub_command == "答题模型" else 'ai_chatter.chat_model_name'
+        
+        if sub_command == "答题模型":
+            path = 'exam_solver.gemini_model_name'
+        else: # 聊天模型
+            path = 'ai_chatter.chat_model_name'
+            
         msg = await update_nested_setting(path, full_model_name)
         if "✅" in msg:
             await client.reply_to_admin(event, f"✅ **{sub_command}** 已成功设置为 `{alias}` ({full_model_name})。")
@@ -133,12 +149,33 @@ async def _cmd_ai_chatter_config(event, parts):
             await client.reply_to_admin(event, msg)
         return
         
-    if sub_command == "人设" and len(parts) > 2:
-        new_prompt = " ".join(parts[2:]).strip('"')
-        msg = await update_nested_setting('ai_chatter.personality_prompt', new_prompt)
-        await client.reply_to_admin(event, msg)
-        return
+    # 人设指令
+    if sub_command == "人设":
+        if len(parts) == 2:
+            personas_list = [f"- `{name}`" for name in settings.AI_PERSONAS.keys()]
+            help_text = ("👤 **可用预设人设列表**\n\n" + "\n".join(personas_list) + 
+                         "\n\n**用法:**\n- `,ai 人设 <预设名称>`\n- `,ai 人设 自定义 \"<内容>\"`")
+            await client.reply_to_admin(event, help_text)
+            return
+        if len(parts) > 3 and parts[2] == "自定义":
+            new_prompt = " ".join(parts[3:]).strip('"')
+            if not new_prompt:
+                await client.reply_to_admin(event, "❌ 自定义人设内容不能为空。")
+                return
+            msg = await update_nested_setting('ai_chatter.personality_prompt', new_prompt)
+            await client.reply_to_admin(event, f"✅ AI人设已更新为 **自定义**。\n{msg}")
+            return
+        if len(parts) == 3:
+            persona_name = parts[2]
+            if persona_name in settings.AI_PERSONAS:
+                new_prompt = settings.AI_PERSONAS[persona_name]
+                msg = await update_nested_setting('ai_chatter.personality_prompt', new_prompt)
+                await client.reply_to_admin(event, f"✅ AI人设已切换为 **{persona_name}**。\n{msg}")
+            else:
+                await client.reply_to_admin(event, f"❌ 未找到名为 `{persona_name}` 的预设人设。")
+            return
     
+    # 概率设置
     if sub_command in ["概率", "互聊概率", "回复概率"] and len(parts) > 2:
         try:
             new_prob = float(parts[2])
@@ -154,6 +191,7 @@ async def _cmd_ai_chatter_config(event, parts):
             await client.reply_to_admin(event, f"❌ **参数错误**: `{sub_command}` 的值必须是0到1之间的小数，例如 `0.05`。")
         return
 
+    # 手动设置心情
     if sub_command == "心情" and len(parts) > 2:
         mood_map = {"高兴": "happy", "平常": "neutral", "烦躁": "annoyed"}
         mood_input = parts[2]
@@ -164,6 +202,7 @@ async def _cmd_ai_chatter_config(event, parts):
             await client.reply_to_admin(event, "❌ **设置失败**: 无效的心情或Redis未连接。可用: `高兴`, `平常`, `烦躁`")
         return
         
+    # 黑名单管理
     if sub_command == "查看黑名单":
         blacklist = settings.AI_CHATTER_CONFIG.get('blacklist', [])
         if not blacklist:
