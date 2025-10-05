@@ -40,7 +40,8 @@ class BaseExamSolver:
                 format_and_log("TASK", f"{self.log_module_name}: AI作答", {'状态': '失败', '原因': 'AI返回了无效选项', '原始回复': response.text}, level=logging.WARNING)
                 return None
         except Exception as e:
-            format_and_log("TASK", f"{self.log_module_name}: AI作答", {'状态': '异常', '错误': str(e)}, level=logging.ERROR)
+            # [核心修复] 记录完整的原始错误信息
+            format_and_log("TASK", f"{self.log_module_name}: AI作答", {'状态': '异常', '完整错误': repr(e)}, level=logging.ERROR)
             return None
 
     def _find_answer_in_db(self, question: str, options: dict) -> str | None:
@@ -84,7 +85,6 @@ class BaseExamSolver:
         if is_our_turn and answer_letter:
             log_data = {'回复内容': f".作答 {answer_letter}", '答案来源': source}
             format_and_log("TASK", f"{self.log_module_name}: 准备作答", log_data)
-            # --- 核心修改：使用配置化的延迟 ---
             delay_config = settings.EXAM_SOLVER_CONFIG.get('reply_delay', {'min': 5, 'max': 15})
             delay = random.randint(delay_config['min'], delay_config['max'])
             await asyncio.sleep(delay)

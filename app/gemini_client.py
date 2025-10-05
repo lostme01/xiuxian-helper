@@ -52,7 +52,8 @@ def initialize_gemini():
 
 async def generate_content_with_rotation(prompt: str):
     """
-    使用轮询和重试机制来生成内容，并增加了详细的错误日志。
+    [最终修复版]
+    使用轮询和重试机制，并确保记录详细的原始错误信息。
     """
     if not _api_key_manager or _api_key_manager.key_count == 0:
         raise RuntimeError("Gemini Client 未成功初始化或未配置 API Keys。")
@@ -60,6 +61,8 @@ async def generate_content_with_rotation(prompt: str):
     format_and_log("DEBUG", "Gemini-请求", {'Prompt': prompt})
 
     keys_to_try = _api_key_manager.get_all_keys_with_start_index()
+    
+    failed_reasons = []
 
     for selected_key, current_index in keys_to_try:
         try:
@@ -76,32 +79,21 @@ async def generate_content_with_rotation(prompt: str):
             _api_key_manager._current_key_index = (current_index + 1) % _api_key_manager.key_count
             return response
         
-        # [核心修改] 将所有异常都以ERROR级别详细记录
         except Exception as e:
-            error_type = type(e).__name__
-            error_detail = str(e)
-            
-            # 对常见的错误类型进行更友好的解释
-            if "API key not valid" in error_detail:
-                error_explanation = "API Key无效或不正确"
-            elif "rate limit" in error_detail.lower():
-                error_explanation = "已达到此Key的请求频率限制"
-            elif isinstance(e, asyncio.TimeoutError):
-                error_explanation = "API请求在30秒内未返回结果 (网络超时或Google服务器繁忙)"
-            else:
-                error_explanation = "未知错误"
+            # [核心修复] 捕获完整的、原始的错误信息
+            error_repr = repr(e)
+            failed_reasons.append(f"Key[{current_index}]: {error_repr}")
 
             format_and_log(
                 "ERROR", # 使用ERROR级别，确保日志一定会被打印
                 "Gemini-单次调用失败", {
                     'Key索引': current_index,
-                    '错误类型': error_type,
-                    '错误详情': error_detail,
-                    '可能原因': error_explanation,
+                    '原始错误': error_repr,
                     '操作': '将自动尝试下一个Key...'
                 }
             )
             await asyncio.sleep(1)
 
-    format_and_log("ERROR", "Gemini-API调用失败", {'错误': '所有API Key均调用失败'})
-    raise RuntimeError("所有API Key均调用失败。")
+    # [核心修复] 在最终的异常中包含所有失败原因
+    all_errors = "\n".join(failed_reasons)
+    raise RuntimeError(f"所有API Key均调用失败。\n\n详细原因:\n{all_errors}")
