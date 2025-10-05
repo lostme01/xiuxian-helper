@@ -190,6 +190,13 @@ async def _handle_game_event(app, event_data):
             await stats_manager.remove_contribution(consumed_contrib)
             update_details.append(f"消耗 `{consumed_contrib}` 点贡献")
 
+    # [新功能] 处理点卯/传功的贡献增加
+    elif event_type == "CONTRIBUTION_GAINED":
+        gained_contrib = event_data.get("gained_contribution", 0)
+        if gained_contrib > 0:
+            await stats_manager.add_contribution(gained_contrib)
+            update_details.append(f"获得 `{gained_contrib}` 点贡献 (来自点卯/传功)")
+
     # 知识共享 V2 - 事件驱动的特殊逻辑
     if await app.redis_db.hlen(KNOWLEDGE_SESSIONS_KEY) > 0:
         gained_items = event_data.get("gained", {})

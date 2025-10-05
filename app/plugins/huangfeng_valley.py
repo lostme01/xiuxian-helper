@@ -95,15 +95,28 @@ def initialize(app):
 def _parse_garden_status(message: Message):
     GARDEN_STATUS_KEYWORDS = ['空闲', '已成熟', '灵气干涸', '害虫侵扰', '杂草横生', '生长中']
     status = {}
-    # [BUG修复] 使用更健壮、兼容性更强的正则表达式
-    pattern = re.compile(r'(\d+)号灵田.*-\s*(.+)')
-    for line in message.text.split('\n'):
-        if match := pattern.search(line):
+    text = message.text
+
+    # [终极修复] 使用 finditer 定位所有地块的起始点，兼容所有已知格式
+    matches = list(re.finditer(r'(\d+)号灵田', text))
+    if not matches:
+        return {}
+
+    for i, match in enumerate(matches):
+        try:
             plot_id = int(match.group(1))
-            full_status_text = match.group(2)
-            # 通过关键词查找来确定最终状态，自动忽略表情和剩余时间
-            plot_status = next((s for s in GARDEN_STATUS_KEYWORDS if s in full_status_text), '未知')
+            
+            # 截取当前地块到下一个地块之间的文本
+            start_pos = match.start()
+            end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            chunk = text[start_pos:end_pos]
+            
+            # 在截取的文本块中查找状态关键词
+            plot_status = next((s for s in GARDEN_STATUS_KEYWORDS if s in chunk), '未知')
             status[plot_id] = plot_status
+        except (ValueError, IndexError):
+            continue
+            
     return status
 
 def _find_seed_to_sow(inventory):

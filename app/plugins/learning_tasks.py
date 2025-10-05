@@ -58,6 +58,17 @@ async def trigger_learn_recipes(force_run=False):
                 else:
                     await inventory_manager.remove_item(recipe, 1)
                     format_and_log("WARNING", "自动学习", {'阶段': '解析消耗品失败', '物品': recipe, '详情': '已按指令名称扣减库存'})
+            
+            # [新功能] 增加库存自动校准逻辑
+            elif "你的储物袋中没有此物可供学习" in reply_learn.text:
+                await inventory_manager.remove_item(recipe, 1)
+                format_and_log("WARNING", "自动学习-库存校准", {
+                    '阶段': '学习失败', 
+                    '物品': recipe, 
+                    '原因': '背包缓存与实际不符，已自动移除',
+                    '返回': reply_learn.text
+                })
+
             else:
                  format_and_log("WARNING", "自动学习", {'阶段': '学习失败', '物品': recipe, '返回': reply_learn.text})
 

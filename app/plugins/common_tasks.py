@@ -26,11 +26,13 @@ TASK_ID_INVENTORY_REFRESH = 'inventory_refresh_task'
 STATE_KEY_INVENTORY = "inventory"
 
 def _parse_and_update_contribution(reply_text: str):
+    """[旧版逻辑] 仅用于日志记录和调试，实际更新由事件总线处理"""
     contrib_match = re.search(r"获得了 \*\*([\d,]+)\*\* 点宗门贡献", reply_text)
     if contrib_match:
         gained_contrib = int(contrib_match.group(1).replace(',', ''))
-        asyncio.create_task(stats_manager.add_contribution(gained_contrib))
-        format_and_log("DEBUG", "贡献度更新", {'来源': '点卯/传功', '增加': gained_contrib})
+        # [重构] 不再直接调用, 只记录日志
+        format_and_log("DEBUG", "贡献度解析", {'来源': '点卯/传功', '识别到增加': gained_contrib})
+        # asyncio.create_task(stats_manager.add_contribution(gained_contrib))
 
 @resilient_task()
 async def trigger_dianmao_chuangong(force_run=False):
@@ -44,6 +46,7 @@ async def trigger_dianmao_chuangong(force_run=False):
         log_text = reply_dianmao.text.replace('\n', ' ')
         format_and_log("TASK", "宗门点卯", {'阶段': '点卯指令', '返回': log_text})
         
+        # [重构] 即使事件总线会处理，这里也保留一次调用以防万一
         if "获得了" in log_text:
             _parse_and_update_contribution(reply_dianmao.text)
         
@@ -70,7 +73,8 @@ async def trigger_dianmao_chuangong(force_run=False):
     finally:
         if sent_dianmao:
             client.unpin_message(sent_dianmao)
-            delay = settings.AUTO_DELETE_STRATEGIES['long_task']['delay_anchor']
+            # [BUG修复] 使用 .get() 安全地访问配置，提供默认值
+            delay = settings.AUTO_DELETE_STRATEGIES.get('long_task', {}).get('delay_anchor', 30)
             client._schedule_message_deletion(sent_dianmao, delay, "宗门点卯(任务链结束)")
 
 @resilient_task()

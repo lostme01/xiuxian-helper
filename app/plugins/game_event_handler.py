@@ -19,15 +19,25 @@ async def handle_game_report(event):
     my_id = str(client.me.id)
     my_username = client.me.username if client.me else None
     
-    if not (my_username and event.text and event.is_reply):
+    if not (my_username and event.text):
         return
 
-    # --- [新功能] 统一解析逻辑 ---
+    is_reply_to_me = False
+    if event.is_reply:
+        reply_to_msg = await event.get_reply_message()
+        if reply_to_msg and reply_to_msg.sender_id == client.me.id:
+            is_reply_to_me = True
+
+    is_mentioning_me = f"@{my_username}" in event.text
+    
+    if not is_reply_to_me and not is_mentioning_me:
+        return
+        
     text = event.text
     event_payload = None
 
     # 1. 万宝楼快报
-    if "【万宝楼快报】" in text and f"@{my_username}" in text:
+    if "【万宝楼快报】" in text:
         format_and_log("SYSTEM", "事件总线", {'监听到': '万宝楼快报', '用户': my_username})
         gained_items = {}
         sold_items = {}
@@ -71,10 +81,20 @@ async def handle_game_report(event):
                 "consumed_contribution": int(cost_str.replace(',', ''))
             }
             format_and_log("SYSTEM", "事件总线", {'监听到': '宗门兑换成功'})
+            
+    # 4. 点卯或传功获得贡献
+    elif "获得了" in text and "点宗门贡献" in text:
+        contrib_match = re.search(r"获得了 \*\*([\d,]+)\*\* 点宗门贡献", text)
+        if contrib_match:
+            contrib_str = contrib_match.group(1)
+            event_payload = {
+                "event_type": "CONTRIBUTION_GAINED",
+                "gained_contribution": int(contrib_str.replace(',', ''))
+            }
+            format_and_log("SYSTEM", "事件总线", {'监听到': '点卯/传功成功'})
 
     # --- 发布事件 ---
     if event_payload:
-        # 将通用信息加入 payload
         event_payload.update({
             "account_id": my_id,
             "raw_text": text
