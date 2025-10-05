@@ -90,9 +90,7 @@ async def execute_command(event):
     client = app.client
     text = event.text.strip()
     
-    # [核心修改] 添加话题ID日志记录
-    if event.is_group and event.message.reply_to and event.message.reply_to.reply_to_top_id:
-        format_and_log("DEBUG", "Topic ID Info", {'topic_id': event.message.reply_to.reply_to_top_id})
+    # [核心修改] 移除了此处多余的“彩蛋”日志
 
     used_prefix = next((p for p in settings.COMMAND_PREFIXES if text.startswith(p)), None)
     if not used_prefix: return
