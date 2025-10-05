@@ -53,7 +53,7 @@ def initialize_gemini():
 async def generate_content_with_rotation(prompt: str, model_name: str = None):
     """
     [最终版]
-    使用轮询和重试机制来生成内容，并允许动态指定模型。
+    使用轮询和重试机制来生成内容，并确保记录详细的原始错误信息。
     """
     if not _api_key_manager or _api_key_manager.key_count == 0:
         raise RuntimeError("Gemini Client 未成功初始化或未配置 API Keys。")
