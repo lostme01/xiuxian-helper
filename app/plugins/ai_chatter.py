@@ -103,21 +103,19 @@ async def ai_chat_handler(event):
     is_bot = hasattr(sender, 'bot') and sender.bot
     is_game_bot = sender_id in settings.GAME_BOT_IDS
 
-    # [核心修复] 游戏机器人的消息只用于分析情绪，绝不存入聊天记录
     if is_game_bot:
-        format_and_log("DEBUG", "AI聊天-处理", {'动作': '分析游戏事件情绪', '来源': sender_name})
+        format_and_log("DEBUG", "AI聊天-处理", {'动作': '学习并分析游戏事件情绪', '来源': sender_name})
+        human_chat_history.append(f"{sender_name} (游戏机器人): {message_text}")
         if settings.AI_CHATTER_CONFIG.get('mood_system_enabled'):
             await analyze_mood_from_game_event(message_text)
         return
     
-    # 其他机器人，不学习也不回复
     if is_bot:
         format_and_log("DEBUG", "AI聊天-忽略", {'原因': '发送者是其他Bot'}); return
 
-    # 启发式过滤，防止学习机器人格式的面板消息
-    bot_like_patterns = ['【', '】', '剩余数', '配方', ':', '***']
-    if sum(p in message_text for p in bot_like_patterns) > 3 or len(message_text.split('\n')) > 5:
-        format_and_log("DEBUG", "AI聊天-忽略", {'原因': '消息格式类似机器人/系统消息'})
+    # [核心修复] 优化启发式过滤，防止误伤真人聊天
+    if ("【" in message_text and "】" in message_text and len(message_text.split('\n')) > 3):
+        format_and_log("DEBUG", "AI聊天-忽略", {'原因': '消息格式类似机器人/系统面板'})
         return
 
     # 只有通过所有过滤的真人才会走到这里
@@ -138,7 +136,6 @@ async def ai_chat_handler(event):
     should_trigger = False
     trigger_reason = ""
 
-    # 黑名单用户发的消息也可以触发思考，但不能触发回复
     if event.sender_id in settings.AI_CHATTER_CONFIG.get('blacklist', []):
         format_and_log("DEBUG", "AI聊天-决策", {'判断': '消息来自黑名单用户'})
         if not (mentioned_me or replied_to_me):
