@@ -17,12 +17,11 @@ class LogType(Enum):
     MSG_DELETE = 5
     MSG_SENT_SELF = 6
 
-async def log_event(log_type: LogType, event, **kwargs):
+async def log_event(client, log_type: LogType, event, **kwargs):
     """
-    [最终版]
-    统一的事件日志记录器，现在会自动包含话题ID。
+    [最终修复版]
+    统一的事件日志记录器，现在直接接收客户端实例作为参数。
     """
-    client = event.client
     log_switches = settings.LOGGING_SWITCHES
     
     if log_type == LogType.CMD_SENT and log_switches.get('cmd_sent'):
@@ -43,8 +42,7 @@ async def log_event(log_type: LogType, event, **kwargs):
             '内容': event.text or "(无文本内容)"
         }
 
-        # [核心修改] 自动检测并记录话题ID
-        if event.is_group and event.message.reply_to and event.message.reply_to.reply_to_top_id:
+        if event.is_group and hasattr(event.message, 'reply_to') and event.message.reply_to and event.message.reply_to.reply_to_top_id:
             log_data['话题ID'] = event.message.reply_to.reply_to_top_id
 
         if event.is_group:

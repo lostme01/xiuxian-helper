@@ -78,13 +78,9 @@ class TelegramClient:
                         wait_time = slowmode_seconds - time_since_last_sent + random.uniform(0.5, 1.5)
                         await asyncio.sleep(wait_time)
 
-                # [核心修改] 话题模式全局逻辑
                 final_reply_to = reply_to
-                # 仅当消息是发往游戏群时，才应用话题逻辑
-                if target_group in settings.GAME_GROUP_IDS and settings.GAME_TOPIC_ID:
-                    # 如果指令本身不是一个回复，就强制将其回复到话题ID，使其进入话题
-                    if not reply_to:
-                        final_reply_to = settings.GAME_TOPIC_ID
+                if target_group in settings.GAME_GROUP_IDS and settings.GAME_TOPIC_ID and not reply_to:
+                    final_reply_to = settings.GAME_TOPIC_ID
 
                 sent_message = None
                 for _ in range(2):
@@ -96,7 +92,8 @@ class TelegramClient:
                         await asyncio.sleep(e.seconds + random.uniform(0.5, 1.5))
                 
                 if sent_message:
-                    await log_event(LogType.CMD_SENT, sent_message, command=command, reply_to=final_reply_to)
+                    # [核心修复] 传递 self 实例
+                    await log_event(self, LogType.CMD_SENT, sent_message, command=command, reply_to=final_reply_to)
                     if future and not future.done():
                         future.set_result(sent_message)
                 else:
@@ -126,7 +123,9 @@ class TelegramClient:
             format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '开始发送指令', '指令': command})
             sent_message = await self._send_command_and_get_message(command, reply_to=reply_to, target_chat_id=target_chat_id)
             format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '指令已发送，开始等待回复', '消息ID': sent_message.id})
-            self.pending_req_by_id[sent_message.id] = reply_future
+            
+            self.pending_req_by_id[sent_message.id] = (reply_future, sent_message.chat_id)
+            
             reply_message = await asyncio.wait_for(reply_future, timeout=timeout)
             format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '已收到回复', '回复消息ID': reply_message.id})
             
@@ -311,18 +310,38 @@ class TelegramClient:
         await handle_trade_report(event)
 
         log_type = LogType.MSG_SENT_SELF if event.out else LogType.MSG_RECV
-        await log_event(log_type, event)
+        # [核心修复] 传递 self 实例
+        await log_event(self, log_type, event)
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         
-        is_reply_to_us = not event.out and event.is_reply and event.message.reply_to_msg_id in self.pending_req_by_id
-        if is_reply_to_us:
-            future = self.pending_req_by_id.get(event.message.reply_to_msg_id)
-            if future and not future.done():
-                await log_event(LogType.REPLY_RECV, event)
-                future.set_result(event.message)
+        if not event.out and self.pending_req_by_id:
+            if event.is_reply and event.message.reply_to_msg_id in self.pending_req_by_id:
+                future, _ = self.pending_req_by_id.pop(event.message.reply_to_msg_id)
+                if future and not future.done():
+                    # [核心修复] 传递 self 实例
+                    await log_event(self, LogType.REPLY_RECV, event)
+                    future.set_result(event.message)
+                return
+
+            elif event.sender_id in settings.GAME_BOT_IDS:
+                pending_in_chat = []
+                for msg_id, (future, chat_id) in self.pending_req_by_id.items():
+                    if chat_id == event.chat_id and not future.done():
+                        pending_in_chat.append((msg_id, future))
+                
+                if pending_in_chat:
+                    pending_in_chat.sort(key=lambda x: x[0], reverse=True)
+                    latest_msg_id, future_to_resolve = pending_in_chat[0]
+
+                    if future_to_resolve and not future_to_resolve.done():
+                        # [核心修复] 传递 self 实例
+                        await log_event(self, LogType.REPLY_RECV, event, note="智能关联")
+                        future_to_resolve.set_result(event.message)
+                        self.pending_req_by_id.pop(latest_msg_id)
 
     async def _message_edited_handler(self, event: events.MessageEdited.Event):
-        await log_event(LogType.MSG_EDIT, event)
+        # [核心修复] 传递 self 实例
+        await log_event(self, LogType.MSG_EDIT, event)
         
         future = self.pending_edit_by_id.get(event.message.id)
         if future and not future.done():
@@ -341,4 +360,5 @@ class TelegramClient:
             
         if chat_id and chat_id in all_groups:
             fake_event = type('FakeEvent', (object,), {'chat_id': chat_id})
-            await log_event(LogType.MSG_DELETE, fake_event, deleted_ids=update.messages)
+            # [核心修复] 传递 self 实例
+            await log_event(self, LogType.MSG_DELETE, fake_event, deleted_ids=update.messages)
