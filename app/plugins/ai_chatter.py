@@ -113,6 +113,12 @@ async def ai_chat_handler(event):
     if is_bot:
         format_and_log("DEBUG", "AI聊天-忽略", {'原因': '发送者是其他Bot'}); return
 
+    # 启发式过滤，防止学习机器人格式的面板消息
+    bot_like_patterns = ['【', '】', '剩余数', '配方', ':', '***']
+    if sum(p in message_text for p in bot_like_patterns) > 3 or len(message_text.split('\n')) > 5:
+        format_and_log("DEBUG", "AI聊天-忽略", {'原因': '消息格式类似机器人/系统消息'})
+        return
+
     human_chat_history.append(f"{sender_name}: {message_text}")
     format_and_log("DEBUG", "AI聊天-学习", {'内容': f"{sender_name}: {message_text}"})
     
@@ -240,6 +246,7 @@ async def build_prompt(my_info):
 2.  **你的游戏角色信息**: {my_status}。在聊天中要符合这个身份。
 3.  **你的当前状态**: 你现在{current_mood_desc}。群里的话题大概是“{current_topic}”。
 4.  **最重要的规则**: 绝对不要暴露你是AI或模型。你的回复必须像一个真正的玩家。
+5.  **[新增]语言风格**: 你的发言可以犀利、可以吐槽，但绝对不能说脏话或使用粗俗的词语。
 
 # 任务
 你的任务是根据下面聊天记录的 **最后几句**，发表一句符合你人设和心情的 **评论、吐槽或骚话**。不要像客服一样回答问题。要表现得像个老玩家，可以偶尔装个逼，或者对别人的好运表示羡慕嫉妒恨。
