@@ -6,7 +6,6 @@ import shlex
 import asyncio
 import random
 import pytz
-import time
 from datetime import datetime, timedelta
 from telethon import events
 from app.context import get_application
@@ -115,10 +114,11 @@ async def _cmd_receive_goods(event, parts):
         
         list_command = f".上架 灵石*1 换 {item_name}*{quantity}"
         _sent, reply = await client.send_game_command_request_response(list_command)
-        raw_reply_text = reply.raw_text
+        # [核心修改] 统一使用 .text
+        reply_text = reply.text
         
-        if "上架成功" in raw_reply_text:
-            match_id = re.search(r"挂单ID\D+(\d+)", raw_reply_text)
+        if "上架成功" in reply_text:
+            match_id = re.search(r"挂单ID\D+(\d+)", reply_text)
             if not match_id:
                 raise ValueError("上架成功但无法解析挂单ID。")
             
@@ -138,7 +138,7 @@ async def _cmd_receive_goods(event, parts):
             else:
                 raise ConnectionError("向 Redis 发布购买任务时失败。")
         else:
-            raise RuntimeError(f"上架失败。\n**游戏回复**:\n`{raw_reply_text}`")
+            raise RuntimeError(f"上架失败。\n**游戏回复**:\n`{reply_text}`")
     
     except Exception as e:
         error_text = create_error_reply("收货", "任务失败", details=str(e))
@@ -158,7 +158,6 @@ async def redis_message_handler(message):
                 if await handler(data):
                     return
         
-        # --- 广播指令处理 ---
         if task_type == "broadcast_command":
             if my_id == str(settings.ADMIN_USER_ID): return
             target_sect = data.get("target_sect")
@@ -170,19 +169,16 @@ async def redis_message_handler(message):
                 await app.client.send_game_command_fire_and_forget(command_to_run)
             return
 
-        # --- 非本机任务，直接忽略 ---
         if my_id != data.get("target_account_id"): return
         
         format_and_log("INFO", "Redis 任务匹配成功", {'任务类型': task_type, '详情': str(data)})
         
-        # --- 交易协同任务 ---
         if task_type == "list_item":
             payload = {k: v for k, v in data.items() if k not in ['task_type', 'target_account_id']}
             await trade_logic.execute_listing_task(**payload)
         elif task_type == "purchase_item":
             await trade_logic.execute_purchase_task(data.get("payload", {}))
         
-        # --- [新增] 全自动炼制流程 ---
         elif task_type == "crafting_material_delivered":
             session_id = data.get("session_id")
             supplier_id = data.get("supplier_id")
@@ -191,7 +187,6 @@ async def redis_message_handler(message):
                 session_data = json.loads(session_json)
                 session_data["needed_from"][supplier_id] = True
                 
-                # 检查是否所有材料都已送达
                 if all(session_data["needed_from"].values()):
                     session_data["status"] = "ready_to_craft"
                     final_craft_task = {
@@ -212,14 +207,13 @@ async def redis_message_handler(message):
                 item = session_data['item']
                 quantity = session_data['quantity']
                 
-                # 伪造一个 event 对象来调用
                 fake_event = type('FakeEvent', (object,), {
-                    'reply': app.client.send_admin_notification, # 最终结果发给管理员
+                    'reply': app.client.send_admin_notification,
                 })()
 
                 craft_parts = ["炼制物品", item, str(quantity)]
                 await execute_craft_item(fake_event, craft_parts)
-                await app.redis_db.hdel("crafting_sessions", session_id) # 清理会话
+                await app.redis_db.hdel("crafting_sessions", session_id)
 
             
     except Exception as e:
@@ -258,11 +252,7 @@ async def handle_trade_report(event):
                 await inventory_manager.add_item(item, quantity)
                 await client.send_admin_notification(f"✅ **交易售出通知 (`@{my_username}`)**\n库存已实时增加: `{item} x{quantity}`")
 
-    # 这条通用通知可以去掉，因为上面已经有更详细的通知了
-    # await client.send_admin_notification(f"ℹ️ **交易售出通知 (`@{my_username}`)**\n库存已实时更新。")
-
 
 def initialize(app):
     app.register_command("集火", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="协同", usage=HELP_TEXT_FOCUS_FIRE)
     app.register_command("收货", _cmd_receive_goods, help_text="📦 协同助手接收物品。", category="协同", usage=HELP_TEXT_RECEIVE_GOODS)
-

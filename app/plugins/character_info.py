@@ -89,7 +89,8 @@ async def trigger_update_profile():
     try:
         sent_message, initial_reply = await client.send_game_command_request_response(command)
 
-        profile_data = _parse_profile_text(initial_reply.raw_text)
+        # [核心修改] 统一使用 .text
+        profile_data = _parse_profile_text(initial_reply.text)
 
         if profile_data.get("境界"):
             final_message = initial_reply
@@ -104,12 +105,13 @@ async def trigger_update_profile():
                     raise asyncio.TimeoutError("获取初始回复后没有剩余时间等待编辑。")
                 
                 final_message = await asyncio.wait_for(edit_future, timeout=remaining_timeout)
-                profile_data = _parse_profile_text(final_message.raw_text)
+                # [核心修改] 统一使用 .text
+                profile_data = _parse_profile_text(final_message.text)
             else:
                 raise RuntimeError(f"游戏机器人返回的初始消息与预期不符: {initial_reply.text}")
 
         if not profile_data.get("境界"):
-            raise ValueError(f"无法从最终返回的信息中解析出角色数据: {getattr(final_message, 'raw_text', '无最终消息')}")
+            raise ValueError(f"无法从最终返回的信息中解析出角色数据: {getattr(final_message, 'text', '无最终消息')}")
 
         await set_state(STATE_KEY_PROFILE, profile_data)
         return _format_profile_reply(profile_data, "✅ **角色信息已更新并缓存**:")
