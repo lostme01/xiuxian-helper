@@ -23,7 +23,6 @@ async def trigger_garden_check(force_run=False):
     # [核心修复] 在任务执行前再次检查宗门配置
     if settings.SECT_NAME != __plugin_sect__:
         format_and_log("TASK", "小药园", {'阶段': '任务中止', '原因': f'宗门不匹配 (当前: {settings.SECT_NAME}, 需要: {__plugin_sect__})'})
-        # 如果任务被错误地调度了，移除它
         if scheduler.get_job(TASK_ID_GARDEN):
             scheduler.remove_job(TASK_ID_GARDEN)
         return
@@ -32,7 +31,7 @@ async def trigger_garden_check(force_run=False):
     format_and_log("TASK", "小药园", {'阶段': '任务开始', '强制执行': force_run})
 
     _sent, initial_reply = await client.send_game_command_request_response(".小药园")
-    format_and_log("TASK", "小药园", {'阶段': '获取初始状态成功', '原始返回': initial_reply.raw_text.replace('\n', ' ')})
+    format_and_log("TASK", "小药园", {'阶段': '获取初始状态成功', '原始返回': initial_reply.text.replace('\n', ' ')})
 
     initial_status = _parse_garden_status(initial_reply)
     if not initial_status:
@@ -96,8 +95,9 @@ def initialize(app):
 def _parse_garden_status(message: Message):
     GARDEN_STATUS_KEYWORDS = ['空闲', '已成熟', '灵气干涸', '害虫侵扰', '杂草横生', '生长中']
     status = {}
-    pattern = re.compile(r'\**(\d+)\s*号灵田\**\s*[:：\s]\s*(.+)')
-    for line in message.raw_text.split('\n'):
+    # [核心修改] 统一使用 .text, 并移除正则表达式中的'**'
+    pattern = re.compile(r'(\d+)\s*号灵田\s*[:：\s]\s*(.+)')
+    for line in message.text.split('\n'):
         if match := pattern.search(line):
             status[int(match.group(1))] = next((s for s in GARDEN_STATUS_KEYWORDS if s in match.group(2)), '未知')
     return status
@@ -129,5 +129,5 @@ async def _sow_seeds(client, plots_to_sow: list):
             await inventory_manager.remove_item(seed, 1)
             format_and_log("TASK", "小药园", {'阶段': '播种成功', '地块': plot_id, '种子': seed})
         else:
-             format_and_log("TASK", "小药园", {'阶段': '播种失败', '地块': plot_id, '返回': reply.raw_text}, level=logging.WARNING)
+             format_and_log("TASK", "小药园", {'阶段': '播种失败', '地块': plot_id, '返回': reply.text}, level=logging.WARNING)
         await asyncio.sleep(random.uniform(jitter_config['min'], jitter_config['max']))

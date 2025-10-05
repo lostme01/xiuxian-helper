@@ -59,13 +59,11 @@ async def _execute_resource_management():
                     amount = rule.get("amount")
                     
                     if action == "donate":
-                        # TODO: 实现更复杂的 amount 逻辑, 如 'all_excess'
                         if isinstance(amount, int):
                             command = f".宗门捐献 {item_name} {amount}"
                             task = {"task_type": "execute_game_command", "target_account_id": account_id, "command": command}
                             await trade_logic.publish_task(task)
                             format_and_log("TASK", "智能资源管理", {'决策': '执行捐献', '账户': f'...{account_id[-4:]}', '指令': command})
-                            # 为避免短时重复执行，可以考虑执行后跳出当前用户的规则检查
                             break 
 
                     elif action == "exchange":
@@ -122,7 +120,6 @@ async def _execute_knowledge_sharing():
             teacher_id = None
             for tid, tdata in all_bots_data.items():
                 if tid == student_id: continue
-                # 老师必须已学，且背包里还有多余的
                 if recipe in tdata['learned'] and tdata['inventory'].get(recipe, 0) > 0:
                     teacher_id = tid
                     break
@@ -135,7 +132,6 @@ async def _execute_knowledge_sharing():
                     '老师': f'...{teacher_id[-4:]}',
                     '知识': recipe
                 })
-                # 发起一个特殊的收货任务
                 task = {
                     "task_type": "initiate_p2p_receive", 
                     "target_account_id": student_id,
@@ -146,7 +142,6 @@ async def _execute_knowledge_sharing():
                     }
                 }
                 await trade_logic.publish_task(task)
-                # 为避免一次性触发太多交易，每次检查只处理一个
                 return
 
 # --- Redis 任务处理器扩展 ---
@@ -158,9 +153,8 @@ async def handle_auto_management_tasks(data):
     if task_type == "execute_game_command":
         command = data.get("command")
         if command:
-            # 此处可以增加更多安全检查
             await app.client.send_game_command_fire_and_forget(command)
-            return True # 表示已处理
+            return True
             
     if task_type == "initiate_p2p_receive":
         try:
@@ -168,12 +162,11 @@ async def handle_auto_management_tasks(data):
             quantity = payload["quantity"]
             executor_id = payload["executor_id"]
             
-            # 此处是 `,收货` 指令的内部逻辑复现
             list_command = f".上架 灵石*1 换 {item_name}*{quantity}"
             _sent, reply = await app.client.send_game_command_request_response(list_command)
             
-            match = re.search(r"挂单ID\D+(\d+)", reply.raw_text)
-            if "上架成功" in reply.raw_text and match:
+            match = re.search(r"挂单ID\D+(\d+)", reply.text)
+            if "上架成功" in reply.text and match:
                 item_id = match.group(1)
                 await app.inventory_manager.remove_item("灵石", 1)
                 
@@ -188,21 +181,19 @@ async def handle_auto_management_tasks(data):
                 }
                 await trade_logic.publish_task(purchase_task)
             else:
-                raise RuntimeError(f"上架失败: {reply.raw_text}")
+                raise RuntimeError(f"上架失败: {reply.text}")
         except Exception as e:
             await app.client.send_admin_notification(f"❌ 自动化知识共享失败: {e}")
         return True
     
-    return False # 表示未处理，交由其他处理器
+    return False
 
 # --- 调度器与初始化 ---
 def initialize(app):
-    # 将新的处理器添加到 app 实例上，以便 redis_message_handler 调用
     if not hasattr(app, 'extra_redis_handlers'):
         app.extra_redis_handlers = []
     app.extra_redis_handlers.append(handle_auto_management_tasks)
 
-    # 调度智能资源管理任务
     if settings.AUTO_RESOURCE_MANAGEMENT.get('enabled'):
         interval = settings.AUTO_RESOURCE_MANAGEMENT.get('interval_minutes', 120)
         scheduler.add_job(
@@ -210,10 +201,9 @@ def initialize(app):
             'interval', 
             minutes=interval, 
             id='auto_resource_management_task',
-            replace_existing=True  # [核心修复]
+            replace_existing=True
         )
     
-    # 调度自动化知识共享任务
     if settings.AUTO_KNOWLEDGE_SHARING.get('enabled'):
         interval = settings.AUTO_KNOWLEDGE_SHARING.get('interval_minutes', 240)
         scheduler.add_job(
@@ -221,5 +211,5 @@ def initialize(app):
             'interval', 
             minutes=interval, 
             id='auto_knowledge_sharing_task',
-            replace_existing=True  # [核心修复]
+            replace_existing=True
         )

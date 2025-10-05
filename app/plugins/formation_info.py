@@ -60,7 +60,7 @@ async def trigger_update_formation(force_run=False):
     try:
         _sent, reply = await client.send_game_command_request_response(command)
         
-        formation_data = _parse_formation_text(reply.raw_text)
+        formation_data = _parse_formation_text(reply.text)
 
         if formation_data is None:
             if force_run:

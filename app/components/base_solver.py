@@ -31,7 +31,6 @@ class BaseExamSolver:
         prompt = f"请根据以下单项选择题，仅返回正确答案的字母（A, B, C, D）。不要解释。\n问题：{question}\nA. {options.get('A','')}\nB. {options.get('B','')}\nC. {options.get('C','')}\nD. {options.get('D','')}"
         format_and_log("TASK", f"{self.log_module_name}: AI作答", {'状态': '开始请求Gemini'})
         try:
-            # 此处调用没有指定 model_name，将使用默认的 Pro 模型
             response = await gemini_client.generate_content_with_rotation(prompt)
             answer = re.sub(r'[^A-D]', '', response.text.upper())
             if answer in options:
@@ -60,21 +59,36 @@ class BaseExamSolver:
 
     async def handler(self, event):
         if not self.me: return
-        message, text = event.message, event.message.raw_text
+        
+        # [核心修复] 全局统一使用 .text
+        message = event.message
+        text = message.text
+        
         if not text or not all(keyword in text for keyword in self.keywords):
             return
+            
         format_and_log("TASK", f"流程启动: {self.log_module_name}", {'状态': '关键词匹配成功', '消息ID': event.id})
+        
         my_display_name = get_display_name(self.me)
         is_our_turn = f"@{self.me.username}" in text or f"@{my_display_name}" in text
-        parsed_data, question, options = self.extract_question_options(message), None, None
-        if parsed_data:
-            question, options = parsed_data.get("question"), parsed_data.get("options")
+        
+        parsed_data = self.extract_question_options(message)
+        question = parsed_data.get("question")
+        options = parsed_data.get("options")
+        
         if not (question and options and len(options) >= 4):
             format_and_log("TASK", f"流程中止: {self.log_module_name}", {'原因': '未能解析出有效的题目和选项', '原始文本': text}, level=logging.WARNING)
-            await self.client.send_admin_notification(f"⚠️ **解析失败通知 ({self.log_module_name})**\n\n无法从此条消息中完整解析出题目和四个选项，请检查原文并优化解析函数：\n-----------------\n`{text}`")
+            await self.client.send_admin_notification(
+                f"⚠️ **解析失败通知 ({self.log_module_name})**\n\n"
+                f"无法从此条消息中完整解析出题目和四个选项，请检查原文并优化解析函数：\n"
+                f"-----------------\n`{text}`"
+            )
             return
+            
         format_and_log("TASK", f"{self.log_module_name}: 题目解析", {'问题': question, '选项': str(options), '是否轮到我': is_our_turn})
+        
         answer_letter, source = self._find_answer_in_db(question, options), "本地知识库"
+        
         if not answer_letter:
             source = "Gemini AI"
             answer_letter = await self._ask_gemini(question, options)
@@ -82,14 +96,18 @@ class BaseExamSolver:
                 self._save_answer_to_db(question, options[answer_letter])
             else:
                 format_and_log("TASK", f"流程中止: {self.log_module_name}", {'原因': 'AI未能返回有效答案'})
+
         if is_our_turn and answer_letter:
             log_data = {'回复内容': f".作答 {answer_letter}", '答案来源': source}
             format_and_log("TASK", f"{self.log_module_name}: 准备作答", log_data)
+            
             delay_config = settings.EXAM_SOLVER_CONFIG.get('reply_delay', {'min': 5, 'max': 15})
             delay = random.randint(delay_config['min'], delay_config['max'])
             await asyncio.sleep(delay)
+            
             await event.message.reply(f".作答 {answer_letter}")
             format_and_log("TASK", f"流程完成: {self.log_module_name}", {'状态': '已发送作答指令', '延时': f'{delay}秒'})
+            
         elif is_our_turn:
             format_and_log("TASK", f"流程完成: {self.log_module_name}", {'状态': '放弃作答', '原因': '无法确定最终答案'})
         else:

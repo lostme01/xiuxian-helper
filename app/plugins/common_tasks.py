@@ -46,8 +46,7 @@ async def trigger_dianmao_chuangong(force_run=False):
         if "获得了" in log_text:
             _parse_and_update_contribution(reply_dianmao.text)
         
-        # [核心修复] 改为智能循环，直到次数用尽
-        max_attempts = 5 # 安全保险，防止无限循环
+        max_attempts = 5
         for i in range(max_attempts):
             _sent_cg, reply_cg = await client.send_game_command_request_response(
                 ".宗门传功", 
@@ -60,7 +59,6 @@ async def trigger_dianmao_chuangong(force_run=False):
             if "获得了" in log_text_cg:
                 _parse_and_update_contribution(reply_cg.text)
 
-            # 检查所有可能的完成/失败标志
             if "过于频繁" in log_text_cg or "已经指点" in log_text_cg or "今日次数已用完" in log_text_cg:
                 format_and_log("TASK", "宗门点卯", {'阶段': '传功已达上限', '详情': '任务链正常结束。'})
                 if force_run: return "✅ **[立即点卯]** 任务已成功执行完毕（点卯和传功均已完成）。"

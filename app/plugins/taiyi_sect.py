@@ -18,14 +18,6 @@ TASK_ID_YINDAO = 'taiyi_yindao_task'
 STATE_KEY_YINDAO = "taiyi_yindao"
 
 async def trigger_yindao(force_run=False):
-    # [核心修复] 在任务执行前再次检查宗门配置
-    if settings.SECT_NAME != __plugin_sect__:
-        format_and_log("TASK", "太一门引道", {'阶段': '任务中止', '原因': f'宗门不匹配 (当前: {settings.SECT_NAME}, 需要: {__plugin_sect__})'})
-        # 如果任务被错误地调度了，移除它
-        if scheduler.get_job(TASK_ID_YINDAO):
-            scheduler.remove_job(TASK_ID_YINDAO)
-        return
-
     client = get_application().client
     format_and_log("TASK", "太一门引道", {'阶段': '任务开始', '强制执行': force_run})
     beijing_tz = pytz.timezone(settings.TZ)
@@ -35,7 +27,7 @@ async def trigger_yindao(force_run=False):
     
     try:
         _sent, reply = await client.send_game_command_request_response(yindao_command)
-        format_and_log("TASK", "太一门引道", {'阶段': '获取状态成功', '原始返回': reply.raw_text.replace('\n', ' ')})
+        format_and_log("TASK", "太一门引道", {'阶段': '获取状态成功', '原始返回': reply.text.replace('\n', ' ')})
         
         cooldown = parse_cooldown_time(reply)
         if not cooldown and "获得" in reply.text and "神识" in reply.text:

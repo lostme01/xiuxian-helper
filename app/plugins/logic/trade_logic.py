@@ -83,10 +83,10 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
     
     try:
         _sent, reply = await app.client.send_game_command_request_response(command)
-        raw_reply_text = reply.raw_text
+        reply_text = reply.text
         
-        if "上架成功！" in raw_reply_text:
-            match_id = re.search(r"挂单ID\D+(\d+)", raw_reply_text)
+        if "上架成功！" in reply_text:
+            match_id = re.search(r"挂单ID\D+(\d+)", reply_text)
             if not match_id:
                 raise ValueError("上架成功但无法解析挂单ID。")
             
@@ -112,8 +112,8 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
             await publish_task(result_task)
 
         else:
-            format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '游戏返回上架失败信息', '回复': raw_reply_text})
-            await app.client.send_admin_notification(f"❌ **集火-上架失败**\n助手号上架 `{kwargs['item_to_sell_name']}` 时，游戏返回错误:\n`{raw_reply_text}`")
+            format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '游戏返回上架失败信息', '回复': reply_text})
+            await app.client.send_admin_notification(f"❌ **集火-上架失败**\n助手号上架 `{kwargs['item_to_sell_name']}` 时，游戏返回错误:\n`{reply_text}`")
 
     except Exception as e:
         await app.client.send_admin_notification(f"❌ **集火-上架异常**\n助手号上架 `{kwargs['item_to_sell_name']}` 时发生异常: `{e}`")
@@ -125,15 +125,15 @@ async def execute_unlisting_task(item_id: str, is_auto: bool = False):
     format_and_log("TASK", "下架物品", log_context)
     try:
         _sent, reply = await app.client.send_game_command_request_response(command)
-        raw_reply_text = reply.raw_text
+        reply_text = reply.text
 
-        if "成功将" in raw_reply_text and "归还至你的储物袋" in raw_reply_text:
-            match_item = re.search(r"\*\*【(.+?)】\*\*x(\d+)", raw_reply_text)
+        if "成功将" in reply_text and "归还至你的储物袋" in reply_text:
+            match_item = re.search(r"【(.+?)】x(\d+)", reply_text)
             if match_item:
                 returned_item, returned_quantity = match_item.group(1), int(match_item.group(2))
                 await inventory_manager.add_item(returned_item, returned_quantity)
         elif not is_auto:
-            await app.client.send_admin_notification(f"⚠️ **下架失败** (挂单ID: `{item_id}`)\n游戏返回: `{raw_reply_text}`")
+            await app.client.send_admin_notification(f"⚠️ **下架失败** (挂单ID: `{item_id}`)\n游戏返回: `{reply_text}`")
     
     except Exception as e:
         if not is_auto:
@@ -144,18 +144,18 @@ async def execute_purchase_task(payload: dict):
     my_id = str(app.client.me.id)
     item_id = payload.get("item_id")
     cost = payload.get("cost")
-    crafting_session_id = payload.get("crafting_session_id") # 获取会话ID
+    crafting_session_id = payload.get("crafting_session_id")
 
     command = f".购买 {item_id}"
     format_and_log("TASK", "协同任务-购买", {'阶段': '开始执行', '指令': command})
     try:
         _sent, reply = await app.client.send_game_command_request_response(command)
-        raw_reply_text = reply.raw_text
+        reply_text = reply.text
         
-        if "交易成功！" in raw_reply_text:
+        if "交易成功！" in reply_text:
             format_and_log("TASK", "协同任务-购买", {'阶段': '成功', '挂单ID': item_id})
             
-            match_gain = re.search(r"你成功购得 \*\*【(.+?)】\*\*x(\d+)", raw_reply_text)
+            match_gain = re.search(r"你成功购得 【(.+?)】x(\d+)", reply_text)
             if match_gain:
                 gained_item, gained_quantity = match_gain.group(1), int(match_gain.group(2))
                 await inventory_manager.add_item(gained_item, gained_quantity)
@@ -165,11 +165,10 @@ async def execute_purchase_task(payload: dict):
 
             await app.client.send_admin_notification(f"✅ **协同购买成功** (挂单ID: `{item_id}`)\n库存已实时更新。")
 
-            # --- [新增] 如果是炼制任务的一部分，发送送达回执 ---
             if crafting_session_id:
                 receipt_task = {
                     "task_type": "crafting_material_delivered",
-                    "target_account_id": crafting_session_id.split('_')[1], # 从session_id中解析出发起者ID
+                    "target_account_id": crafting_session_id.split('_')[1],
                     "session_id": crafting_session_id,
                     "supplier_id": my_id
                 }
@@ -178,13 +177,13 @@ async def execute_purchase_task(payload: dict):
 
         else:
             error_reason = "未知"
-            if "你还缺少" in raw_reply_text: 
+            if "你还缺少" in reply_text: 
                 error_reason = "购买方物品不足"
-            elif "已被捷足先登" in raw_reply_text: 
+            elif "已被捷足先登" in reply_text: 
                 error_reason = "已被抢购"
             
-            format_and_log("WARNING", "协同任务-购买", {'阶段': '失败', '挂单ID': item_id, '原因': error_reason, '回复': raw_reply_text})
-            await app.client.send_admin_notification(f"⚠️ **协同购买失败** (挂单ID: `{item_id}`)\n**原因**: `{error_reason}`\n**游戏回复**:\n`{raw_reply_text}`")
+            format_and_log("WARNING", "协同任务-购买", {'阶段': '失败', '挂单ID': item_id, '原因': error_reason, '回复': reply_text})
+            await app.client.send_admin_notification(f"⚠️ **协同购买失败** (挂单ID: `{item_id}`)\n**原因**: `{error_reason}`\n**游戏回复**:\n`{reply_text}`")
             
     except Exception as e:
         await app.client.send_admin_notification(f"❌ **协同购买异常** (挂单ID: `{item_id}`)\n发生异常: `{e}`。")

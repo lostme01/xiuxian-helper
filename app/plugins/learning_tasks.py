@@ -24,7 +24,7 @@ async def trigger_learn_recipes(force_run=False):
 
     _sent_msg, reply = await client.send_game_command_request_response(".炼制")
     
-    learned_recipes = re.findall(r'\(来自:\s*([^)]*(?:图纸|丹方))\)', reply.raw_text)
+    learned_recipes = re.findall(r'\(来自:\s*([^)]*(?:图纸|丹方))\)', reply.text)
     await set_state(STATE_KEY_LEARNED, learned_recipes)
     format_and_log("TASK", "自动学习", {'阶段': '解析已学列表', '数量': len(learned_recipes)})
     
@@ -76,7 +76,7 @@ async def check_learn_recipes_startup():
             hours=random.randint(4, 6), 
             id=TASK_ID_LEARN_RECIPES, 
             next_run_time=datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=5),
-            replace_existing=True # [核心修复]
+            replace_existing=True
         )
 
 def initialize(app):
