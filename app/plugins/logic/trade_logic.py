@@ -155,7 +155,6 @@ async def execute_purchase_task(payload: dict):
         if "交易成功" in reply_text:
             format_and_log("TASK", "协同任务-购买", {'阶段': '成功', '挂单ID': item_id})
             
-            # [核心修复] 修正正则表达式以匹配 **x数量** 的格式
             match_gain = re.search(r"你成功购得 \*\*【(.+?)】\*\*x\*\*(\d+)\*\*", reply_text)
             if match_gain:
                 gained_item, gained_quantity = match_gain.group(1), int(match_gain.group(2))
@@ -166,6 +165,7 @@ async def execute_purchase_task(payload: dict):
 
             await app.client.send_admin_notification(f"✅ **协同购买成功** (挂单ID: `{item_id}`)\n库存已实时更新。")
 
+            # [核心修复] 发送“送达回执”
             if crafting_session_id:
                 receipt_task = {
                     "task_type": "crafting_material_delivered",

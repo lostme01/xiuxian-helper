@@ -178,6 +178,7 @@ async def redis_message_handler(message):
         elif task_type == "purchase_item":
             await trade_logic.execute_purchase_task(data.get("payload", {}))
         
+        # [核心修复] 处理“送达回执”和“最终炼制”任务
         elif task_type == "crafting_material_delivered":
             session_id = data.get("session_id")
             supplier_id = data.get("supplier_id")
@@ -213,16 +214,11 @@ async def redis_message_handler(message):
                 craft_parts = ["炼制物品", item, str(quantity)]
                 await execute_craft_item(fake_event, craft_parts)
                 await app.redis_db.hdel("crafting_sessions", session_id)
-
             
     except Exception as e:
         format_and_log("ERROR", "Redis 任务处理器", {'状态': '执行异常', '错误': str(e)})
 
 async def handle_trade_report(event):
-    """
-    [最终修复版]
-    处理万宝楼快报，统一解析单件或多件物品。
-    """
     app = get_application()
     client = app.client
     if not (client.me and client.me.username and event.text):
@@ -237,8 +233,6 @@ async def handle_trade_report(event):
     gain_match = re.search(r"你获得了：(.+)", event.text)
     if gain_match:
         gained_items_str = gain_match.group(1).strip().rstrip('。')
-        
-        # 使用 findall 一次性解析所有物品，无论是一个还是多个
         gained_items = re.findall(r"【(.+?)】x([\d,]+)", gained_items_str)
         
         if gained_items:
