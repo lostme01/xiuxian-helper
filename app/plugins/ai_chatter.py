@@ -114,7 +114,7 @@ async def ai_chat_handler(event):
         format_and_log("DEBUG", "AI聊天-忽略", {'原因': '是指令消息'})
         return
 
-    # [核心修复] 启发式过滤，防止学习机器人格式的面板消息
+    # [启发式过滤] 防止学习机器人格式的面板消息
     bot_like_patterns = ['【', '】', '剩余数', '配方', ':', '***']
     if sum(p in message_text for p in bot_like_patterns) > 3 or len(message_text.split('\n')) > 5:
         format_and_log("DEBUG", "AI聊天-忽略", {'原因': '消息格式类似机器人/系统消息'})

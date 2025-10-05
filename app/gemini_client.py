@@ -52,12 +52,11 @@ def initialize_gemini():
 
 async def generate_content_with_rotation(prompt: str):
     """
-    使用轮询和重试机制来生成内容。
+    使用轮询和重试机制来生成内容，并增加了超时处理。
     """
     if not _api_key_manager or _api_key_manager.key_count == 0:
         raise RuntimeError("Gemini Client 未成功初始化或未配置 API Keys。")
 
-    # [核心修改] 添加详细的Prompt日志
     format_and_log("DEBUG", "Gemini-请求", {'Prompt': prompt})
 
     keys_to_try = _api_key_manager.get_all_keys_with_start_index()
@@ -67,13 +66,26 @@ async def generate_content_with_rotation(prompt: str):
             genai.configure(api_key=selected_key)
             model = genai.GenerativeModel(model_name=_model_name, tool_config=_tool_config)
             
-            response = await model.generate_content_async(prompt)
+            # [核心修复] 为API调用增加30秒超时
+            response = await asyncio.wait_for(
+                model.generate_content_async(prompt),
+                timeout=30.0
+            )
             
-            # [核心修改] 添加详细的响应日志
             format_and_log("DEBUG", "Gemini-响应", {'Key索引': current_index, '原始返回': response.text})
             
             _api_key_manager._current_key_index = (current_index + 1) % _api_key_manager.key_count
             return response
+        
+        # [核心修复] 捕获并记录超时错误
+        except asyncio.TimeoutError:
+            format_and_log("WARNING", "Gemini-API调用失败", {
+                'Key索引': current_index,
+                '错误类型': 'TimeoutError',
+                '错误详情': 'API请求在30秒内未返回结果',
+                '操作': '将自动尝试下一个Key...'
+            })
+            continue # 超时后继续尝试下一个Key
 
         except Exception as e:
             format_and_log("WARNING", "Gemini-API调用失败", {
