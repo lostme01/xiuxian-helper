@@ -27,6 +27,9 @@ HELP_TEXT_AI_CONFIG = """🤖 **AI 聊天一级配置**
   `,AI聊天配置 回复概率 <0到1的小数>`
   *设置AI发言时采用“回复”形式的概率。*
 
+  `,AI聊天配置 心情 <心情>`
+  *手动设置AI当前心情。可用: `高兴`, `平常`, `烦躁`*
+
   `,AI聊天配置 查看黑名单`
 
   `,AI聊天配置 黑名单添加 <用户ID>`
@@ -36,18 +39,28 @@ HELP_TEXT_AI_CONFIG = """🤖 **AI 聊天一级配置**
 
 async def _cmd_ai_chatter_config(event, parts):
     client = get_application().client
+    app = get_application()
     
     if len(parts) == 1:
         cfg = settings.AI_CHATTER_CONFIG
         is_enabled = "✅ 开启" if cfg.get('enabled') else "❌ 关闭"
+        mood_enabled = "✅ 开启" if cfg.get('mood_system_enabled') else "❌ 关闭"
+        topic_enabled = "✅ 开启" if cfg.get('topic_system_enabled') else "❌ 关闭"
         prob = cfg.get('random_chat_probability', 0.05) * 100
         inter_prob = cfg.get('inter_assistant_reply_probability', 0.3) * 100
         reply_ratio = cfg.get('reply_vs_send_ratio', 0.8) * 100
         blacklist_count = len(cfg.get('blacklist', []))
         
+        current_mood = "未知 (Redis未连接)"
+        if app.redis_db:
+            mood_key = await app.redis_db.get("ai_chatter:mood")
+            current_mood = {"happy": "😊 高兴", "annoyed": "😠 烦躁"}.get(mood_key, "😐 平常")
+
         status_text = (
             f"🤖 **AI 聊天当前配置**\n\n"
             f"- **总开关**: {is_enabled}\n"
+            f"- **情感系统**: {mood_enabled} (当前: {current_mood})\n"
+            f"- **话题系统**: {topic_enabled}\n"
             f"- **随机闲聊概率**: `{prob:.1f}%`\n"
             f"- **助手互聊概率**: `{inter_prob:.1f}%`\n"
             f"- **回复形式概率**: `{reply_ratio:.1f}%`\n"
@@ -73,7 +86,6 @@ async def _cmd_ai_chatter_config(event, parts):
         await client.reply_to_admin(event, msg)
         return
     
-    # 统一处理概率设置
     if sub_command in ["概率", "互聊概率", "回复概率"] and len(parts) > 2:
         try:
             new_prob = float(parts[2])
@@ -96,6 +108,16 @@ async def _cmd_ai_chatter_config(event, parts):
             await client.reply_to_admin(event, f"❌ **参数错误**: `{sub_command}` 的值必须是0到1之间的小数，例如 `0.05`。")
         return
 
+    if sub_command == "心情" and len(parts) > 2:
+        mood_map = {"高兴": "happy", "平常": "neutral", "烦躁": "annoyed"}
+        mood_input = parts[2]
+        if app.redis_db and mood_input in mood_map:
+            await app.redis_db.set("ai_chatter:mood", mood_map[mood_input], ex=1800)
+            await client.reply_to_admin(event, f"✅ AI 当前心情已手动设置为: **{mood_input}**")
+        else:
+            await client.reply_to_admin(event, "❌ **设置失败**: 无效的心情或Redis未连接。可用: `高兴`, `平常`, `烦躁`")
+        return
+        
     if sub_command == "查看黑名单":
         blacklist = settings.AI_CHATTER_CONFIG.get('blacklist', [])
         if not blacklist:
@@ -148,7 +170,6 @@ async def _cmd_ai_chatter_config(event, parts):
         return
 
     await client.reply_to_admin(event, create_error_reply("AI聊天配置", "未知的子命令或参数错误", usage_text=HELP_TEXT_AI_CONFIG))
-
 
 def initialize(app):
     app.register_command(

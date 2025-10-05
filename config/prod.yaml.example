@@ -55,9 +55,19 @@ ai_chatter:
   random_chat_probability: 0.05
   # [新增] 助手之间互相回复的概率 (0.3 = 30%)，防止聊嗨了刷屏
   inter_assistant_reply_probability: 0.3
+  # [新增] AI发言时，采用“回复”形式的概率
+  reply_vs_send_ratio: 0.8
   # [新增] 聊天黑名单，AI不会学习和回复这些ID的用户
   blacklist:
     - 111111111 # 示例用户ID 1
+  
+  # [新增] 高级功能开关
+  mood_system_enabled: true
+  topic_system_enabled: true
+  
+  # [新增] 用于判断情绪的关键词
+  positive_keywords: ["成功", "获得", "完成", "升级", "提升", "领悟"]
+  negative_keywords: ["失败", "不足", "无法", "上限", "被抢"]
 
 # ----------------- 周期任务开关 -----------------
 task_switches:
