@@ -31,6 +31,7 @@ class BaseExamSolver:
         prompt = f"请根据以下单项选择题，仅返回正确答案的字母（A, B, C, D）。不要解释。\n问题：{question}\nA. {options.get('A','')}\nB. {options.get('B','')}\nC. {options.get('C','')}\nD. {options.get('D','')}"
         format_and_log("TASK", f"{self.log_module_name}: AI作答", {'状态': '开始请求Gemini'})
         try:
+            # 此处调用没有指定 model_name，将使用默认的 Pro 模型
             response = await gemini_client.generate_content_with_rotation(prompt)
             answer = re.sub(r'[^A-D]', '', response.text.upper())
             if answer in options:
@@ -40,7 +41,6 @@ class BaseExamSolver:
                 format_and_log("TASK", f"{self.log_module_name}: AI作答", {'状态': '失败', '原因': 'AI返回了无效选项', '原始回复': response.text}, level=logging.WARNING)
                 return None
         except Exception as e:
-            # [核心修复] 记录完整的原始错误信息
             format_and_log("TASK", f"{self.log_module_name}: AI作答", {'状态': '异常', '完整错误': repr(e)}, level=logging.ERROR)
             return None
 

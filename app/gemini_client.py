@@ -25,14 +25,14 @@ class ApiKeyManager:
         return len(self._api_keys)
 
 _api_key_manager = None
-_model_name = None 
+_default_model_name = None 
 _tool_config = {"function_calling_config": {"mode": "none"}}
 
 def initialize_gemini():
     """从配置加载API Keys并准备轮询"""
-    global _api_key_manager, _model_name
+    global _api_key_manager, _default_model_name
     
-    _model_name = settings.GEMINI_MODEL_NAME
+    _default_model_name = settings.GEMINI_MODEL_NAME
     keys = settings.EXAM_SOLVER_CONFIG.get('gemini_api_keys', [])
 
     if not keys or not isinstance(keys, list):
@@ -45,20 +45,21 @@ def initialize_gemini():
         '组件': 'Gemini Client', 
         '状态': '初始化成功',
         '可用Key数量': _api_key_manager.key_count,
-        '选用模型': _model_name
+        '默认模型 (答题用)': _default_model_name
     })
     return True
 
 
-async def generate_content_with_rotation(prompt: str):
+async def generate_content_with_rotation(prompt: str, model_name: str = None):
     """
-    [最终修复版]
-    使用轮询和重试机制，并确保记录详细的原始错误信息。
+    [最终版]
+    使用轮询和重试机制来生成内容，并允许动态指定模型。
     """
     if not _api_key_manager or _api_key_manager.key_count == 0:
         raise RuntimeError("Gemini Client 未成功初始化或未配置 API Keys。")
 
-    format_and_log("DEBUG", "Gemini-请求", {'Prompt': prompt})
+    final_model_name = model_name or _default_model_name
+    format_and_log("DEBUG", "Gemini-请求", {'模型': final_model_name, 'Prompt': prompt})
 
     keys_to_try = _api_key_manager.get_all_keys_with_start_index()
     
@@ -67,7 +68,7 @@ async def generate_content_with_rotation(prompt: str):
     for selected_key, current_index in keys_to_try:
         try:
             genai.configure(api_key=selected_key)
-            model = genai.GenerativeModel(model_name=_model_name, tool_config=_tool_config)
+            model = genai.GenerativeModel(model_name=final_model_name, tool_config=_tool_config)
             
             response = await asyncio.wait_for(
                 model.generate_content_async(prompt),
@@ -80,12 +81,11 @@ async def generate_content_with_rotation(prompt: str):
             return response
         
         except Exception as e:
-            # [核心修复] 捕获完整的、原始的错误信息
             error_repr = repr(e)
             failed_reasons.append(f"Key[{current_index}]: {error_repr}")
 
             format_and_log(
-                "ERROR", # 使用ERROR级别，确保日志一定会被打印
+                "ERROR",
                 "Gemini-单次调用失败", {
                     'Key索引': current_index,
                     '原始错误': error_repr,
@@ -94,6 +94,5 @@ async def generate_content_with_rotation(prompt: str):
             )
             await asyncio.sleep(1)
 
-    # [核心修复] 在最终的异常中包含所有失败原因
     all_errors = "\n".join(failed_reasons)
     raise RuntimeError(f"所有API Key均调用失败。\n\n详细原因:\n{all_errors}")
