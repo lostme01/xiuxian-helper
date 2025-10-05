@@ -20,6 +20,14 @@ TASK_ID_GARDEN = 'huangfeng_garden_task'
 
 @resilient_task()
 async def trigger_garden_check(force_run=False):
+    # [核心修复] 在任务执行前再次检查宗门配置
+    if settings.SECT_NAME != __plugin_sect__:
+        format_and_log("TASK", "小药园", {'阶段': '任务中止', '原因': f'宗门不匹配 (当前: {settings.SECT_NAME}, 需要: {__plugin_sect__})'})
+        # 如果任务被错误地调度了，移除它
+        if scheduler.get_job(TASK_ID_GARDEN):
+            scheduler.remove_job(TASK_ID_GARDEN)
+        return
+
     client = get_application().client
     format_and_log("TASK", "小药园", {'阶段': '任务开始', '强制执行': force_run})
 
@@ -73,7 +81,7 @@ async def check_garden_startup():
             minutes=random.randint(30, 60), 
             id=TASK_ID_GARDEN, 
             next_run_time=datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=1),
-            replace_existing=True  # [核心修复]
+            replace_existing=True
         )
 
 def initialize(app):

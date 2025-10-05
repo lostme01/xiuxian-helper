@@ -11,6 +11,7 @@ from app.utils import parse_cooldown_time, parse_inventory_text, resilient_task
 from config import settings
 from app.logger import format_and_log
 from app.task_scheduler import scheduler
+from telethon.tl.functions.account import UpdateStatusRequest
 from app.telegram_client import CommandTimeoutError
 from app.context import get_application
 from app.inventory_manager import inventory_manager
@@ -45,21 +46,22 @@ async def trigger_dianmao_chuangong(force_run=False):
         if "获得了" in log_text:
             _parse_and_update_contribution(reply_dianmao.text)
         
-        chuangong_commands = [".宗门传功"] * 3
-        
-        for i, command in enumerate(chuangong_commands):
+        # [核心修复] 改为智能循环，直到次数用尽
+        max_attempts = 5 # 安全保险，防止无限循环
+        for i in range(max_attempts):
             _sent_cg, reply_cg = await client.send_game_command_request_response(
-                command, 
+                ".宗门传功", 
                 reply_to=sent_dianmao.id
             )
             
             log_text_cg = reply_cg.text.replace('\n', ' ')
-            format_and_log("TASK", "宗门点卯", {'阶段': f'传功 {i+1}/{len(chuangong_commands)}', '返回': log_text_cg})
+            format_and_log("TASK", "宗门点卯", {'阶段': f'传功尝试 {i+1}/{max_attempts}', '返回': log_text_cg})
 
             if "获得了" in log_text_cg:
                 _parse_and_update_contribution(reply_cg.text)
 
-            if "过于频繁" in log_text_cg:
+            # 检查所有可能的完成/失败标志
+            if "过于频繁" in log_text_cg or "已经指点" in log_text_cg or "今日次数已用完" in log_text_cg:
                 format_and_log("TASK", "宗门点卯", {'阶段': '传功已达上限', '详情': '任务链正常结束。'})
                 if force_run: return "✅ **[立即点卯]** 任务已成功执行完毕（点卯和传功均已完成）。"
                 return
