@@ -86,31 +86,30 @@ async def ai_chat_handler(event):
     sender = await event.get_sender()
     message_text = event.text.strip()
     
-    # --- [最终版] 消息处理 ---
-    
-    # 1. 预处理与学习
     is_bot = hasattr(sender, 'bot') and sender.bot
     is_game_bot = event.sender_id in settings.GAME_BOT_IDS
 
     if event.sender_id == my_info.id or not message_text: return
     if message_text.startswith('.') or any(message_text.startswith(p) for p in settings.COMMAND_PREFIXES): return
     
-    # 如果是游戏机器人，只分析情绪，不学习，不触发
     if is_game_bot:
         if settings.AI_CHATTER_CONFIG.get('mood_system_enabled'):
             await analyze_mood_from_game_event(message_text)
         return
         
-    # 如果是其他机器人，直接忽略
     if is_bot: return
 
-    # 只有真人玩家的消息才会走到这里，存入历史记录
+    # [核心修复] 使用正确的变量名 human_chat_history
     sender_name = getattr(sender, 'first_name', '未知用户')
-    chat_history.append(f"{sender_name}: {message_text}")
+    human_chat_history.append(f"{sender_name}: {message_text}")
     
-    # 2. 触发决策
     assistant_ids = await _get_all_assistant_ids()
     is_from_assistant = event.sender_id in assistant_ids
+
+    # 黑名单检查现在只用于行为决策，而不是学习
+    blacklist = settings.AI_CHATTER_CONFIG.get('blacklist', [])
+    if event.sender_id in blacklist:
+        return
 
     mentioned_me = f"@{my_info.username}" in message_text if my_info.username else False
     replied_to_me = False
@@ -146,7 +145,6 @@ async def ai_chat_handler(event):
     if not should_trigger:
         return
 
-    # 3. 执行与出口拦截
     try:
         prompt = await build_prompt(my_info)
         
@@ -155,14 +153,6 @@ async def ai_chat_handler(event):
         reply_text = response.text.strip().replace('"', '')
 
         if reply_text:
-            # --- [核心修复] 出口拦截 ---
-            # 在发送前，最后检查一次触发消息的来源是否在黑名单中
-            blacklist = settings.AI_CHATTER_CONFIG.get('blacklist', [])
-            if event.sender_id in blacklist:
-                format_and_log("TASK", "AI聊天", {'状态': '回复中止', '原因': f'消息来源({event.sender_id})在黑名单中'})
-                return
-
-            # --- 模拟真人行为 ---
             await app.client.client(SetTypingRequest(peer=event.chat_id, action=SendMessageTypingAction()))
             await asyncio.sleep(random.uniform(2, 5))
             
@@ -192,7 +182,7 @@ async def analyze_mood_from_game_event(text: str):
         new_mood = "annoyed"
     
     if new_mood:
-        await app.redis_db.set(MOOD_KEY, new_mood, ex=1800) # 心情持续30分钟
+        await app.redis_db.set(MOOD_KEY, new_mood, ex=1800)
         format_and_log("DEBUG", "AI聊天-情绪更新", {'新心情': new_mood, '来源': text})
 
 async def build_prompt(my_info):
