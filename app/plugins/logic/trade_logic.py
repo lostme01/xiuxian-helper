@@ -85,7 +85,7 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
         _sent, reply = await app.client.send_game_command_request_response(command)
         reply_text = reply.text
         
-        if "上架成功！" in reply_text:
+        if "上架成功" in reply_text:
             match_id = re.search(r"挂单ID\D+(\d+)", reply_text)
             if not match_id:
                 raise ValueError("上架成功但无法解析挂单ID。")
@@ -128,7 +128,7 @@ async def execute_unlisting_task(item_id: str, is_auto: bool = False):
         reply_text = reply.text
 
         if "成功将" in reply_text and "归还至你的储物袋" in reply_text:
-            match_item = re.search(r"【(.+?)】x(\d+)", reply_text)
+            match_item = re.search(r"\*\*【(.+?)】x(\d+)\*\*", reply_text)
             if match_item:
                 returned_item, returned_quantity = match_item.group(1), int(match_item.group(2))
                 await inventory_manager.add_item(returned_item, returned_quantity)
@@ -152,10 +152,11 @@ async def execute_purchase_task(payload: dict):
         _sent, reply = await app.client.send_game_command_request_response(command)
         reply_text = reply.text
         
-        if "交易成功！" in reply_text:
+        if "交易成功" in reply_text:
             format_and_log("TASK", "协同任务-购买", {'阶段': '成功', '挂单ID': item_id})
             
-            match_gain = re.search(r"你成功购得 【(.+?)】x(\d+)", reply_text)
+            # [核心修复] 修正正则表达式以匹配 **x数量** 的格式
+            match_gain = re.search(r"你成功购得 \*\*【(.+?)】\*\*x\*\*(\d+)\*\*", reply_text)
             if match_gain:
                 gained_item, gained_quantity = match_gain.group(1), int(match_gain.group(2))
                 await inventory_manager.add_item(gained_item, gained_quantity)

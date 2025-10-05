@@ -66,6 +66,7 @@ async def _internal_craft_gather(event, parts):
                 list_command = f".上架 灵石*1 换 {materials_str}"
                 _sent, reply = await client.send_game_command_request_response(list_command)
                 
+                # [核心修复] 统一使用 .text
                 match = re.search(r"挂单ID\D+(\d+)", reply.text)
                 if "上架成功" in reply.text and match:
                     listing_id = match.group(1)
@@ -110,4 +111,3 @@ async def _cmd_admin_craft_gather(event, parts):
 
 def initialize(app):
     app.register_command("管理炼制", _cmd_admin_craft_gather, help_text="🛠️ [Admin] 协同助手凑材料炼制物品。", category="协同", usage=HELP_TEXT_CRAFT_GATHER)
-

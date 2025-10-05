@@ -18,7 +18,6 @@ async def _execute_resource_management():
     app = get_application()
     my_id = str(app.client.me.id)
     
-    # 该任务只应在主控账号上运行以避免重复决策
     if my_id != str(settings.ADMIN_USER_ID):
         return
 
@@ -28,7 +27,6 @@ async def _execute_resource_management():
     if not rules:
         return
 
-    # 获取所有助手的当前状态
     all_states = {}
     keys_found = [key async for key in app.redis_db.scan_iter("tg_helper:task_states:*")]
     for key in keys_found:
@@ -45,7 +43,6 @@ async def _execute_resource_management():
                 item_name = rule.get("item")
                 item_count = inv.get(item_name, 0)
                 
-                # 创建一个安全的表达式求值器
                 aeval = Interpreter(usersyms={"contribution": contrib, "item": item_count})
                 
                 condition_met = False
@@ -90,7 +87,6 @@ async def _execute_knowledge_sharing():
 
     format_and_log("TASK", "知识共享", {'阶段': '开始扫描'})
 
-    # 1. 收集全网信息
     all_bots_data = {}
     all_known_recipes = set()
     keys_found = [key async for key in app.redis_db.scan_iter("tg_helper:task_states:*")]
@@ -106,7 +102,6 @@ async def _execute_knowledge_sharing():
 
     blacklist = set(settings.AUTO_KNOWLEDGE_SHARING.get('blacklist', []))
     
-    # 2. 寻找学习机会
     for student_id, student_data in all_bots_data.items():
         needed_recipes = (all_known_recipes - student_data['learned']) - blacklist
         
@@ -116,7 +111,6 @@ async def _execute_knowledge_sharing():
         format_and_log("DEBUG", "知识共享", {'发现需求': f'账户 ...{student_id[-4:]} 需要 {len(needed_recipes)} 个配方'})
 
         for recipe in needed_recipes:
-            # 3. 寻找老师
             teacher_id = None
             for tid, tdata in all_bots_data.items():
                 if tid == student_id: continue
@@ -124,7 +118,6 @@ async def _execute_knowledge_sharing():
                     teacher_id = tid
                     break
             
-            # 4. 发起求学交易
             if teacher_id:
                 format_and_log("TASK", "知识共享", {
                     '决策': '发起知识转移',
@@ -165,6 +158,7 @@ async def handle_auto_management_tasks(data):
             list_command = f".上架 灵石*1 换 {item_name}*{quantity}"
             _sent, reply = await app.client.send_game_command_request_response(list_command)
             
+            # [核心修复] 统一使用 .text
             match = re.search(r"挂单ID\D+(\d+)", reply.text)
             if "上架成功" in reply.text and match:
                 item_id = match.group(1)

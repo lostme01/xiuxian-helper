@@ -23,13 +23,15 @@ def _parse_formation_text(text: str) -> dict | None:
     learned_formations = []
     active_formation = None
 
-    learned_match = re.search(r"已掌握的阵法:\s*\n(.*?)\n\n", text, re.DOTALL)
+    # [核心修复] 使用更精确的正则表达式匹配 **加粗** 的标题
+    learned_match = re.search(r"\*\*已掌握的阵法:\*\*\s*\n(.*?)\n\n", text, re.DOTALL)
     if learned_match:
         content = learned_match.group(1).strip()
         if "尚未学习" not in content:
             learned_formations = re.findall(r"【([^】]+)】", content)
 
-    active_match = re.search(r"当前激活的防护阵:\s*\n\s*-\s*(.*)", text)
+    # [核心修复] 使用更精确的正则表达式匹配 **加粗** 的标题
+    active_match = re.search(r"\*\*当前激活的防护阵:\*\*\s*\n\s*-\s*(.*)", text)
     if active_match:
         content = active_match.group(1).strip()
         if content != "无":

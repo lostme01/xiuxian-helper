@@ -14,16 +14,17 @@ from app.utils import create_error_reply
 
 STATE_KEY_PROFILE = "character_profile"
 
+# [核心修复] 恢复正则表达式对'**'的匹配，以精确处理.text中的Markdown
 PROFILE_PATTERN = re.compile(
-    r"@(?P<user>\w+)\**\s+的天命玉牒\s*"
-    r"(?:[*\s]*称号[*\s]*: *【(?P<title>[^】]*)】)?\s*"
-    r"[*\s]*宗门[*\s]*: *【(?P<sect>[^】]*)】\s*"
-    r"(?:[*\s]*道号[*\s]*: *(?P<dao_name>.+?))?\s*"
-    r"(?:[*\s]*灵根[*\s]*: *(?P<root>.+?))?\s*"
-    r"[*\s]*境界[*\s]*: *(?P<realm>.+?)\s*"
-    r"[*\s]*修为[*\s]*: *(?P<exp_cur>\d+) */ *(?P<exp_max>\d+)\s*"
-    r"[*\s]*丹毒[*\s]*: *(-?\d+) *点\s*"
-    r"[*\s]*杀戮[*\s]*: *(?P<kills>\d+) *人",
+    r"\*\*@(?P<user>[\w\d]+)\*\*\s*的天命玉牒\s*"
+    r"(?:称号\s*:\s*【(?P<title>[^】]*)】\s*)?"
+    r"宗门\s*:\s*【(?P<sect>[^】]*)】\s*"
+    r"(?:道号\s*:\s*(?P<dao_name>.+?)\s*\n)?"
+    r"(?:灵根\s*:\s*(?P<root>.+?)\s*\n)?"
+    r"境界\s*:\s*(?P<realm>.+?)\s*"
+    r"修为\s*:\s*(?P<exp_cur>\d+)\s*/\s*(?P<exp_max>\d+)\s*"
+    r"丹毒\s*:\s*(?P<pill_poison>-?\d+)\s*点\s*"
+    r"杀戮\s*:\s*(?P<kills>\d+)\s*人",
     re.S
 )
 
@@ -32,97 +33,72 @@ def _parse_profile_text(text: str) -> dict:
     if not match:
         return {}
 
-    raw_profile = {k: v.strip() if v else v for k, v in match.groupdict().items()}
-    raw_profile['pill_poison'] = match.group(match.lastindex)
+    profile = {k: v.strip() if v else v for k, v in match.groupdict().items()}
     
-    profile = {
-        "user": raw_profile.get("user"),
-        "称号": raw_profile.get("title"),
-        "宗门": raw_profile.get("sect"),
-        "道号": raw_profile.get("dao_name"),
-        "灵根": raw_profile.get("root"),
-        "境界": raw_profile.get("realm"),
-        "当前修为": raw_profile.get("exp_cur"),
-        "修为上限": raw_profile.get("exp_max"),
-        "丹毒": f"{raw_profile.get('pill_poison')} 点",
-        "杀戮": f"{raw_profile.get('kills')} 人",
-    }
-
-    for key in ["当前修为", "修为上限"]:
+    # 将字符串数字转换为整数
+    for key in ["当前修为", "修为上限", "丹毒", "杀戮"]:
+        new_key = key.replace("当前", "")
         if profile.get(key):
             try:
-                profile[key] = int(profile[key])
+                profile[new_key] = int(profile[key])
             except (ValueError, TypeError):
                 pass
-            
+            del profile[key]
+
     return profile
 
 def _format_profile_reply(profile_data: dict, title: str) -> str:
-    display_map = {
-        "user": "用户", "称号": "称号", "宗门": "宗门", "道号": "道号",
-        "灵根": "灵根", "境界": "境界", "当前修为": "修为", "修为上限": "上限",
-        "丹毒": "丹毒", "杀戮": "杀戮"
-    }
+    display_map = [
+        ("称号", "称号"), ("道号", "道号"), ("宗门", "宗门"), 
+        ("境界", "境界"), ("修为", "修为"), ("灵根", "灵根"),
+        ("丹毒", "丹毒"), ("杀戮", "杀戮")
+    ]
     
     lines = [title]
-    for key, display_name in display_map.items():
+    for key, display_name in display_map:
         if key in profile_data and profile_data[key] is not None:
             value = profile_data[key]
-            if key == '当前修为':
+            if key == '修为' and '修为上限' in profile_data:
                 upper_limit = profile_data.get('修为上限', 'N/A')
-                lines.append(f"- **{display_name}**：`{value} / {upper_limit}`")
-            elif key != '修为上限':
-                 lines.append(f"- **{display_name}**：`{value}`")
+                lines.append(f"- **{display_name}**: `{value} / {upper_limit}`")
+            else:
+                 lines.append(f"- **{display_name}**: `{value}`")
 
     return "\n".join(lines)
 
 
-async def trigger_update_profile():
+async def trigger_update_profile(force_run=False):
     app = get_application()
     client = app.client
     command = ".我的灵根"
     
-    sent_message = None
-    initial_reply = None
-    final_message = None
-
     try:
-        sent_message, initial_reply = await client.send_game_command_request_response(command)
+        _sent, final_message = await client.send_and_wait_for_edit(
+            command,
+            initial_reply_pattern=r"正在查询.*的天命玉牒"
+        )
 
-        # [核心修改] 统一使用 .text
-        profile_data = _parse_profile_text(initial_reply.text)
-
-        if profile_data.get("境界"):
-            final_message = initial_reply
-        else:
-            initial_reply_pattern = r"正.*?在.*?查.*?询.*?的.*?天.*?命.*?玉.*?牒"
-            if re.search(initial_reply_pattern, initial_reply.text):
-                edit_future = asyncio.Future()
-                client.pending_edit_by_id[initial_reply.id] = edit_future
-                
-                remaining_timeout = settings.COMMAND_TIMEOUT - (datetime.now(pytz.utc) - sent_message.date).total_seconds()
-                if remaining_timeout <= 0:
-                    raise asyncio.TimeoutError("获取初始回复后没有剩余时间等待编辑。")
-                
-                final_message = await asyncio.wait_for(edit_future, timeout=remaining_timeout)
-                # [核心修改] 统一使用 .text
-                profile_data = _parse_profile_text(final_message.text)
-            else:
-                raise RuntimeError(f"游戏机器人返回的初始消息与预期不符: {initial_reply.text}")
+        profile_data = _parse_profile_text(final_message.text)
 
         if not profile_data.get("境界"):
             raise ValueError(f"无法从最终返回的信息中解析出角色数据: {getattr(final_message, 'text', '无最终消息')}")
 
         await set_state(STATE_KEY_PROFILE, profile_data)
-        return _format_profile_reply(profile_data, "✅ **角色信息已更新并缓存**:")
+        
+        if force_run:
+            return _format_profile_reply(profile_data, "✅ **角色信息已更新并缓存**:")
 
     except (CommandTimeoutError, asyncio.TimeoutError) as e:
-        raise CommandTimeoutError(f"等待游戏机器人响应或更新信息超时(超过 {settings.COMMAND_TIMEOUT} 秒)。") from e
+        error_msg = f"等待游戏机器人响应或更新信息超时(超过 {settings.COMMAND_TIMEOUT} 秒)。"
+        if force_run:
+            return create_error_reply("我的灵根", "游戏指令超时", details=error_msg)
+        else:
+            raise CommandTimeoutError(error_msg) from e
     except Exception as e:
-        raise e
-    finally:
-        if initial_reply:
-            client.pending_edit_by_id.pop(initial_reply.id, None)
+        if force_run:
+            return create_error_reply("我的灵根", "任务执行异常", details=str(e))
+        else:
+            raise e
 
 
 async def _cmd_query_profile(event, parts):
@@ -134,30 +110,14 @@ async def _cmd_query_profile(event, parts):
 
     client.pin_message(progress_message)
     
-    final_text = ""
+    final_text = await trigger_update_profile(force_run=True)
+    
+    client.unpin_message(progress_message)
     try:
-        final_text = await trigger_update_profile()
-
-    except CommandTimeoutError as e:
-        final_text = create_error_reply(
-            command_name="我的灵根",
-            reason="等待游戏机器人响应超时",
-            details=str(e)
-        )
-    except Exception as e:
-        final_text = create_error_reply(
-            command_name="我的灵根",
-            reason="发生意外错误",
-            details=str(e)
-        )
-    finally:
-        client.unpin_message(progress_message)
-        try:
-            await client._cancel_message_deletion(progress_message)
-            edited_message = await progress_message.edit(final_text)
-            client._schedule_message_deletion(edited_message, settings.AUTO_DELETE.get('delay_admin_command'), "角色查询结果")
-        except MessageEditTimeExpiredError:
-            await client.reply_to_admin(event, final_text)
+        await client._cancel_message_deletion(progress_message)
+        await progress_message.edit(final_text)
+    except MessageEditTimeExpiredError:
+        await client.reply_to_admin(event, final_text)
 
 
 async def _cmd_view_cached_profile(event, parts):

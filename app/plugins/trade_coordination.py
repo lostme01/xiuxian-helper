@@ -114,7 +114,6 @@ async def _cmd_receive_goods(event, parts):
         
         list_command = f".上架 灵石*1 换 {item_name}*{quantity}"
         _sent, reply = await client.send_game_command_request_response(list_command)
-        # [核心修改] 统一使用 .text
         reply_text = reply.text
         
         if "上架成功" in reply_text:
@@ -220,6 +219,10 @@ async def redis_message_handler(message):
         format_and_log("ERROR", "Redis 任务处理器", {'状态': '执行异常', '错误': str(e)})
 
 async def handle_trade_report(event):
+    """
+    [最终修复版]
+    处理万宝楼快报，统一解析单件或多件物品。
+    """
     app = get_application()
     client = app.client
     if not (client.me and client.me.username and event.text):
@@ -234,6 +237,8 @@ async def handle_trade_report(event):
     gain_match = re.search(r"你获得了：(.+)", event.text)
     if gain_match:
         gained_items_str = gain_match.group(1).strip().rstrip('。')
+        
+        # 使用 findall 一次性解析所有物品，无论是一个还是多个
         gained_items = re.findall(r"【(.+?)】x([\d,]+)", gained_items_str)
         
         if gained_items:
@@ -244,14 +249,6 @@ async def handle_trade_report(event):
                 update_details.append(f"`{item} x{quantity}`")
             
             await client.send_admin_notification(f"✅ **交易售出通知 (`@{my_username}`)**\n库存已实时增加: {', '.join(update_details)}")
-        else:
-            single_gain_match = re.search(r"你获得了：【(.+?)】x([\d,]+)", event.text)
-            if single_gain_match:
-                item, quantity_str = single_gain_match.groups()
-                quantity = int(quantity_str.replace(',', ''))
-                await inventory_manager.add_item(item, quantity)
-                await client.send_admin_notification(f"✅ **交易售出通知 (`@{my_username}`)**\n库存已实时增加: `{item} x{quantity}`")
-
 
 def initialize(app):
     app.register_command("集火", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="协同", usage=HELP_TEXT_FOCUS_FIRE)

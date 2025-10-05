@@ -20,7 +20,6 @@ TASK_ID_GARDEN = 'huangfeng_garden_task'
 
 @resilient_task()
 async def trigger_garden_check(force_run=False):
-    # [核心修复] 在任务执行前再次检查宗门配置
     if settings.SECT_NAME != __plugin_sect__:
         format_and_log("TASK", "小药园", {'阶段': '任务中止', '原因': f'宗门不匹配 (当前: {settings.SECT_NAME}, 需要: {__plugin_sect__})'})
         if scheduler.get_job(TASK_ID_GARDEN):
@@ -95,11 +94,15 @@ def initialize(app):
 def _parse_garden_status(message: Message):
     GARDEN_STATUS_KEYWORDS = ['空闲', '已成熟', '灵气干涸', '害虫侵扰', '杂草横生', '生长中']
     status = {}
-    # [核心修改] 统一使用 .text, 并移除正则表达式中的'**'
-    pattern = re.compile(r'(\d+)\s*号灵田\s*[:：\s]\s*(.+)')
+    # [核心修复] 使用新的、更精确的正则表达式
+    pattern = re.compile(r'\*\*(\d+)号灵田\*\*:\s*.*?\s*-\s*(.+)')
     for line in message.text.split('\n'):
         if match := pattern.search(line):
-            status[int(match.group(1))] = next((s for s in GARDEN_STATUS_KEYWORDS if s in match.group(2)), '未知')
+            plot_id = int(match.group(1))
+            full_status_text = match.group(2)
+            # 通过关键词查找来确定最终状态，自动忽略表情和剩余时间
+            plot_status = next((s for s in GARDEN_STATUS_KEYWORDS if s in full_status_text), '未知')
+            status[plot_id] = plot_status
     return status
 
 def _find_seed_to_sow(inventory):

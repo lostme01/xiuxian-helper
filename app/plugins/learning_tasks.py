@@ -24,6 +24,7 @@ async def trigger_learn_recipes(force_run=False):
 
     _sent_msg, reply = await client.send_game_command_request_response(".炼制")
     
+    # [核心修复] 统一使用 .text
     learned_recipes = re.findall(r'\(来自:\s*([^)]*(?:图纸|丹方))\)', reply.text)
     await set_state(STATE_KEY_LEARNED, learned_recipes)
     format_and_log("TASK", "自动学习", {'阶段': '解析已学列表', '数量': len(learned_recipes)})

@@ -100,15 +100,20 @@ async def trigger_chuang_ta(force_run=False):
     format_and_log("TASK", "自动闯塔", {'阶段': '任务开始', '强制执行': force_run})
     
     try:
-        _sent, final_reply = await client.send_and_wait_for_edit(".闯塔", initial_reply_pattern=r"踏入了古塔")
+        # [核心修改] 使用更精确的初始回复模板
+        _sent, final_reply = await client.send_and_wait_for_edit(".闯塔", initial_reply_pattern=r"踏入了古塔的第")
         
         if "【试炼古塔 - 战报】" in final_reply.text and "总收获" in final_reply.text:
-            gain_match = re.search(r"获得了【(.+?)】x([\d,]+)", final_reply.text)
-            if gain_match:
-                item, quantity_str = gain_match.groups()
-                quantity = int(quantity_str.replace(',', ''))
-                await inventory_manager.add_item(item, quantity)
-                format_and_log("TASK", "自动闯塔", {'阶段': '成功', '奖励已入库': f'{item} x{quantity}'})
+            # [核心修改] 使用 findall 捕获所有奖励
+            gained_items = re.findall(r"获得了【(.+?)】x([\d,]+)", final_reply.text)
+            
+            if gained_items:
+                log_details = []
+                for item, quantity_str in gained_items:
+                    quantity = int(quantity_str.replace(',', ''))
+                    await inventory_manager.add_item(item, quantity)
+                    log_details.append(f"{item} x{quantity}")
+                format_and_log("TASK", "自动闯塔", {'阶段': '成功', '奖励已入库': ', '.join(log_details)})
             else:
                 format_and_log("TASK", "自动闯塔", {'阶段': '完成', '详情': '本次闯塔无物品奖励。'})
         else:
