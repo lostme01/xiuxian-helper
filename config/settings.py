@@ -107,7 +107,15 @@ GAME_COMMANDS = _merge_config('game_commands', { 'taiyi_yindao': '.引道 水' }
 HUANGFENG_VALLEY_CONFIG = config.get('huangfeng_valley', {})
 TAIYI_SECT_CONFIG = config.get('taiyi_sect', {})
 EXAM_SOLVER_CONFIG = config.get('exam_solver', {})
-AI_CHATTER_CONFIG = config.get('ai_chatter', {})
+# [核心修改] 为AI聊天配置添加新选项
+AI_CHATTER_CONFIG = _merge_config('ai_chatter', {
+    'enabled': False,
+    'personality_prompt': '你是一名游戏玩家。',
+    'random_chat_probability': 0.05,
+    'inter_assistant_reply_probability': 0.3, # 助手间回复的概率
+    'reply_vs_send_ratio': 0.8, # 回复和直接发送的比例
+    'blacklist': []
+})
 XUANGU_EXAM_CONFIG = config.get('xuangu_exam_solver', {'enabled': False})
 TIANJI_EXAM_CONFIG = config.get('tianji_exam_solver', {'enabled': False})
 LOG_ROTATION_CONFIG = config.get('log_rotation', {'max_bytes': 1048576, 'backup_count': 9})

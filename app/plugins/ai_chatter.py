@@ -2,6 +2,7 @@
 import asyncio
 import random
 import re
+import time
 from collections import deque
 from telethon import events
 from telethon.tl.functions.messages import SetTypingRequest
@@ -12,10 +13,54 @@ from app.logger import format_and_log
 from config import settings
 from app import gemini_client
 from app.state_manager import get_state
+from app.task_scheduler import scheduler
 
-# --- 全局变量 ---
-chat_history = deque(maxlen=20) 
+# --- 全局变量与常量 ---
+human_chat_history = deque(maxlen=30) 
 last_random_chat_time = 0
+_assistant_ids_cache = None
+_assistant_ids_cache_time = 0
+
+MOOD_KEY = "ai_chatter:mood"
+TOPIC_KEY = "ai_chatter:topic"
+MOODS = {"happy": "心情不错", "neutral": "心情一般", "annoyed": "有点烦躁"}
+
+async def _get_all_assistant_ids():
+    """获取并缓存所有友方助手的ID列表"""
+    global _assistant_ids_cache, _assistant_ids_cache_time
+    now = time.time()
+    if _assistant_ids_cache is None or (now - _assistant_ids_cache_time > 300):
+        app = get_application()
+        if not app.redis_db:
+            _assistant_ids_cache = []
+            return []
+            
+        keys_found = [key async for key in app.redis_db.scan_iter("tg_helper:task_states:*")]
+        _assistant_ids_cache = [int(key.split(':')[-1]) for key in keys_found]
+        _assistant_ids_cache_time = now
+    return _assistant_ids_cache
+
+async def summarize_topic_task():
+    """定时任务，总结近期聊天话题"""
+    if not settings.AI_CHATTER_CONFIG.get('topic_system_enabled'):
+        return
+
+    app = get_application()
+    if not app.redis_db or len(human_chat_history) < 5:
+        return
+
+    format_and_log("TASK", "AI聊天-话题总结", {'状态': '开始'})
+    context = "\n".join(human_chat_history)
+    prompt = f"请用一句话高度概括以下聊天记录的核心主题。如果没有明确主题，就回答“闲聊”。\n\n{context}"
+
+    try:
+        response = await gemini_client.generate_content_with_rotation(prompt)
+        topic = response.text.strip().replace('"', '')
+        await app.redis_db.set(TOPIC_KEY, topic, ex=3600)
+        format_and_log("TASK", "AI聊天-话题总结", {'状态': '成功', '话题': topic})
+    except Exception as e:
+        format_and_log("ERROR", "AI聊天-话题总结", {'状态': '异常', '错误': str(e)})
+
 
 def initialize(app):
     """初始化AI聊天插件"""
@@ -26,6 +71,10 @@ def initialize(app):
     client.client.on(events.NewMessage(incoming=True, chats=settings.GAME_GROUP_IDS))(
         lambda event: ai_chat_handler(event)
     )
+    
+    if settings.AI_CHATTER_CONFIG.get('topic_system_enabled'):
+        scheduler.add_job(summarize_topic_task, 'interval', minutes=10, id='ai_chatter_topic_task', replace_existing=True)
+
     format_and_log("SYSTEM", "插件加载", {'模块': 'ai_chatter', '状态': '成功'})
 
 async def ai_chat_handler(event):
@@ -37,65 +86,118 @@ async def ai_chat_handler(event):
     sender = await event.get_sender()
     message_text = event.text.strip()
     
-    # --- [核心修复] 过滤规则 ---
-    # 1. 忽略自己、空消息
-    if event.sender_id == my_info.id or not message_text:
+    # --- [最终版] 消息处理 ---
+    
+    # 1. 预处理与学习
+    is_bot = hasattr(sender, 'bot') and sender.bot
+    is_game_bot = event.sender_id in settings.GAME_BOT_IDS
+
+    if event.sender_id == my_info.id or not message_text: return
+    if message_text.startswith('.') or any(message_text.startswith(p) for p in settings.COMMAND_PREFIXES): return
+    
+    # 如果是游戏机器人，只分析情绪，不学习，不触发
+    if is_game_bot:
+        if settings.AI_CHATTER_CONFIG.get('mood_system_enabled'):
+            await analyze_mood_from_game_event(message_text)
         return
         
-    # 2. 忽略所有机器人（在访问.bot前先检查是否存在该属性）
-    is_bot = hasattr(sender, 'bot') and sender.bot
-    if is_bot:
-        return
+    # 如果是其他机器人，直接忽略
+    if is_bot: return
 
-    # 3. 忽略来自游戏机器人配置列表中的ID
-    if settings.GAME_BOT_IDS and event.sender_id in settings.GAME_BOT_IDS:
-        return
-
-    # 4. 忽略聊天黑名单中的用户
-    blacklist = settings.AI_CHATTER_CONFIG.get('blacklist', [])
-    if event.sender_id in blacklist:
-        return
-
-    # 5. 忽略游戏指令和助手指令
-    if message_text.startswith('.') or any(message_text.startswith(p) for p in settings.COMMAND_PREFIXES):
-        return
-
+    # 只有真人玩家的消息才会走到这里，存入历史记录
     sender_name = getattr(sender, 'first_name', '未知用户')
     chat_history.append(f"{sender_name}: {message_text}")
     
-    # --- 触发条件判断 ---
+    # 2. 触发决策
+    assistant_ids = await _get_all_assistant_ids()
+    is_from_assistant = event.sender_id in assistant_ids
+
     mentioned_me = f"@{my_info.username}" in message_text if my_info.username else False
-    random_chat_prob = settings.AI_CHATTER_CONFIG.get('random_chat_probability', 0.05)
-    should_random_chat = random.random() < random_chat_prob
-    
-    global last_random_chat_time
-    is_cooled_down = (asyncio.get_running_loop().time() - last_random_chat_time) > 120 # 2分钟冷却
+    replied_to_me = False
+    if event.is_reply:
+        reply_to_msg = await event.get_reply_message()
+        if reply_to_msg and reply_to_msg.sender_id == my_info.id:
+            replied_to_me = True
 
-    if not (mentioned_me or (should_random_chat and is_cooled_down)):
-        return
+    should_trigger = False
+    trigger_reason = ""
+
+    if is_from_assistant:
+        if mentioned_me or replied_to_me:
+            inter_reply_prob = settings.AI_CHATTER_CONFIG.get('inter_assistant_reply_probability', 0.3)
+            if random.random() < inter_reply_prob:
+                should_trigger = True
+                trigger_reason = "助手间互动"
+    else:
+        random_chat_prob = settings.AI_CHATTER_CONFIG.get('random_chat_probability', 0.05)
+        should_random_chat = random.random() < random_chat_prob
         
-    if should_random_chat and is_cooled_down:
-        last_random_chat_time = asyncio.get_running_loop().time()
+        global last_random_chat_time
+        is_cooled_down = (time.time() - last_random_chat_time) > 120
 
+        if mentioned_me or replied_to_me:
+            should_trigger = True
+            trigger_reason = "被@或回复"
+        elif should_random_chat and is_cooled_down:
+            should_trigger = True
+            trigger_reason = "随机闲聊"
+            last_random_chat_time = time.time()
+
+    if not should_trigger:
+        return
+
+    # 3. 执行与出口拦截
     try:
         prompt = await build_prompt(my_info)
         
-        format_and_log("TASK", "AI聊天", {'状态': '触发成功', '原因': '@提及' if mentioned_me else '随机闲聊'})
+        format_and_log("TASK", "AI聊天", {'状态': '触发成功', '原因': trigger_reason})
         response = await gemini_client.generate_content_with_rotation(prompt)
         reply_text = response.text.strip().replace('"', '')
 
         if reply_text:
+            # --- [核心修复] 出口拦截 ---
+            # 在发送前，最后检查一次触发消息的来源是否在黑名单中
+            blacklist = settings.AI_CHATTER_CONFIG.get('blacklist', [])
+            if event.sender_id in blacklist:
+                format_and_log("TASK", "AI聊天", {'状态': '回复中止', '原因': f'消息来源({event.sender_id})在黑名单中'})
+                return
+
+            # --- 模拟真人行为 ---
             await app.client.client(SetTypingRequest(peer=event.chat_id, action=SendMessageTypingAction()))
             await asyncio.sleep(random.uniform(2, 5))
             
-            await event.reply(reply_text)
+            reply_ratio = settings.AI_CHATTER_CONFIG.get('reply_vs_send_ratio', 0.8)
+            if replied_to_me or mentioned_me or random.random() < reply_ratio:
+                await event.reply(reply_text)
+            else:
+                await app.client.client.send_message(event.chat_id, reply_text)
+
             format_and_log("TASK", "AI聊天", {'状态': '回复成功', '内容': reply_text})
 
     except Exception as e:
         format_and_log("ERROR", "AI聊天", {'状态': '生成回复时异常', '错误': str(e)})
 
+async def analyze_mood_from_game_event(text: str):
+    """从游戏事件中分析情绪变化"""
+    app = get_application()
+    if not app.redis_db: return
+
+    positive_keywords = settings.AI_CHATTER_CONFIG.get('positive_keywords', [])
+    negative_keywords = settings.AI_CHATTER_CONFIG.get('negative_keywords', [])
+    
+    new_mood = None
+    if any(kw in text for kw in positive_keywords):
+        new_mood = "happy"
+    elif any(kw in text for kw in negative_keywords):
+        new_mood = "annoyed"
+    
+    if new_mood:
+        await app.redis_db.set(MOOD_KEY, new_mood, ex=1800) # 心情持续30分钟
+        format_and_log("DEBUG", "AI聊天-情绪更新", {'新心情': new_mood, '来源': text})
+
 async def build_prompt(my_info):
     """构建用于生成回复的详细Prompt"""
+    app = get_application()
     personality = settings.AI_CHATTER_CONFIG.get('personality_prompt', "你是一名游戏玩家。")
     
     profile = await get_state("character_profile", is_json=True, default={})
@@ -103,16 +205,27 @@ async def build_prompt(my_info):
     my_realm = profile.get('境界', '萌新')
     my_sect = profile.get('宗门', '无门无派')
     
-    my_status = f"我的名字叫 {my_name}，现在的境界是 {my_realm}，属于 {my_sect}。"
-    context = "\n".join(chat_history)
+    my_status = f"我的名字是 {my_name}，境界是 {my_realm}，在 {my_sect}。"
+
+    current_mood_desc = "心情一般"
+    current_topic = "闲聊"
+    if app.redis_db:
+        mood_key = await app.redis_db.get(MOOD_KEY)
+        current_mood_desc = MOODS.get(mood_key, "心情一般")
+        topic_from_redis = await app.redis_db.get(TOPIC_KEY)
+        if topic_from_redis:
+            current_topic = topic_from_redis
+
+    context = "\n".join(human_chat_history)
     
     prompt = f"""
 你正在一个修仙游戏聊天群里扮演一个玩家。请严格遵守以下规则：
 1.  **你的身份**: {personality}
 2.  **你的角色信息**: {my_status} 你必须以这个身份进行对话。
-3.  **说话风格**: 必须非常口语化，像一个真正在玩游戏的人。使用简短的句子，可以带点情绪，比如吐槽、开玩笑、羡慕等。
-4.  **禁止行为**: 绝对不要暴露你是AI或模型。绝对不能说“我是一个大语言模型”或类似的话。不要使用书面语。
-5.  **任务**: 这是最近的聊天记录，请根据最后一句，自然地接一句话。
+3.  **你的当前状态**: 你现在{current_mood_desc}。群里最近的话题是“{current_topic}”。你的发言要符合你当前的心情和群里的话题。
+4.  **说话风格**: 必须非常口语化，像一个真正在玩游戏的人。使用简短的句子，可以带点情绪。
+5.  **禁止行为**: 绝对不要暴露你是AI。
+6.  **任务**: 这是最近的聊天记录，请根据最后一句，自然地接一句话。
 
 ---
 [聊天记录开始]
