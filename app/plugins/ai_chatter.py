@@ -114,6 +114,12 @@ async def ai_chat_handler(event):
         format_and_log("DEBUG", "AI聊天-忽略", {'原因': '是指令消息'})
         return
 
+    # [核心修复] 启发式过滤，防止学习机器人格式的面板消息
+    bot_like_patterns = ['【', '】', '剩余数', '配方', ':', '***']
+    if sum(p in message_text for p in bot_like_patterns) > 3 or len(message_text.split('\n')) > 5:
+        format_and_log("DEBUG", "AI聊天-忽略", {'原因': '消息格式类似机器人/系统消息'})
+        return
+
     # 只有通过所有过滤的真人才会走到这里
     human_chat_history.append(f"{sender_name}: {message_text}")
     format_and_log("DEBUG", "AI聊天-学习", {'内容': f"{sender_name}: {message_text}"})
@@ -141,7 +147,7 @@ async def ai_chat_handler(event):
                 trigger_reason = "助手间互动"
             else:
                 format_and_log("DEBUG", "AI聊天-忽略", {'原因': '未达到助手间互动概率'})
-                return # [核心修复] 补上 return
+                return
     else: # 来自普通玩家
         format_and_log("DEBUG", "AI聊天-决策", {'判断': '消息来自普通玩家'})
         random_chat_prob = settings.AI_CHATTER_CONFIG.get('random_chat_probability', 0.05)
@@ -159,10 +165,10 @@ async def ai_chat_handler(event):
             last_random_chat_time = time.time()
         elif not is_cooled_down:
              format_and_log("DEBUG", "AI聊天-忽略", {'原因': '随机闲聊冷却中'})
-             return # [核心修复] 补上 return
+             return
         elif not should_random_chat:
              format_and_log("DEBUG", "AI聊天-忽略", {'原因': '未达到随机闲聊概率'})
-             return # [核心修复] 补上 return
+             return
 
     if not should_trigger:
         return
