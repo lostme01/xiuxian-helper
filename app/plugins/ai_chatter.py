@@ -29,7 +29,6 @@ async def _get_all_assistant_ids():
     """获取并缓存所有友方助手的ID列表"""
     global _assistant_ids_cache, _assistant_ids_cache_time
     now = time.time()
-    # 每5分钟刷新一次缓存
     if _assistant_ids_cache is None or (now - _assistant_ids_cache_time > 300):
         app = get_application()
         if not app.redis_db:
@@ -57,7 +56,7 @@ async def summarize_topic_task():
     try:
         response = await gemini_client.generate_content_with_rotation(prompt)
         topic = response.text.strip().replace('"', '')
-        await app.redis_db.set(TOPIC_KEY, topic, ex=3600) # 话题有效期1小时
+        await app.redis_db.set(TOPIC_KEY, topic, ex=3600)
         format_and_log("TASK", "AI聊天-话题总结", {'状态': '成功', '话题': topic})
     except Exception as e:
         format_and_log("ERROR", "AI聊天-话题总结", {'状态': '异常', '错误': str(e)})
@@ -109,7 +108,7 @@ async def ai_chat_handler(event):
         format_and_log("DEBUG", "AI聊天-处理", {'动作': '分析游戏事件情绪', '来源': sender_name})
         if settings.AI_CHATTER_CONFIG.get('mood_system_enabled'):
             await analyze_mood_from_game_event(message_text)
-        return # 游戏机器人的消息只用于分析，不学习也不触发回复
+        return
         
     if message_text.startswith('.') or any(message_text.startswith(p) for p in settings.COMMAND_PREFIXES):
         format_and_log("DEBUG", "AI聊天-忽略", {'原因': '是指令消息'})
@@ -142,6 +141,7 @@ async def ai_chat_handler(event):
                 trigger_reason = "助手间互动"
             else:
                 format_and_log("DEBUG", "AI聊天-忽略", {'原因': '未达到助手间互动概率'})
+                return # [核心修复] 补上 return
     else: # 来自普通玩家
         format_and_log("DEBUG", "AI聊天-决策", {'判断': '消息来自普通玩家'})
         random_chat_prob = settings.AI_CHATTER_CONFIG.get('random_chat_probability', 0.05)
@@ -159,15 +159,16 @@ async def ai_chat_handler(event):
             last_random_chat_time = time.time()
         elif not is_cooled_down:
              format_and_log("DEBUG", "AI聊天-忽略", {'原因': '随机闲聊冷却中'})
+             return # [核心修复] 补上 return
         elif not should_random_chat:
              format_and_log("DEBUG", "AI聊天-忽略", {'原因': '未达到随机闲聊概率'})
+             return # [核心修复] 补上 return
 
     if not should_trigger:
         return
 
     # --- 执行与出口拦截 ---
     try:
-        # 在发送前，最后检查一次触发消息的来源是否在黑名单中
         blacklist = settings.AI_CHATTER_CONFIG.get('blacklist', [])
         if sender_id in blacklist:
             format_and_log("DEBUG", "AI聊天-回复中止", {'原因': f'消息来源({sender_id})在黑名单中'})
@@ -195,54 +196,40 @@ async def ai_chat_handler(event):
         format_and_log("ERROR", "AI聊天", {'状态': '生成回复时异常', '错误': str(e)})
 
 async def analyze_mood_from_game_event(text: str):
-    """从游戏事件中分析情绪变化"""
     app = get_application()
     if not app.redis_db: return
-
     positive_keywords = settings.AI_CHATTER_CONFIG.get('positive_keywords', [])
     negative_keywords = settings.AI_CHATTER_CONFIG.get('negative_keywords', [])
-    
     new_mood = None
-    if any(kw in text for kw in positive_keywords):
-        new_mood = "happy"
-    elif any(kw in text for kw in negative_keywords):
-        new_mood = "annoyed"
-    
+    if any(kw in text for kw in positive_keywords): new_mood = "happy"
+    elif any(kw in text for kw in negative_keywords): new_mood = "annoyed"
     if new_mood:
         await app.redis_db.set(MOOD_KEY, new_mood, ex=1800)
         format_and_log("DEBUG", "AI聊天-情绪更新", {'新心情': new_mood, '来源': text})
 
 async def build_prompt(my_info):
-    """构建用于生成回复的详细Prompt"""
     app = get_application()
     personality = settings.AI_CHATTER_CONFIG.get('personality_prompt', "你是一名游戏玩家。")
-    
     profile = await get_state("character_profile", is_json=True, default={})
     my_name = profile.get('道号', my_info.first_name)
     my_realm = profile.get('境界', '萌新')
     my_sect = profile.get('宗门', '无门无派')
-    
     my_status = f"我的名字是 {my_name}，境界是 {my_realm}，在 {my_sect}。"
-
-    current_mood_desc = "心情一般"
-    current_topic = "闲聊"
+    current_mood_desc, current_topic = "心情一般", "闲聊"
     if app.redis_db:
         mood_key = await app.redis_db.get(MOOD_KEY)
         current_mood_desc = MOODS.get(mood_key, "心情一般")
         topic_from_redis = await app.redis_db.get(TOPIC_KEY)
-        if topic_from_redis:
-            current_topic = topic_from_redis
-
+        if topic_from_redis: current_topic = topic_from_redis
     context = "\n".join(human_chat_history)
-    
     prompt = f"""
 你正在一个修仙游戏聊天群里扮演一个玩家。请严格遵守以下规则：
-1.  **你的身份**: {personality}
-2.  **你的角色信息**: {my_status} 你必须以这个身份进行对话。
-3.  **你的当前状态**: 你现在{current_mood_desc}。群里最近的话题是“{current_topic}”。你的发言要符合你当前的心情和群里的话题。
-4.  **说话风格**: 必须非常口语化，像一个真正在玩游戏的人。使用简短的句子，可以带点情绪。
-5.  **禁止行为**: 绝对不要暴露你是AI。
-6.  **任务**: 这是最近的聊天记录，请根据最后一句，自然地接一句话。
+1. **你的身份**: {personality}
+2. **你的角色信息**: {my_status} 你必须以这个身份进行对话。
+3. **你的当前状态**: 你现在{current_mood_desc}。群里最近的话题是“{current_topic}”。你的发言要符合你当前的心情和群里的话题。
+4. **说话风格**: 必须非常口语化，像一个真正在玩游戏的人。使用简短的句子，可以带点情绪。
+5. **禁止行为**: 绝对不要暴露你是AI。
+6. **任务**: 这是最近的聊天记录，请根据最后一句，自然地接一句话。
 
 ---
 [聊天记录开始]
