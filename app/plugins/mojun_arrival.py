@@ -5,6 +5,7 @@ from telethon import events
 from telethon.utils import get_display_name
 from config import settings
 from app.logger import format_and_log
+from app import game_adaptor
 
 def initialize(app):
     """初始化插件，在客户端登录成功后调用"""
@@ -32,7 +33,7 @@ async def mojun_handler(event, client):
     is_our_turn = f"@{me.username}" in text or f"@{my_display_name}" in text
     
     if is_our_turn:
-        REPLY_MESSAGE = ".收敛气息"
+        REPLY_MESSAGE = game_adaptor.mojun_hide_presence()
         delay = random.randint(5, 10)
         await asyncio.sleep(delay)
         await event.message.reply(REPLY_MESSAGE)

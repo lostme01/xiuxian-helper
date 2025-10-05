@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from app.context import get_application
 from app.logger import format_and_log
 from app.telegram_client import CommandTimeoutError, Message
-from app import redis_client
+from app import redis_client, game_adaptor
 from config import settings
 from app.task_scheduler import scheduler
 from app.plugins.common_tasks import update_inventory_cache
@@ -17,21 +17,22 @@ from app.inventory_manager import inventory_manager
 
 TASK_CHANNEL = "tg_helper:tasks"
 
-async def publish_task(task: dict) -> bool:
+async def publish_task(task: dict, channel: str = TASK_CHANNEL) -> bool:
+    """[升级版] 可向指定频道发布任务或事件"""
     if not redis_client.db:
-        format_and_log("ERROR", "任务发布失败", {'原因': 'Redis未连接'}, level=logging.ERROR)
+        format_and_log("ERROR", "任务/事件发布失败", {'原因': 'Redis未连接'}, level=logging.ERROR)
         return False
     try:
         payload = json.dumps(task)
-        receiver_count = await redis_client.db.publish(TASK_CHANNEL, payload)
-        log_data = {'频道': TASK_CHANNEL, '任务': task['task_type'], '接收者数量': receiver_count}
-        if receiver_count > 0:
-            format_and_log("INFO", "Redis-任务已发布", log_data)
-        else:
-            format_and_log("WARNING", "Redis-任务发布", {**log_data, '诊断': '没有任何客户端订阅此频道！'})
+        receiver_count = await redis_client.db.publish(channel, payload)
+        log_data = {'频道': channel, '任务/事件': task.get('task_type') or task.get('event_type'), '接收者数量': receiver_count}
+        
+        log_level = "INFO" if receiver_count > 0 else "DEBUG"
+        
+        format_and_log(log_level, f"Redis-发布", log_data)
         return True
     except Exception as e:
-        format_and_log("ERROR", "任务发布异常", {'错误': str(e)}, level=logging.ERROR)
+        format_and_log("ERROR", "任务/事件发布异常", {'错误': str(e)}, level=logging.ERROR)
         return False
 
 async def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) -> (str, int):
@@ -75,10 +76,13 @@ async def find_any_executor(exclude_id: str) -> str | None:
 async def execute_listing_task(requester_account_id: str, **kwargs):
     app = get_application()
     
-    sell_str = f"{kwargs['item_to_sell_name']}*{kwargs['item_to_sell_quantity']}"
-    buy_str = f"{kwargs.get('item_to_buy_name', '灵石')}*{kwargs.get('item_to_buy_quantity', 1)}"
-
-    command = f".上架 {sell_str} 换 {buy_str}"
+    # [重构] 使用 game_adaptor 生成指令
+    command = game_adaptor.list_item(
+        sell_item=kwargs['item_to_sell_name'],
+        sell_quantity=kwargs['item_to_sell_quantity'],
+        buy_item=kwargs.get('item_to_buy_name', '灵石'),
+        buy_quantity=kwargs.get('item_to_buy_quantity', 1)
+    )
     format_and_log("TASK", "集火-上架", {'阶段': '开始执行', '指令': command})
     
     try:
@@ -120,7 +124,8 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
 
 async def execute_unlisting_task(item_id: str, is_auto: bool = False):
     app = get_application()
-    command = f".下架 {item_id}"
+    # [重构] 使用 game_adaptor 生成指令
+    command = game_adaptor.unlist_item(item_id)
     log_context = {'阶段': '开始执行', '指令': command, '自动任务': is_auto}
     format_and_log("TASK", "下架物品", log_context)
     try:
@@ -146,7 +151,8 @@ async def execute_purchase_task(payload: dict):
     cost = payload.get("cost")
     crafting_session_id = payload.get("crafting_session_id")
 
-    command = f".购买 {item_id}"
+    # [重构] 使用 game_adaptor 生成指令
+    command = game_adaptor.buy_item(item_id)
     format_and_log("TASK", "协同任务-购买", {'阶段': '开始执行', '指令': command})
     try:
         _sent, reply = await app.client.send_game_command_request_response(command)
@@ -165,7 +171,6 @@ async def execute_purchase_task(payload: dict):
 
             await app.client.send_admin_notification(f"✅ **协同购买成功** (挂单ID: `{item_id}`)\n库存已实时更新。")
 
-            # [核心修复] 发送“送达回执”
             if crafting_session_id:
                 receipt_task = {
                     "task_type": "crafting_material_delivered",

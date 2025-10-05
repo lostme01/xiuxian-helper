@@ -13,6 +13,7 @@ from app.telegram_client import CommandTimeoutError
 from app.utils import send_paginated_message, create_error_reply, get_display_width
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 from app.character_stats_manager import stats_manager
+from app import game_adaptor
 
 STATE_KEY_TREASURY = "sect_treasury"
 TASK_ID_TREASURY = "sect_treasury_daily_task"
@@ -37,7 +38,7 @@ async def trigger_update_treasury(force_run=False):
     from app.logger import format_and_log
     app = get_application()
     client = app.client
-    command = ".宗门宝库"
+    command = game_adaptor.get_sect_treasury()
     format_and_log("TASK", "更新宗门宝库", {'阶段': '任务开始', '强制执行': force_run})
     try:
         _sent_message, reply_message = await client.send_game_command_request_response(command)

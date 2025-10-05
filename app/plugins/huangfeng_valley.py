@@ -14,6 +14,7 @@ from app.telegram_client import CommandTimeoutError
 from app.context import get_application
 from app.inventory_manager import inventory_manager
 from app.utils import resilient_task
+from app import game_adaptor
 
 __plugin_sect__ = '黄枫谷'
 TASK_ID_GARDEN = 'huangfeng_garden_task'
@@ -29,7 +30,7 @@ async def trigger_garden_check(force_run=False):
     client = get_application().client
     format_and_log("TASK", "小药园", {'阶段': '任务开始', '强制执行': force_run})
 
-    _sent, initial_reply = await client.send_game_command_request_response(".小药园")
+    _sent, initial_reply = await client.send_game_command_request_response(game_adaptor.huangfeng_garden())
     format_and_log("TASK", "小药园", {'阶段': '获取初始状态成功', '原始返回': initial_reply.text.replace('\n', ' ')})
 
     initial_status = _parse_garden_status(initial_reply)
@@ -44,9 +45,9 @@ async def trigger_garden_check(force_run=False):
     plots_to_sow = set(empty_plots)
 
     problems_to_handle = {
-        '灵气干涸': '.浇水',
-        '害虫侵扰': '.除虫',
-        '杂草横生': '.除草'
+        '灵气干涸': game_adaptor.huangfeng_water(),
+        '害虫侵扰': game_adaptor.huangfeng_remove_pests(),
+        '杂草横生': game_adaptor.huangfeng_weed()
     }
 
     jitter_config = settings.TASK_JITTER['huangfeng_garden']
@@ -58,7 +59,7 @@ async def trigger_garden_check(force_run=False):
 
     if matured_plots:
         format_and_log("TASK", "小药园", {'阶段': '执行采药', '目标地块': str(matured_plots)})
-        _sent_harvest, reply_harvest = await client.send_game_command_request_response(".采药")
+        _sent_harvest, reply_harvest = await client.send_game_command_request_response(game_adaptor.huangfeng_harvest())
         if "一键采药完成" in reply_harvest.text:
             format_and_log("TASK", "小药园", {'阶段': '采药成功', '详情': '已成熟地块将加入待播种列表。'})
             plots_to_sow.update(matured_plots)
@@ -94,8 +95,8 @@ def initialize(app):
 def _parse_garden_status(message: Message):
     GARDEN_STATUS_KEYWORDS = ['空闲', '已成熟', '灵气干涸', '害虫侵扰', '杂草横生', '生长中']
     status = {}
-    # [核心修复] 使用新的、更精确的正则表达式
-    pattern = re.compile(r'\*\*(\d+)号灵田\*\*:\s*.*?\s*-\s*(.+)')
+    # [BUG修复] 使用更健壮、兼容性更强的正则表达式
+    pattern = re.compile(r'(\d+)号灵田.*-\s*(.+)')
     for line in message.text.split('\n'):
         if match := pattern.search(line):
             plot_id = int(match.group(1))
@@ -127,7 +128,8 @@ async def _sow_seeds(client, plots_to_sow: list):
             break
             
         format_and_log("TASK", "小药园", {'阶段': '执行播种', '地块': plot_id, '种子': seed})
-        _sent, reply = await client.send_game_command_request_response(f".播种 {plot_id} {seed}")
+        command = game_adaptor.huangfeng_sow(plot_id, seed)
+        _sent, reply = await client.send_game_command_request_response(command)
         if "成功" in reply.text:
             await inventory_manager.remove_item(seed, 1)
             format_and_log("TASK", "小药园", {'阶段': '播种成功', '地块': plot_id, '种子': seed})

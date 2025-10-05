@@ -6,7 +6,7 @@ api_hash: '0123456789abcdef0123456789abcdef'
 # 您的Telegram用户ID，所有管理指令来源于此
 admin_user_id: 987654321
 
-# 游戏机器人/频道的ID列表，用于AI聊天时过滤其消息
+# 游戏机器人/频道的ID列表
 game_bot_ids:
   - 123456789   # 示例：一个机器人的ID
   - -1001234567890 # 示例：一个频道的ID
@@ -28,14 +28,7 @@ command_prefixes: [',', '，']
 # 时区，用于日志和任务调度
 timezone: 'Asia/Shanghai'
 
-# ----------------- AI 功能配置 -----------------
-# AI人设库，你可以在这里修改或添加自己的人设
-ai_personas:
-  老油条: '你是一个玩世不恭的修仙老油条，说话有点贱兮兮的，喜欢吐槽，偶尔也羡慕一下别人的好运气。'
-  高冷大佬: '你是一位境界高深、不苟言笑的大佬，言语非常简练，充满威严，偶尔会用一两个字指点一下群里的菜鸟。'
-  萌新师妹: '你是一个刚入门派的小师妹，什么都不懂，对一切都很好奇，喜欢问问题，看到别人出好东西会惊叹“哇，好厉害！”。'
-  好好先生: '你是一个性格温和的修士，与人为善，乐于助人，总是积极地回答别人的问题，说话很客气。'
-
+# ----------------- AI 答题配置 -----------------
 exam_solver:
   # 答题模型
   gemini_model_name: 'models/gemini-1.5-pro-latest'
@@ -51,29 +44,6 @@ xuangu_exam_solver:
 # 天机考验自动答题开关
 tianji_exam_solver:
   enabled: true
-
-# AI聊天
-ai_chatter:
-  enabled: true
-  # 当前使用的人设，可以通过,ai指令修改，无需手动编辑
-  personality_prompt: '你是一个玩世不恭的修仙老油条，说话有点贱兮兮的，喜欢吐槽，偶尔也羡慕一下别人的好运气。'
-  # 聊天模型
-  chat_model_name: 'models/gemini-1.5-flash-latest'
-  # 随机插话的概率 (0.05 = 5%)
-  random_chat_probability: 0.05
-  # 助手之间互相回复的概率 (0.3 = 30%)
-  inter_assistant_reply_probability: 0.3
-  # AI发言时，采用“回复”形式的概率
-  reply_vs_send_ratio: 0.8
-  # 聊天黑名单，AI不会回复这些ID的用户
-  blacklist:
-    - 111111111
-  # 高级功能开关
-  mood_system_enabled: true
-  topic_system_enabled: true
-  # 用于判断情绪的关键词
-  positive_keywords: ["成功", "获得", "完成", "升级", "提升", "领悟"]
-  negative_keywords: ["失败", "不足", "无法", "上限", "被抢"]
 
 # ----------------- 周期任务开关 -----------------
 task_switches:
@@ -127,6 +97,7 @@ auto_delete_strategies:
 
 trade_coordination:
   focus_fire_auto_delist: true
+  crafting_session_timeout_seconds: 300
 
 auto_resource_management:
   enabled: false
@@ -160,3 +131,13 @@ logging_switches:
   log_edits: false
   log_deletes: true
   original_log_enabled: false
+
+# ----------------- [新] 心跳与维护配置 -----------------
+heartbeat:
+  active_enabled: true                  # 主动心跳开关
+  active_interval_minutes: 10           # 主动心跳频率（分钟）
+  passive_enabled: true                 # 被动心跳（连接丢失检测）开关
+  passive_check_interval_minutes: 5     # 被动心跳的检查频率（分钟）
+  passive_threshold_minutes: 30         # 超过多少分钟无消息则报警
+  sync_enabled: true                    # 每日全量同步开关
+  sync_run_time: '04:30'                # 每日同步的执行时间

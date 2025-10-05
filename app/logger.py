@@ -28,6 +28,8 @@ LOG_CATEGORIES = [
     LogCategory("DEBUG",        "debug_log",            "调试日志"),
     LogCategory("MSG_EDIT",     "log_edits",            "消息编辑"),
     LogCategory("MSG_DELETE",   "log_deletes",          "消息删除"),
+    # [需求修改] 将描述名称更改为“原始日志”
+    LogCategory("MSG_SENT_SELF","original_log_enabled", "原始日志"),
 ]
 
 LOG_TYPES = {cat.key: cat.switch_name for cat in LOG_CATEGORIES}

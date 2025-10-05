@@ -7,7 +7,8 @@ from app.context import get_application
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply, send_paginated_message
 from app.inventory_manager import inventory_manager
-from app.plugins.logic.recipe_logic import CRAFTING_RECIPES_KEY
+# [重构] 导入新的核心逻辑函数
+from app.plugins.logic.crafting_logic import logic_execute_crafting
 
 HELP_TEXT_CRAFT_ITEM = """🛠️ **炼制物品 (带库存同步)**
 **说明**: 执行炼制操作，并在成功后自动更新内部的背包缓存，实现材料的减少和成品的增加。
@@ -27,57 +28,30 @@ async def _cmd_craft_item(event, parts):
         return
 
     item_name = ""
-    quantity_str = ""
+    quantity = 1
     if len(parts) > 2 and parts[-1].isdigit():
-        quantity_str = parts[-1]
+        quantity = int(parts[-1])
         item_name = " ".join(parts[1:-1])
     else:
         item_name = " ".join(parts[1:])
     
-    command = f".炼制 {item_name} {quantity_str}".strip()
-    
-    progress_msg = await client.reply_to_admin(event, f"⏳ 正在执行指令: `{command}`\n正在等待游戏机器人返回最终结果...")
+    progress_msg = await client.reply_to_admin(event, f"⏳ 正在准备炼制任务: `{item_name} x{quantity}`...")
+    if not progress_msg: return
     client.pin_message(progress_msg)
     
+    # [重构] 定义一个用于编辑消息的反馈处理器
+    async def feedback_handler(text):
+        try:
+            await progress_msg.edit(text)
+        except MessageEditTimeExpiredError:
+            # 如果原始消息过期，就发送一条新消息
+            await client.reply_to_admin(event, text)
+
     try:
-        _sent, final_reply = await client.send_and_wait_for_edit(
-            command,
-            initial_reply_pattern=r"你凝神静气.*最终成功率"
-        )
-        
-        # [核心修改] 统一使用 .text
-        raw_text = final_reply.text
-        
-        if "炼制结束" in raw_text and "最终获得" in raw_text:
-            await progress_msg.edit(f"✅ **炼制成功！** 正在解析产出与消耗...")
-            
-            gained_match = re.search(r"最终获得【(.+?)】x\*\*([\d,]+)\*\*", raw_text)
-            if gained_match:
-                gained_item, gained_quantity_str = gained_match.groups()
-                gained_quantity = int(gained_quantity_str.replace(',', ''))
-                await inventory_manager.add_item(gained_item, gained_quantity)
-                
-                # ... (材料扣除逻辑保持不变) ...
-
-                final_message = (
-                    f"✅ **炼制成功！**\n\n"
-                    f"**产出**: `{gained_item} x{gained_quantity}`\n\n"
-                    f"ℹ️ 背包缓存已自动更新。"
-                )
-                await progress_msg.edit(final_message)
-            else:
-                await progress_msg.edit(f"⚠️ **炼制完成，但解析产出失败。**\n请手动检查背包。\n\n**游戏回复**:\n`{raw_text}`")
-
-        else:
-            await progress_msg.edit(f"❌ **炼制失败或未收到预期回复。**\n\n**游戏回复**:\n`{raw_text}`")
-
-    except CommandTimeoutError as e:
-        error_text = create_error_reply("炼制物品", "游戏指令超时", details=str(e))
-        await progress_msg.edit(error_text)
-    except Exception as e:
-        error_text = create_error_reply("炼制物品", "执行时发生未知异常", details=str(e))
-        await progress_msg.edit(error_text)
+        # [重构] 调用核心逻辑函数
+        await logic_execute_crafting(item_name, quantity, feedback_handler)
     finally:
+        # 核心逻辑函数会处理所有反馈，这里只需要解钉
         client.unpin_message(progress_msg)
 
 

@@ -13,6 +13,7 @@ from app.telegram_client import CommandTimeoutError
 from app.context import get_application
 from app.inventory_manager import inventory_manager
 from app.utils import resilient_task
+from app import game_adaptor
 
 TASK_ID_LEARN_RECIPES = 'learn_recipes_task'
 STATE_KEY_LEARNED = "learned_recipes"
@@ -22,9 +23,8 @@ async def trigger_learn_recipes(force_run=False):
     client = get_application().client
     format_and_log("TASK", "自动学习", {'阶段': '任务开始', '强制执行': force_run})
 
-    _sent_msg, reply = await client.send_game_command_request_response(".炼制")
+    _sent_msg, reply = await client.send_game_command_request_response(game_adaptor.get_crafting_list())
     
-    # [核心修复] 统一使用 .text
     learned_recipes = re.findall(r'\(来自:\s*([^)]*(?:图纸|丹方))\)', reply.text)
     await set_state(STATE_KEY_LEARNED, learned_recipes)
     format_and_log("TASK", "自动学习", {'阶段': '解析已学列表', '数量': len(learned_recipes)})
@@ -46,7 +46,8 @@ async def trigger_learn_recipes(force_run=False):
     for recipe in recipes_to_learn:
         try:
             format_and_log("TASK", "自动学习", {'阶段': '发送学习指令', '物品': recipe})
-            _sent_learn, reply_learn = await client.send_game_command_request_response(f".学习 {recipe}", timeout=10)
+            command = game_adaptor.learn_recipe(recipe)
+            _sent_learn, reply_learn = await client.send_game_command_request_response(command, timeout=10)
             
             if "成功领悟了" in reply_learn.text:
                 match = re.search(r"消耗了【(.+?)】", reply_learn.text)

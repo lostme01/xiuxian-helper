@@ -92,7 +92,6 @@ class TelegramClient:
                         await asyncio.sleep(e.seconds + random.uniform(0.5, 1.5))
                 
                 if sent_message:
-                    # [核心修复] 传递 self 实例
                     await log_event(self, LogType.CMD_SENT, sent_message, command=command, reply_to=final_reply_to)
                     if future and not future.done():
                         future.set_result(sent_message)
@@ -167,7 +166,7 @@ class TelegramClient:
             sent_message, initial_reply = await self.send_game_command_request_response(command, timeout=timeout)
             format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '已收到初始回复', '消息ID': initial_reply.id})
 
-            if not re.search(initial_reply_pattern, initial_reply.text):
+            if not re.search(initial_reply_pattern, initial_reply.text, re.DOTALL):
                 format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '初始回复与预期模式不符，直接返回', '模式': initial_reply_pattern})
                 return sent_message, initial_reply
             
@@ -305,12 +304,7 @@ class TelegramClient:
         self._schedule_message_deletion(message, settings.AUTO_DELETE.get('delay_admin_command'), "解钉后自动清理")
 
     async def _message_handler(self, event: events.NewMessage.Event):
-        from app.plugins.trade_coordination import handle_trade_report
-        
-        await handle_trade_report(event)
-
         log_type = LogType.MSG_SENT_SELF if event.out else LogType.MSG_RECV
-        # [核心修复] 传递 self 实例
         await log_event(self, log_type, event)
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         
@@ -318,7 +312,6 @@ class TelegramClient:
             if event.is_reply and event.message.reply_to_msg_id in self.pending_req_by_id:
                 future, _ = self.pending_req_by_id.pop(event.message.reply_to_msg_id)
                 if future and not future.done():
-                    # [核心修复] 传递 self 实例
                     await log_event(self, LogType.REPLY_RECV, event)
                     future.set_result(event.message)
                 return
@@ -334,14 +327,14 @@ class TelegramClient:
                     latest_msg_id, future_to_resolve = pending_in_chat[0]
 
                     if future_to_resolve and not future_to_resolve.done():
-                        # [核心修复] 传递 self 实例
                         await log_event(self, LogType.REPLY_RECV, event, note="智能关联")
                         future_to_resolve.set_result(event.message)
                         self.pending_req_by_id.pop(latest_msg_id)
 
     async def _message_edited_handler(self, event: events.MessageEdited.Event):
-        # [核心修复] 传递 self 实例
         await log_event(self, LogType.MSG_EDIT, event)
+        # [新功能] 更新最后通信时间戳
+        self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         
         future = self.pending_edit_by_id.get(event.message.id)
         if future and not future.done():
@@ -352,6 +345,7 @@ class TelegramClient:
         if isinstance(update, UpdateDeleteChannelMessages):
             chat_id = int(f"-100{update.channel_id}")
         elif isinstance(update, UpdateDeleteMessages):
+            # 私聊或小群的删除事件，我们暂时不处理
             return
 
         all_groups = settings.GAME_GROUP_IDS + ([settings.CONTROL_GROUP_ID] if settings.CONTROL_GROUP_ID else [])
@@ -359,6 +353,7 @@ class TelegramClient:
             all_groups.append(settings.TEST_GROUP_ID)
             
         if chat_id and chat_id in all_groups:
+            # [新功能] 更新最后通信时间戳
+            self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
             fake_event = type('FakeEvent', (object,), {'chat_id': chat_id})
-            # [核心修复] 传递 self 实例
             await log_event(self, LogType.MSG_DELETE, fake_event, deleted_ids=update.messages)

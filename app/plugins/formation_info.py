@@ -12,6 +12,7 @@ from app.context import get_application
 from app.state_manager import set_state, get_state
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
+from app import game_adaptor
 
 STATE_KEY_FORMATION = "formation_info"
 TASK_ID_FORMATION_BASE = 'formation_update_task_'
@@ -23,14 +24,12 @@ def _parse_formation_text(text: str) -> dict | None:
     learned_formations = []
     active_formation = None
 
-    # [核心修复] 使用更精确的正则表达式匹配 **加粗** 的标题
     learned_match = re.search(r"\*\*已掌握的阵法:\*\*\s*\n(.*?)\n\n", text, re.DOTALL)
     if learned_match:
         content = learned_match.group(1).strip()
         if "尚未学习" not in content:
             learned_formations = re.findall(r"【([^】]+)】", content)
 
-    # [核心修复] 使用更精确的正则表达式匹配 **加粗** 的标题
     active_match = re.search(r"\*\*当前激活的防护阵:\*\*\s*\n\s*-\s*(.*)", text)
     if active_match:
         content = active_match.group(1).strip()
@@ -55,7 +54,7 @@ def _format_formation_reply(formation_data: dict, title: str) -> str:
 async def trigger_update_formation(force_run=False):
     app = get_application()
     client = app.client
-    command = ".我的阵法"
+    command = game_adaptor.get_formation_info()
     
     format_and_log("TASK", "查询阵法", {'阶段': '任务开始', '强制执行': force_run})
 

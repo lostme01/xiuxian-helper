@@ -11,10 +11,10 @@ from app.context import get_application
 from app.state_manager import set_state, get_state
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
+from app import game_adaptor
 
 STATE_KEY_PROFILE = "character_profile"
 
-# [核心修复] 恢复正则表达式对'**'的匹配，以精确处理.text中的Markdown
 PROFILE_PATTERN = re.compile(
     r"\*\*@(?P<user>[\w\d]+)\*\*\s*的天命玉牒\s*"
     r"(?:称号\s*:\s*【(?P<title>[^】]*)】\s*)?"
@@ -70,7 +70,7 @@ def _format_profile_reply(profile_data: dict, title: str) -> str:
 async def trigger_update_profile(force_run=False):
     app = get_application()
     client = app.client
-    command = ".我的灵根"
+    command = game_adaptor.get_profile()
     
     try:
         _sent, final_message = await client.send_and_wait_for_edit(

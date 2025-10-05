@@ -6,6 +6,7 @@ import shlex
 import asyncio
 import random
 import pytz
+import time
 from datetime import datetime, timedelta
 from telethon import events
 from app.context import get_application
@@ -17,7 +18,12 @@ from app.task_scheduler import scheduler
 from app.plugins.common_tasks import update_inventory_cache
 from app.utils import create_error_reply
 from app.inventory_manager import inventory_manager
-from app.plugins.crafting_actions import _cmd_craft_item as execute_craft_item
+from app.character_stats_manager import stats_manager
+from app.plugins.logic.crafting_logic import logic_execute_crafting
+from app.plugins.game_event_handler import GAME_EVENTS_CHANNEL
+from app import game_adaptor
+
+KNOWLEDGE_SESSIONS_KEY = "knowledge_sessions"
 
 HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令**
 **说明**: 在控制群或私聊中，使用想发起任务的账号发送此指令。该账号将成为发起者，并自动协调网络中其他助手完成交易。
@@ -112,7 +118,7 @@ async def _cmd_receive_goods(event, parts):
 
         await progress_msg.edit(f"✅ `已定位助手` (ID: `...{executor_id[-4:]}`)\n⏳ 正在上架物品以生成交易单...")
         
-        list_command = f".上架 灵石*1 换 {item_name}*{quantity}"
+        list_command = game_adaptor.list_item("灵石", 1, item_name, quantity)
         _sent, reply = await client.send_game_command_request_response(list_command)
         reply_text = reply.text
         
@@ -122,8 +128,7 @@ async def _cmd_receive_goods(event, parts):
                 raise ValueError("上架成功但无法解析挂单ID。")
             
             item_id = match_id.group(1)
-            await inventory_manager.remove_item("灵石", 1)
-
+            
             await progress_msg.edit(f"✅ `上架成功` (挂单ID: `{item_id}`)\n⏳ 正在通知助手购买...")
             
             task_payload = {
@@ -145,12 +150,79 @@ async def _cmd_receive_goods(event, parts):
     finally:
         client.unpin_message(progress_msg)
 
+
+async def _handle_game_event(app, event_data):
+    """[新功能] 统一处理所有游戏事件的中央处理器"""
+    client = app.client
+    my_id = str(client.me.id)
+    account_id = event_data.get("account_id")
+    event_type = event_data.get("event_type")
+    
+    if my_id != account_id:
+        return
+
+    my_username = client.me.username if client.me else my_id
+    update_details = []
+
+    if event_type == "TRADE_COMPLETED":
+        for item, quantity in event_data.get("gained", {}).items():
+            await inventory_manager.add_item(item, quantity)
+            update_details.append(f"获得 `{item} x{quantity}`")
+        for item, quantity in event_data.get("sold", {}).items():
+            await inventory_manager.remove_item(item, quantity)
+            update_details.append(f"售出 `{item} x{quantity}`")
+    
+    elif event_type == "DONATION_COMPLETED":
+        for item, quantity in event_data.get("consumed_item", {}).items():
+            await inventory_manager.remove_item(item, quantity)
+            update_details.append(f"消耗 `{item} x{quantity}`")
+        gained_contrib = event_data.get("gained_contribution", 0)
+        if gained_contrib > 0:
+            await stats_manager.add_contribution(gained_contrib)
+            update_details.append(f"获得 `{gained_contrib}` 点贡献")
+
+    elif event_type == "EXCHANGE_COMPLETED":
+        for item, quantity in event_data.get("gained_item", {}).items():
+            await inventory_manager.add_item(item, quantity)
+            update_details.append(f"获得 `{item} x{quantity}`")
+        consumed_contrib = event_data.get("consumed_contribution", 0)
+        if consumed_contrib > 0:
+            await stats_manager.remove_contribution(consumed_contrib)
+            update_details.append(f"消耗 `{consumed_contrib}` 点贡献")
+
+    # 知识共享 V2 - 事件驱动的特殊逻辑
+    if await app.redis_db.hlen(KNOWLEDGE_SESSIONS_KEY) > 0:
+        gained_items = event_data.get("gained", {})
+        for item in gained_items.keys():
+            if item.endswith(("图纸", "丹方")):
+                sessions = await app.redis_db.hgetall(KNOWLEDGE_SESSIONS_KEY)
+                for session_id, session_json in sessions.items():
+                    session_data = json.loads(session_json)
+                    if session_data.get("student_id") == my_id and session_data.get("item_name") == item:
+                        await inventory_manager.remove_item("灵石", 1)
+                        await app.redis_db.hdel(KNOWLEDGE_SESSIONS_KEY, session_id)
+                        format_and_log("TASK", "知识共享-学生", {'状态': '交易成功，已扣除灵石', '配方': item})
+                        update_details.append(f"消耗 `灵石 x1` (知识交换)")
+                        break
+
+    if update_details:
+        await client.send_admin_notification(f"📦 **状态更新通知 (`@{my_username}`)**\n{', '.join(update_details)}")
+
+
 async def redis_message_handler(message):
     app = get_application()
+    client = app.client
     my_id = str(app.client.me.id)
     try:
+        channel = message['channel']
         data = json.loads(message['data'])
+        
+        if channel == GAME_EVENTS_CHANNEL:
+            await _handle_game_event(app, data)
+            return
+
         task_type = data.get("task_type")
+        payload = data.get("payload", {})
 
         if hasattr(app, 'extra_redis_handlers'):
             for handler in app.extra_redis_handlers:
@@ -168,82 +240,118 @@ async def redis_message_handler(message):
                 await app.client.send_game_command_fire_and_forget(command_to_run)
             return
 
+        if task_type == "initiate_knowledge_request" and my_id == data.get("target_account_id"):
+            item_name = payload["item_name"]
+            quantity = payload["quantity"]
+            list_command = game_adaptor.list_item("灵石", quantity, item_name, quantity)
+            
+            try:
+                _sent, reply = await client.send_game_command_request_response(list_command)
+                match = re.search(r"挂单ID\D+(\d+)", reply.text)
+                if "上架成功" in reply.text and match:
+                    item_id = match.group(1)
+                    session_id = f"ks_{my_id}_{item_id}"
+                    session_data = {
+                        "student_id": my_id, "item_name": item_name, "listing_id": item_id,
+                        "status": "LISTED", "timestamp": time.time()
+                    }
+                    await app.redis_db.hset(KNOWLEDGE_SESSIONS_KEY, session_id, json.dumps(session_data))
+                    
+                    broadcast_task = { "task_type": "knowledge_listing_available", "payload": session_data }
+                    await trade_logic.publish_task(broadcast_task)
+                else:
+                    raise RuntimeError(f"上架失败: {reply.text}")
+            except Exception as e:
+                await client.send_admin_notification(f"❌ 自动化知识共享（学生端）上架失败: {e}")
+            return
+            
+        if task_type == "knowledge_listing_available":
+            if my_id == str(settings.ADMIN_USER_ID) or my_id == payload.get("student_id"): return
+            item_name = payload.get("item_name")
+            if await inventory_manager.get_item_count(item_name) > 0:
+                command = game_adaptor.buy_item(payload.get('listing_id'))
+                await client.send_game_command_fire_and_forget(command)
+            return
+
+        if task_type == "cancel_knowledge_request" and my_id == data.get("target_account_id"):
+            listing_id = payload.get("listing_id")
+            if listing_id:
+                command = game_adaptor.unlist_item(listing_id)
+                await client.send_game_command_fire_and_forget(command)
+                format_and_log("TASK", "知识共享-超时处理", {"动作": "已发送下架指令", "挂单ID": listing_id})
+            return
+
         if my_id != data.get("target_account_id"): return
         
         format_and_log("INFO", "Redis 任务匹配成功", {'任务类型': task_type, '详情': str(data)})
         
         if task_type == "list_item":
-            payload = {k: v for k, v in data.items() if k not in ['task_type', 'target_account_id']}
-            await trade_logic.execute_listing_task(**payload)
+            await trade_logic.execute_listing_task(data['requester_account_id'], **payload)
         elif task_type == "purchase_item":
-            await trade_logic.execute_purchase_task(data.get("payload", {}))
+            await trade_logic.execute_purchase_task(payload)
         
-        # [核心修复] 处理“送达回执”和“最终炼制”任务
         elif task_type == "crafting_material_delivered":
-            session_id = data.get("session_id")
-            supplier_id = data.get("supplier_id")
+            session_id = payload.get("session_id")
+            supplier_id = payload.get("supplier_id")
             session_json = await app.redis_db.hget("crafting_sessions", session_id)
             if session_json:
                 session_data = json.loads(session_json)
                 session_data["needed_from"][supplier_id] = True
-                
                 if all(session_data["needed_from"].values()):
                     session_data["status"] = "ready_to_craft"
-                    final_craft_task = {
-                        "task_type": "trigger_final_craft",
-                        "target_account_id": my_id,
-                        "session_id": session_id
-                    }
+                    final_craft_task = { "task_type": "trigger_final_craft", "target_account_id": my_id, "payload": {"session_id": session_id}}
                     await trade_logic.publish_task(final_craft_task)
                     await app.client.send_admin_notification(f"✅ **智能炼制**: 材料已全部收齐 (会话: `{session_id[-6:]}`)\n⏳ 即将自动执行最终炼制...")
-                
                 await app.redis_db.hset("crafting_sessions", session_id, json.dumps(session_data))
 
         elif task_type == "trigger_final_craft":
-            session_id = data.get("session_id")
+            session_id = payload.get("session_id")
             session_json = await app.redis_db.hget("crafting_sessions", session_id)
-            if session_json:
-                session_data = json.loads(session_json)
-                item = session_data['item']
-                quantity = session_data['quantity']
-                
-                fake_event = type('FakeEvent', (object,), {
-                    'reply': app.client.send_admin_notification,
-                })()
-
-                craft_parts = ["炼制物品", item, str(quantity)]
-                await execute_craft_item(fake_event, craft_parts)
+            if not session_json: return
+            session_data = json.loads(session_json)
+            async def feedback_handler(text):
+                await client.send_admin_notification(f"**智能炼制 (会话: `{session_id[-6:]}`)**\n\n{text}")
+            try:
+                await logic_execute_crafting(session_data['item'], session_data['quantity'], feedback_handler)
+            finally:
                 await app.redis_db.hdel("crafting_sessions", session_id)
             
     except Exception as e:
         format_and_log("ERROR", "Redis 任务处理器", {'状态': '执行异常', '错误': str(e)})
 
-async def handle_trade_report(event):
+
+async def _check_crafting_session_timeouts():
+    """定时检查超时的智能炼制任务"""
     app = get_application()
-    client = app.client
-    if not (client.me and client.me.username and event.text):
-        return
-    
-    my_username = client.me.username
-    if "【万宝楼快报】" not in event.text or f"@{my_username}" not in event.text:
-        return
-        
-    format_and_log("INFO", "万宝楼快报", {'状态': '匹配成功', '用户': my_username})
-    
-    gain_match = re.search(r"你获得了：(.+)", event.text)
-    if gain_match:
-        gained_items_str = gain_match.group(1).strip().rstrip('。')
-        gained_items = re.findall(r"【(.+?)】x([\d,]+)", gained_items_str)
-        
-        if gained_items:
-            update_details = []
-            for item, quantity_str in gained_items:
-                quantity = int(quantity_str.replace(',', ''))
-                await inventory_manager.add_item(item, quantity)
-                update_details.append(f"`{item} x{quantity}`")
-            
-            await client.send_admin_notification(f"✅ **交易售出通知 (`@{my_username}`)**\n库存已实时增加: {', '.join(update_details)}")
+    if not app.redis_db: return
+    sessions = await app.redis_db.hgetall("crafting_sessions")
+    now = time.time()
+    timeout_seconds = settings.TRADE_COORDINATION_CONFIG.get('crafting_session_timeout_seconds', 600)
+    for session_id, session_json in sessions.items():
+        try:
+            session_data = json.loads(session_json)
+            if now - session_data.get("timestamp", 0) > timeout_seconds:
+                format_and_log("TASK", "智能炼制-超时检查", {'状态': '发现超时任务', '会话ID': session_id})
+                initiator_id = session_id.split('_')[1]
+                item_name = session_data.get("item", "未知物品")
+                failed_suppliers = [f"`...{uid[-4:]}`" for uid, delivered in session_data.get("needed_from", {}).items() if not delivered]
+                report = (f"❌ **智能炼制任务超时失败** (会话: `{session_id[-6:]}`)\n\n"
+                          f"- **炼制目标**: `{item_name}`\n"
+                          f"- **发起者**: `...{initiator_id[-4:]}`\n"
+                          f"- **失败原因**: 超过 {int(timeout_seconds / 60)} 分钟未集齐材料。\n"
+                          f"- **未响应的供应方**: {', '.join(failed_suppliers) if failed_suppliers else '无'}")
+                if str(app.client.me.id) == str(settings.ADMIN_USER_ID):
+                    await app.client.send_admin_notification(report)
+                await app.redis_db.hdel("crafting_sessions", session_id)
+        except Exception as e:
+            format_and_log("ERROR", "智能炼制-超时检查", {'状态': '处理异常', '会话ID': session_id, '错误': str(e)})
+
 
 def initialize(app):
     app.register_command("集火", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="协同", usage=HELP_TEXT_FOCUS_FIRE)
     app.register_command("收货", _cmd_receive_goods, help_text="📦 协同助手接收物品。", category="协同", usage=HELP_TEXT_RECEIVE_GOODS)
+    
+    scheduler.add_job(
+        _check_crafting_session_timeouts, 'interval', minutes=1,
+        id='crafting_timeout_checker_task', replace_existing=True
+    )

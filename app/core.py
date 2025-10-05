@@ -37,13 +37,13 @@ class Application:
         
         self.setup_logging()
         format_and_log("SYSTEM", "应用初始化", {'阶段': '开始...'})
-        gemini_client.initialize_gemini()
         self.client = TelegramClient()
         format_and_log("SYSTEM", "组件初始化", {'组件': 'Telegram 客户端', '状态': '实例化完成'})
 
     async def _redis_listener_loop(self):
         from app.plugins.trade_coordination import redis_message_handler
         from app.plugins.logic.trade_logic import TASK_CHANNEL
+        from app.plugins.game_event_handler import GAME_EVENTS_CHANNEL
         
         if not self.redis_db: 
             format_and_log("WARNING", "Redis 监听器", {'状态': '未启动', '原因': 'Redis 未连接'})
@@ -52,12 +52,14 @@ class Application:
         while True: 
             try:
                 async with self.redis_db.pubsub() as pubsub:
-                    await pubsub.subscribe(TASK_CHANNEL)
-                    format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '已订阅', '频道': TASK_CHANNEL})
+                    # [重构] 同时订阅任务频道和游戏事件频道
+                    await pubsub.subscribe(TASK_CHANNEL, GAME_EVENTS_CHANNEL)
+                    format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 监听器', '状态': '已订阅', '频道': f"{TASK_CHANNEL}, {GAME_EVENTS_CHANNEL}"})
                     
                     async for message in pubsub.listen():
                         if message and message.get('type') == 'message':
                             format_and_log("DEBUG", "Redis 监听器", {'阶段': '收到消息', '原始返回': str(message)})
+                            # 所有消息都由一个总处理器分发
                             asyncio.create_task(redis_message_handler(message))
 
             except (redis.exceptions.ConnectionError, asyncio.CancelledError) as e:
@@ -97,7 +99,7 @@ class Application:
         if raw_logger.hasHandlers(): raw_logger.handlers.clear()
         
         raw_log_formatter = TimezoneFormatter(
-            fmt='%(asctime)s\n%(message)s\n', datefmt='%Y-%m-%d %H:%M:%S %Z', tz_name=settings.TZ
+            fmt='%(asctime)s - %(message)s\n--------------------\n', datefmt='%Y-%m-%d %H:%M:%S %Z', tz_name=settings.TZ
         )
         raw_log_handler = logging.handlers.RotatingFileHandler(
             settings.RAW_LOG_FILE, maxBytes=settings.LOG_ROTATION_CONFIG['max_bytes'], 
@@ -169,7 +171,6 @@ class Application:
     def register_command(self, name, handler, help_text="", category="默认", aliases=None, usage=None):
         if aliases is None: aliases = []
         usage = usage or help_text
-        # [核心修复] 将指令的原始名称'name'添加到字典中
         command_data = { "name": name, "handler": handler, "help": help_text, "category": category, "aliases": aliases, "usage": usage }
         for cmd_name in [name] + aliases:
             self.commands[cmd_name.lower()] = command_data
@@ -212,6 +213,7 @@ class Application:
     async def reload_plugins_and_commands(self):
         format_and_log("SYSTEM", "热重载", {'阶段': '开始...'})
         try:
+            # 重新加载配置和所有插件模块
             reload(sys.modules['config.settings'])
             for module_name in list(sys.modules.keys()):
                 if module_name.startswith('app.plugins.'):
@@ -221,6 +223,6 @@ class Application:
             return
         
         self.load_plugins_and_commands(is_reload=True)
+        # 重新运行启动检查以重新调度任务
         asyncio.create_task(self._run_startup_checks())
         format_and_log("SYSTEM", "热重载", {'阶段': '完成'})
-

@@ -16,6 +16,7 @@ from app.telegram_client import CommandTimeoutError
 from app.context import get_application
 from app.inventory_manager import inventory_manager
 from app.character_stats_manager import stats_manager
+from app import game_adaptor
 
 TASK_ID_BIGUAN = 'biguan_xiulian_task'
 STATE_KEY_BIGUAN = "biguan"
@@ -37,7 +38,7 @@ async def trigger_dianmao_chuangong(force_run=False):
     format_and_log("TASK", "宗门点卯", {'阶段': '任务开始', '强制执行': force_run})
     sent_dianmao = None
     try:
-        sent_dianmao, reply_dianmao = await client.send_game_command_long_task(".宗门点卯")
+        sent_dianmao, reply_dianmao = await client.send_game_command_long_task(game_adaptor.sect_check_in())
         client.pin_message(sent_dianmao)
 
         log_text = reply_dianmao.text.replace('\n', ' ')
@@ -49,7 +50,7 @@ async def trigger_dianmao_chuangong(force_run=False):
         max_attempts = 5
         for i in range(max_attempts):
             _sent_cg, reply_cg = await client.send_game_command_request_response(
-                ".宗门传功", 
+                game_adaptor.sect_contribute_skill(), 
                 reply_to=sent_dianmao.id
             )
             
@@ -78,7 +79,7 @@ async def update_inventory_cache(force_run=False):
     format_and_log("TASK", "刷新背包", {'阶段': '任务开始', '强制执行': force_run})
     
     try:
-        _sent, reply = await client.send_game_command_request_response(".储物袋")
+        _sent, reply = await client.send_game_command_request_response(game_adaptor.get_inventory())
         inventory = parse_inventory_text(reply)
         if inventory:
             await inventory_manager.set_inventory(inventory)
@@ -100,11 +101,12 @@ async def trigger_chuang_ta(force_run=False):
     format_and_log("TASK", "自动闯塔", {'阶段': '任务开始', '强制执行': force_run})
     
     try:
-        # [核心修改] 使用更精确的初始回复模板
-        _sent, final_reply = await client.send_and_wait_for_edit(".闯塔", initial_reply_pattern=r"踏入了古塔的第")
+        _sent, final_reply = await client.send_and_wait_for_edit(
+            game_adaptor.challenge_tower(),
+            initial_reply_pattern=r"踏入了古塔的第"
+        )
         
         if "【试炼古塔 - 战报】" in final_reply.text and "总收获" in final_reply.text:
-            # [核心修改] 使用 findall 捕获所有奖励
             gained_items = re.findall(r"获得了【(.+?)】x([\d,]+)", final_reply.text)
             
             if gained_items:
@@ -134,7 +136,7 @@ async def trigger_biguan_xiulian(force_run=False):
     beijing_tz = pytz.timezone(settings.TZ)
     next_run_time = datetime.now(beijing_tz) + timedelta(minutes=15)
     try:
-        _sent_msg, reply = await client.send_game_command_request_response(".闭关修炼")
+        _sent_msg, reply = await client.send_game_command_request_response(game_adaptor.meditate())
         cooldown = parse_cooldown_time(reply)
         if cooldown:
             jitter_config = settings.TASK_JITTER['biguan']

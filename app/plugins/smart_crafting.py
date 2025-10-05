@@ -68,7 +68,8 @@ async def _cmd_smart_craft(event, parts):
         session_id = f"craft_{my_id}_{int(time.time())}"
         session_data = {
             "item": item_to_craft, "quantity": quantity, "status": "gathering",
-            "needed_from": {executor_id: False for executor_id in plan.keys()}
+            "needed_from": {executor_id: False for executor_id in plan.keys()},
+            "timestamp": time.time()  # [新功能] 添加时间戳用于超时判断
         }
         await app.redis_db.hset("crafting_sessions", session_id, json.dumps(session_data))
         
