@@ -9,7 +9,8 @@ from app.utils import create_error_reply
 from app.inventory_manager import inventory_manager
 from app.plugins.logic import crafting_logic, trade_logic
 from app.plugins.crafting_actions import _cmd_craft_item as execute_craft_item
-from app.plugins.crafting_coordinator import _internal_craft_gather as execute_gather_materials
+# [核心修复] 修正导入路径，从新的文件名导入
+from app.plugins.crafting_material_gathering import _internal_gather_materials as execute_gather_materials
 
 HELP_TEXT_SMART_CRAFT = """✨ **智能炼制 (全自动版)**
 **说明**: 终极一键指令。自动检查材料，如果不足，则自动向其他助手收集，材料收齐后将自动执行最终的炼制操作。
