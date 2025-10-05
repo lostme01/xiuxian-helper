@@ -9,10 +9,6 @@ from app.logger import format_and_log
 from app.utils import get_display_width
 
 async def _handle_help_command(event, parts):
-    """
-    [最终布局版 v2]
-    - 严格按照用户定义的多重优先级规则进行排版。
-    """
     app = get_application()
     client = app.client
     prefix = settings.COMMAND_PREFIXES[0]
@@ -94,6 +90,10 @@ async def execute_command(event):
     client = app.client
     text = event.text.strip()
     
+    # [核心修改] 添加话题ID日志记录
+    if event.is_group and event.message.reply_to and event.message.reply_to.reply_to_top_id:
+        format_and_log("DEBUG", "Topic ID Info", {'topic_id': event.message.reply_to.reply_to_top_id})
+
     used_prefix = next((p for p in settings.COMMAND_PREFIXES if text.startswith(p)), None)
     if not used_prefix: return
 
@@ -133,8 +133,6 @@ async def execute_command(event):
         can_execute = True
 
     if can_execute:
-        # --- [核心修复] 自动删除管理员发出的指令 ---
-        # 只有主控号 (登录了管理员账号的实例) 才有权限和责任删除管理员发出的消息
         if is_admin_sender and is_main_bot:
             client._schedule_message_deletion(
                 event.message, 

@@ -49,19 +49,16 @@ class TelegramClient:
     async def reply_to_admin(self, event, text: str, **kwargs):
         from app.logger import format_and_log
         try:
-            # 优先回复到当前事件的位置 (群聊或私聊)
-            target_chat = event.chat_id
             reply_message = await event.reply(text, **kwargs)
             self._schedule_message_deletion(reply_message, settings.AUTO_DELETE.get('delay_admin_command'), "助手对管理员的回复")
             return reply_message
         except Exception as e:
             format_and_log("SYSTEM", "回复管理员失败", {'错误': str(e)}, level=logging.ERROR)
             try:
-                # [核心修改] 降级方案：如果回复失败，则尝试直接发送到控制群
                 if settings.CONTROL_GROUP_ID:
                     chat_type = "群组" if event.is_group else "私聊"
                     chat_id = getattr(event, 'chat_id', 'N/A')
-                    await self.client.send_message(settings.CONTROL_GROUP_ID, f"⚠️ 在 {chat_type} (`{chat_id}`) 中回复指令失败: `{e}`")
+                    await self.client.send_message(settings.CONTROL_GROUP_ID, f"⚠️ 在 {chat_type} (`{chat_id}`) 中回复指令时失败: `{e}`")
             except Exception: pass
             return None
 
@@ -81,17 +78,25 @@ class TelegramClient:
                         wait_time = slowmode_seconds - time_since_last_sent + random.uniform(0.5, 1.5)
                         await asyncio.sleep(wait_time)
 
+                # [核心修改] 话题模式全局逻辑
+                final_reply_to = reply_to
+                # 仅当消息是发往游戏群时，才应用话题逻辑
+                if target_group in settings.GAME_GROUP_IDS and settings.GAME_TOPIC_ID:
+                    # 如果指令本身不是一个回复，就强制将其回复到话题ID，使其进入话题
+                    if not reply_to:
+                        final_reply_to = settings.GAME_TOPIC_ID
+
                 sent_message = None
                 for _ in range(2):
                     try:
-                        sent_message = await self.client.send_message(target_group, command, reply_to=reply_to)
+                        sent_message = await self.client.send_message(target_group, command, reply_to=final_reply_to)
                         self.last_message_timestamps[target_group] = time.time()
                         break 
                     except SlowModeWaitError as e:
                         await asyncio.sleep(e.seconds + random.uniform(0.5, 1.5))
                 
                 if sent_message:
-                    await log_event(LogType.CMD_SENT, sent_message, command=command, reply_to=reply_to)
+                    await log_event(LogType.CMD_SENT, sent_message, command=command, reply_to=final_reply_to)
                     if future and not future.done():
                         future.set_result(sent_message)
                 else:
@@ -230,13 +235,9 @@ class TelegramClient:
         except Exception: pass
 
     async def send_admin_notification(self, message: str):
-        """[核心修改] 将所有通知发送到控制群"""
         try:
-            if settings.CONTROL_GROUP_ID:
-                await self.client.send_message(settings.CONTROL_GROUP_ID, message, parse_mode='md')
-            else:
-                # 降级方案：如果未配置控制群，仍然发送给管理员私聊
-                await self.client.send_message(self.admin_id, message, parse_mode='md')
+            target = settings.CONTROL_GROUP_ID if settings.CONTROL_GROUP_ID else self.admin_id
+            await self.client.send_message(target, message, parse_mode='md')
         except Exception: 
             pass
 
@@ -341,4 +342,3 @@ class TelegramClient:
         if chat_id and chat_id in all_groups:
             fake_event = type('FakeEvent', (object,), {'chat_id': chat_id})
             await log_event(LogType.MSG_DELETE, fake_event, deleted_ids=update.messages)
-

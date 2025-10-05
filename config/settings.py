@@ -38,6 +38,8 @@ API_HASH = config.get('api_hash', None)
 ADMIN_USER_ID = config.get('admin_user_id', None)
 GAME_BOT_IDS = config.get('game_bot_ids', []) 
 GAME_GROUP_IDS = config.get('game_group_ids', [])
+# [核心修改] 新增游戏话题ID配置
+GAME_TOPIC_ID = config.get('game_topic_id', None) 
 CONTROL_GROUP_ID = config.get('control_group_id', None)
 TEST_GROUP_ID = config.get('test_group_id', None)
 COMMAND_PREFIXES = config.get('command_prefixes', [',', '，'])
@@ -50,6 +52,33 @@ EXAM_SOLVER_CONFIG = _merge_config('exam_solver', {
     'gemini_model_name': 'models/gemini-1.5-pro-latest',
     'gemini_api_keys': [],
     'reply_delay': {'min': 5, 'max': 15}
+})
+
+AI_PERSONAS = _merge_config('ai_personas', {
+    '老油条': '你是一个玩世不恭的修仙老油条，说话有点贱兮兮的，喜欢吐槽，偶尔也羡慕一下别人的好运气。',
+    '高冷大佬': '你是一位境界高深、不苟言笑的大佬，言语非常简练，充满威严，偶尔会用一两个字指点一下群里的菜鸟。',
+    '萌新师妹': '你是一个刚入门派的小师妹，什么都不懂，对一切都很好奇，喜欢问问题，看到别人出好东西会惊叹“哇，好厉害！”。',
+    '好好先生': '你是一个性格温和的修士，与人为善，乐于助人，总是积极地回答别人的问题，说话很客气。',
+    '战斗狂人': '你是一个战斗狂人，言语中充满战意，三句不离切磋和斗法，看不起胆小的人，总想着“干就完了”。',
+    '苟道大师': '你是一个信奉“活着才是硬道理”的苟道大师，说话总是小心翼翼，劝人不要冲动，喜欢分享各种保命心得。',
+    '炼丹宗师': '你是一个炼丹宗师，对话的焦点总在炼丹上，对材料、火候、成丹率有种偏执的热情，偶尔会炫耀自己的作品。',
+    '天命之子': '你是一个运气爆棚的天命之子，说话总带点凡尔赛，字里行间透露出自己又轻松突破或者获得了什么天材地宝。',
+    '愤青': '你是一个愤青玩家，觉得游戏里的什么都不合理，总是吐槽游戏机制、任务难度和机器人AI，感觉自己被针对了。',
+    '谜语人': '你是一个谜语人，说话神神秘秘，喜欢用比喻和典故，从不把话说透，让人感觉高深莫测。'
+})
+
+AI_CHATTER_CONFIG = _merge_config('ai_chatter', {
+    'enabled': False,
+    'personality_prompt': AI_PERSONAS.get('老油条'),
+    'chat_model_name': 'models/gemini-1.5-flash-latest',
+    'random_chat_probability': 0.05,
+    'inter_assistant_reply_probability': 0.3,
+    'reply_vs_send_ratio': 0.8,
+    'blacklist': [],
+    'mood_system_enabled': True,
+    'topic_system_enabled': True,
+    'positive_keywords': ["成功", "获得", "完成", "升级", "提升", "领悟"],
+    'negative_keywords': ["失败", "不足", "无法", "上限", "被抢"]
 })
 
 AUTO_DELETE = _merge_config('auto_delete', {
@@ -113,26 +142,6 @@ GAME_COMMANDS = _merge_config('game_commands', { 'taiyi_yindao': '.引道 水' }
 HUANGFENG_VALLEY_CONFIG = config.get('huangfeng_valley', {})
 TAIYI_SECT_CONFIG = config.get('taiyi_sect', {})
 
-AI_PERSONAS = _merge_config('ai_personas', {
-    '老油条': '你是一个玩世不恭的修仙老油条，说话有点贱兮兮的，喜欢吐槽，偶尔也羡慕一下别人的好运气。',
-    '高冷大佬': '你是一位境界高深、不苟言笑的大佬，言语非常简练，充满威严，偶尔会用一两个字指点一下群里的菜鸟。',
-    '萌新师妹': '你是一个刚入门派的小师妹，什么都不懂，对一切都很好奇，喜欢问问题，看到别人出好东西会惊叹“哇，好厉害！”。',
-    '好好先生': '你是一个性格温和的修士，与人为善，乐于助人，总是积极地回答别人的问题，说话很客气。'
-})
-
-AI_CHATTER_CONFIG = _merge_config('ai_chatter', {
-    'enabled': False,
-    'personality_prompt': AI_PERSONAS.get('老油条'),
-    'chat_model_name': 'models/gemini-1.5-flash-latest',
-    'random_chat_probability': 0.05,
-    'inter_assistant_reply_probability': 0.3,
-    'reply_vs_send_ratio': 0.8,
-    'blacklist': [],
-    'mood_system_enabled': True,
-    'topic_system_enabled': True,
-    'positive_keywords': ["成功", "获得", "完成", "升级", "提升", "领悟"],
-    'negative_keywords': ["失败", "不足", "无法", "上限", "被抢"]
-})
 XUANGU_EXAM_CONFIG = config.get('xuangu_exam_solver', {'enabled': False})
 TIANJI_EXAM_CONFIG = config.get('tianji_exam_solver', {'enabled': False})
 LOG_ROTATION_CONFIG = config.get('log_rotation', {'max_bytes': 1048576, 'backup_count': 9})
