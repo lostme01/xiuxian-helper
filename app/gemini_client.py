@@ -52,7 +52,7 @@ def initialize_gemini():
 
 async def generate_content_with_rotation(prompt: str):
     """
-    使用轮询和重试机制来生成内容，并增加了超时处理。
+    使用轮询和重试机制来生成内容，并增加了详细的错误日志。
     """
     if not _api_key_manager or _api_key_manager.key_count == 0:
         raise RuntimeError("Gemini Client 未成功初始化或未配置 API Keys。")
@@ -66,7 +66,6 @@ async def generate_content_with_rotation(prompt: str):
             genai.configure(api_key=selected_key)
             model = genai.GenerativeModel(model_name=_model_name, tool_config=_tool_config)
             
-            # [核心修复] 为API调用增加30秒超时
             response = await asyncio.wait_for(
                 model.generate_content_async(prompt),
                 timeout=30.0
@@ -77,23 +76,31 @@ async def generate_content_with_rotation(prompt: str):
             _api_key_manager._current_key_index = (current_index + 1) % _api_key_manager.key_count
             return response
         
-        # [核心修复] 捕获并记录超时错误
-        except asyncio.TimeoutError:
-            format_and_log("WARNING", "Gemini-API调用失败", {
-                'Key索引': current_index,
-                '错误类型': 'TimeoutError',
-                '错误详情': 'API请求在30秒内未返回结果',
-                '操作': '将自动尝试下一个Key...'
-            })
-            continue # 超时后继续尝试下一个Key
-
+        # [核心修改] 将所有异常都以ERROR级别详细记录
         except Exception as e:
-            format_and_log("WARNING", "Gemini-API调用失败", {
-                'Key索引': current_index,
-                '错误类型': type(e).__name__,
-                '错误详情': str(e),
-                '操作': '将自动尝试下一个Key...'
-            })
+            error_type = type(e).__name__
+            error_detail = str(e)
+            
+            # 对常见的错误类型进行更友好的解释
+            if "API key not valid" in error_detail:
+                error_explanation = "API Key无效或不正确"
+            elif "rate limit" in error_detail.lower():
+                error_explanation = "已达到此Key的请求频率限制"
+            elif isinstance(e, asyncio.TimeoutError):
+                error_explanation = "API请求在30秒内未返回结果 (网络超时或Google服务器繁忙)"
+            else:
+                error_explanation = "未知错误"
+
+            format_and_log(
+                "ERROR", # 使用ERROR级别，确保日志一定会被打印
+                "Gemini-单次调用失败", {
+                    'Key索引': current_index,
+                    '错误类型': error_type,
+                    '错误详情': error_detail,
+                    '可能原因': error_explanation,
+                    '操作': '将自动尝试下一个Key...'
+                }
+            )
             await asyncio.sleep(1)
 
     format_and_log("ERROR", "Gemini-API调用失败", {'错误': '所有API Key均调用失败'})
