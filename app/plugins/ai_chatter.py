@@ -29,6 +29,7 @@ async def _get_all_assistant_ids():
     """获取并缓存所有友方助手的ID列表"""
     global _assistant_ids_cache, _assistant_ids_cache_time
     now = time.time()
+    # 每5分钟刷新一次缓存
     if _assistant_ids_cache is None or (now - _assistant_ids_cache_time > 300):
         app = get_application()
         if not app.redis_db:
@@ -56,7 +57,7 @@ async def summarize_topic_task():
     try:
         response = await gemini_client.generate_content_with_rotation(prompt)
         topic = response.text.strip().replace('"', '')
-        await app.redis_db.set(TOPIC_KEY, topic, ex=3600)
+        await app.redis_db.set(TOPIC_KEY, topic, ex=3600) # 话题有效期1小时
         format_and_log("TASK", "AI聊天-话题总结", {'状态': '成功', '话题': topic})
     except Exception as e:
         format_and_log("ERROR", "AI聊天-话题总结", {'状态': '异常', '错误': str(e)})
@@ -108,7 +109,7 @@ async def ai_chat_handler(event):
         format_and_log("DEBUG", "AI聊天-处理", {'动作': '分析游戏事件情绪', '来源': sender_name})
         if settings.AI_CHATTER_CONFIG.get('mood_system_enabled'):
             await analyze_mood_from_game_event(message_text)
-        return
+        return # 游戏机器人的消息只用于分析，不学习也不触发回复
         
     if message_text.startswith('.') or any(message_text.startswith(p) for p in settings.COMMAND_PREFIXES):
         format_and_log("DEBUG", "AI聊天-忽略", {'原因': '是指令消息'})
