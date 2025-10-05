@@ -133,8 +133,8 @@ async def execute_command(event):
         can_execute = True
 
     if can_execute:
-        # --- [核心修改] 自动删除管理员发出的指令 ---
-        # 只有主控号负责删除，避免重复操作
+        # --- [核心修复] 自动删除管理员发出的指令 ---
+        # 只有主控号 (登录了管理员账号的实例) 才有权限和责任删除管理员发出的消息
         if is_admin_sender and is_main_bot:
             client._schedule_message_deletion(
                 event.message, 
