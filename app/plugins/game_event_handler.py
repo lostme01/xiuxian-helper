@@ -11,10 +11,6 @@ from app import game_adaptor
 GAME_EVENTS_CHANNEL = "tg_helper:game_events"
 
 async def handle_game_report(event):
-    """
-    监听并解析所有游戏报告类消息,
-    然后将其作为结构化事件发布到 Redis。
-    """
     app = get_application()
     client = app.client
     my_id = str(client.me.id)
@@ -24,7 +20,7 @@ async def handle_game_report(event):
         return
 
     is_reply_to_me = False
-    original_message = None # 被回复或被编辑的原始消息
+    original_message = None
     
     if event.is_reply:
         reply_to_msg = await event.get_reply_message()
@@ -33,10 +29,14 @@ async def handle_game_report(event):
             original_message = reply_to_msg
             
     elif hasattr(event, 'message') and event.message.edit_date:
-        # 这是一个被编辑的消息，我们需要检查它是否是某个我们等待的初始回复
-        for wait_obj in app.client.pending_edit_waits.values():
+        for sent_msg_id, wait_obj in app.client.pending_edit_waits.items():
             if wait_obj.get('initial_reply_id') == event.message.id:
                 is_reply_to_me = True
+                # 尝试获取原始指令消息
+                try:
+                    original_message = await client.client.get_messages(event.chat_id, ids=sent_msg_id)
+                except Exception:
+                    pass
                 break
 
     is_mentioning_me = f"@{my_username}" in event.text
@@ -47,20 +47,17 @@ async def handle_game_report(event):
     text = event.text
     event_payload = None
 
-    # 1. 万宝楼快报
     if "【万宝楼快报】" in text:
         format_and_log("SYSTEM", "事件总线", {'监听到': '万宝楼快报', '用户': my_username})
         gained_items = {}
         sold_items = {}
         
-        # [核心修复] 使用非贪婪正则表达式，确保只捕获“获得”的部分
         gain_match = re.search(r"你获得了：(.*?)(?:你成功出售了|$)", text, re.DOTALL)
         if gain_match:
             gained_items_str = gain_match.group(1).strip().rstrip('。')
             for item, quantity_str in re.findall(r"【(.+?)】x([\d,]+)", gained_items_str):
                 gained_items[item] = int(quantity_str.replace(',', ''))
         
-        # 修复后，这里的出售逻辑将不再受到干扰
         sold_match = re.search(r"你成功出售了【(.+?)】x([\d,]+)", text)
         if sold_match:
             item, quantity_str = sold_match.groups()
@@ -69,7 +66,6 @@ async def handle_game_report(event):
         if gained_items or sold_items:
             event_payload = {"event_type": "TRADE_COMPLETED", "gained": gained_items, "sold": sold_items}
 
-    # 2. 宗门捐献
     elif "你向宗门捐献了" in text:
         consumed_match = re.search(r"捐献了 \*\*【(.+?)】\*\*x([\d,]+)", text)
         contrib_match = re.search(r"获得了 \*\*([\d,]+)\*\* 点宗门贡献", text)
@@ -83,7 +79,6 @@ async def handle_game_report(event):
             }
             format_and_log("SYSTEM", "事件总线", {'监听到': '宗门捐献成功'})
 
-    # 3. 宗门兑换
     elif "**兑换成功！**" in text:
         gain_match = re.search(r"获得了【(.+?)】x([\d,]+)", text)
         cost_match = re.search(r"消耗了 \*\*([\d,]+)\*\* 点贡献", text)
@@ -97,7 +92,6 @@ async def handle_game_report(event):
             }
             format_and_log("SYSTEM", "事件总线", {'监听到': '宗门兑换成功'})
             
-    # 4. 点卯或传功获得贡献
     elif "获得了" in text and "点宗门贡献" in text and original_message and (game_adaptor.sect_check_in() in original_message.text or game_adaptor.sect_contribute_skill() in original_message.text):
         contrib_match = re.search(r"获得了 \*\*([\d,]+)\*\* 点宗门贡献", text)
         if contrib_match:
@@ -108,7 +102,6 @@ async def handle_game_report(event):
             }
             format_and_log("SYSTEM", "事件总线", {'监听到': '点卯/传功成功'})
 
-    # 5. 闯塔战报
     elif "【试炼古塔 - 战报】" in text and "总收获" in text:
         gained_items = {}
         for item, quantity_str in re.findall(r"获得了【(.+?)】x([\d,]+)", text):
@@ -118,24 +111,29 @@ async def handle_game_report(event):
             event_payload = { "event_type": "TOWER_CHALLENGE_COMPLETED", "gained_items": gained_items }
             format_and_log("SYSTEM", "事件总线", {'监听到': '闯塔成功'})
 
-    # 6. 炼制战报
     elif "炼制结束！" in text and "最终获得" in text:
         gained_items = {}
         for item, quantity_str in re.findall(r"最终获得【(.+?)】x\*\*([\d,]+)\*\*", text):
              gained_items[item] = int(quantity_str.replace(',', ''))
         
-        if gained_items:
+        if gained_items and original_message:
              crafted_item_name = next(iter(gained_items))
-             crafted_quantity = 1 
+             # [核心修复] V2.0 - 从原始指令中解析炼制数量
+             crafted_quantity = 1
+             command_parts = original_message.text.split()
+             if len(command_parts) > 2 and command_parts[-1].isdigit():
+                 try:
+                     crafted_quantity = int(command_parts[-1])
+                 except ValueError:
+                     pass
              
              event_payload = {
                  "event_type": "CRAFTING_COMPLETED",
                  "crafted_item": {"name": crafted_item_name, "quantity": crafted_quantity},
                  "gained_items": gained_items
              }
-             format_and_log("SYSTEM", "事件总线", {'监听到': '炼制成功'})
+             format_and_log("SYSTEM", "事件总线", {'监听到': '炼制成功', '炼制数量': crafted_quantity})
     
-    # 7. 采药收获
     elif "一键采药完成！" in text:
         gained_items = {}
         for item, quantity_str in re.findall(r"【(.+?)】x([\d,]+)", text):
@@ -148,7 +146,6 @@ async def handle_game_report(event):
             }
             format_and_log("SYSTEM", "事件总线", {'监听到': '采药成功'})
             
-    # 8. 学习成功
     elif "成功领悟了" in text:
         consumed_match = re.search(r"消耗了【(.+?)】", text)
         if consumed_match:
@@ -159,7 +156,6 @@ async def handle_game_report(event):
             }
             format_and_log("SYSTEM", "事件总线", {'监听到': '学习成功'})
 
-    # 9. 播种成功
     elif "你已成功在" in text and "播下" in text:
         consumed_match = re.search(r"播下【(.+?)】", text)
         if consumed_match:
@@ -170,8 +166,6 @@ async def handle_game_report(event):
             }
             format_and_log("SYSTEM", "事件总线", {'监听到': '播种成功'})
 
-
-    # --- 发布事件 ---
     if event_payload:
         event_payload.update({ "account_id": my_id, "raw_text": text })
         await publish_task(event_payload, channel=GAME_EVENTS_CHANNEL)

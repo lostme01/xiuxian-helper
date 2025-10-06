@@ -36,30 +36,43 @@ async def _execute_resource_management():
         state = await data_manager.get_full_state(account_id)
         
         inv = json.loads(state.get("inventory", "{}"))
-        treasury = json.loads(state.get("sect_treasury", "{}"))
-        contrib = treasury.get("contribution", 0)
+        contrib = int(state.get("contribution", 0))
 
         for rule in rules:
             try:
-                item_name = rule.get("item")
-                item_count = inv.get(item_name, 0)
-                aeval = Interpreter(usersyms={"contribution": contrib, "item": item_count})
+                # [核心重构] V2.0 规则引擎
+                check_resource_name = rule.get("check_resource")
+                action_item_name = rule.get("item")
+                
+                resource_value = 0
+                if check_resource_name == "contribution":
+                    resource_value = contrib
+                elif check_resource_name:
+                    resource_value = inv.get(check_resource_name, 0)
+
+                aeval = Interpreter(usersyms={"resource": resource_value})
                 condition_met = aeval.eval(rule.get('condition', 'False'))
                 
                 if condition_met:
                     action = rule.get("action")
                     amount = rule.get("amount")
+                    
+                    if not action_item_name:
+                        format_and_log("ERROR", "智能资源管理", {'阶段': '规则跳过', '原因': '规则缺少 "item" 字段来指定操作目标'})
+                        continue
+
                     command = None
                     if action == "donate":
-                        command = game_adaptor.sect_donate(item_name, amount)
+                        command = game_adaptor.sect_donate(action_item_name, amount)
                     elif action == "exchange":
-                        command = game_adaptor.sect_exchange(item_name, amount)
+                        command = game_adaptor.sect_exchange(action_item_name, amount)
                     
                     if command:
                         task = {"task_type": "execute_game_command", "target_account_id": account_id, "command": command}
                         await trade_logic.publish_task(task)
                         format_and_log("TASK", "智能资源管理", {'决策': f'执行{action}', '账户': f'...{account_id[-4:]}', '指令': command})
-                        break
+                        await asyncio.sleep(random.uniform(5, 10)) # 增加一个短暂延迟，避免连续触发
+                        break 
             except Exception as e:
                 format_and_log("ERROR", "智能资源管理", {'阶段': '规则执行异常', '规则': str(rule), '错误': str(e)})
 
@@ -111,7 +124,6 @@ async def _execute_knowledge_sharing():
                 task = { "task_type": "initiate_knowledge_request", "target_account_id": student_id, "payload": { "item_name": recipe, "quantity": 1 } }
                 await trade_logic.publish_task(task)
                 
-                # [核心修复] 移除return，并增加随机延迟以避免任务刷屏
                 delay = random.uniform(30, 60)
                 format_and_log("TASK", "知识共享", {'阶段': '任务分派延迟', '秒数': f'{delay:.1f}'})
                 await asyncio.sleep(delay)

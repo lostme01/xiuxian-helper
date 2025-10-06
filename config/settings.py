@@ -133,7 +133,6 @@ HEARTBEAT_CONFIG = _merge_config('heartbeat', {
     'sync_run_time': '04:30'
 })
 
-# [新功能] 广播指令防刷屏配置
 BROADCAST_CONFIG = _merge_config('broadcast', {
     'noisy_commands': [
         "任务列表", "查看配置", "日志开关", "任务开关", "帮助", "菜单", 
@@ -161,6 +160,7 @@ def check_startup_settings():
         'api_hash': (API_HASH, "api_hash: '0123456789abcdef0123456789abcdef'"),
         'admin_user_id': (ADMIN_USER_ID, "admin_user_id: 987654321"),
         'game_group_ids': (GAME_GROUP_IDS, "game_group_ids:\n  - -1001234567890"),
+        'game_bot_ids': (GAME_BOT_IDS, "game_bot_ids:\n  - 123456789 # 游戏机器人或频道的ID"),
     }
 
     for key, (value, _) in required_settings.items():

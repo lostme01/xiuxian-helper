@@ -9,7 +9,6 @@ admin_user_id: 987654321
 # 游戏机器人/频道的ID列表
 game_bot_ids:
   - 123456789   # 示例：一个机器人的ID
-  - -1001234567890 # 示例：一个频道的ID
 
 # 游戏机器人所在的群组ID列表
 game_group_ids:
@@ -19,50 +18,38 @@ game_group_ids:
 control_group_id: null
 
 # ----------------- 身份与行为 -----------------
-# 您所在的游戏宗门，用于加载专属插件
 sect_name: '黄枫谷'
-
-# 指令前缀
 command_prefixes: [',', '，']
-
-# 时区，用于日志和任务调度
 timezone: 'Asia/Shanghai'
 
 # ----------------- AI 答题配置 -----------------
 exam_solver:
-  # 答题模型优先级列表。程序会优先使用第一个，如果因限额等问题失败，会自动尝试下一个。
   gemini_model_names:
     - 'gemini-2.5-pro'
     - 'gemini-2.5-flash'
     - 'gemini-2.5-flash-lite'
-  # Gemini API Key列表，可以填多个以轮询使用
   gemini_api_keys:
     - "AIzaSy...your...first...key"
-  # 答题前的随机延迟（秒）
   reply_delay: { min: 5, max: 15 }
 
-# 玄骨考校自动答题开关
 xuangu_exam_solver:
   enabled: true
-# 天机考验自动答题开关
 tianji_exam_solver:
   enabled: true
 
 # ----------------- 周期任务开关 -----------------
 task_switches:
-  biguan: true            # 自动闭关
-  dianmao: true           # 自动点卯
-  learn_recipes: true     # 自动学习图纸丹方
-  inventory_refresh: true # 定时刷新背包缓存
-  chuang_ta: true         # 自动闯塔
-  garden_check: true      # 自动药园 (黄枫谷专属)
-  sect_treasury: true     # 每日自动更新宗门宝库
-  mojun_arrival: false    # 自动应对魔君降临事件
+  biguan: true
+  dianmao: true
+  learn_recipes: true
+  inventory_refresh: true
+  chuang_ta: true
+  garden_check: true
+  sect_treasury: true
+  mojun_arrival: false
 
 # ----------------- 核心行为微调 -----------------
-# 指令发送后的随机延迟（秒）
 send_delay: { min: 12, max: 16 }
-# 等待游戏机器人回复的全局超时时间（秒）
 command_timeout: 60
 
 # ----------------- 周期任务微调 -----------------
@@ -102,19 +89,32 @@ trade_coordination:
   focus_fire_auto_delist: true
   crafting_session_timeout_seconds: 300
 
+# ----------------- [V2.0] 智能资源管理 -----------------
 auto_resource_management:
   enabled: false
   interval_minutes: 120
-  rules: []
+  rules:
+    # 示例1: 当“凝血草”数量超过1000时，自动捐献500个“凝血草”
+    # - check_resource: "凝血草"
+    #   condition: "resource > 1000"
+    #   action: "donate"
+    #   item: "凝血草"
+    #   amount: 500
+    #
+    # 示例2: 当“宗门贡献”超过20000时，自动兑换10个“凝血草种子”
+    # - check_resource: "contribution"
+    #   condition: "resource > 20000"
+    #   action: "exchange"
+    #   item: "凝血草种子"
+    #   amount: 10
 
 auto_knowledge_sharing:
   enabled: false
   interval_minutes: 240
   blacklist: []
 
-# ----------------- [新] 广播配置 -----------------
+# ----------------- 广播配置 -----------------
 broadcast:
-  # 在群组中广播这些指令时，只有主控号会响应，以防刷屏
   noisy_commands:
     - "任务列表"
     - "查看配置"
