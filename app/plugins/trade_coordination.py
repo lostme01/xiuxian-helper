@@ -24,7 +24,6 @@ from app.plugins.game_event_handler import GAME_EVENTS_CHANNEL
 from app import game_adaptor
 
 KNOWLEDGE_SESSIONS_KEY = "knowledge_sessions"
-# [新增] 用于暂存集火任务的回调信息
 FOCUS_FIRE_SESSIONS = {}
 
 HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令 (v3.0)**
@@ -74,6 +73,7 @@ async def _cmd_focus_fire(event, parts):
     progress_msg = await client.reply_to_admin(event, f"⏳ `[{my_username}] 集火任务启动`\n正在扫描网络查找 `{item_to_find}`...")
     client.pin_message(progress_msg)
     
+    session_id = f"ff_{my_id}_{int(time.time())}"
     try:
         best_account_id, _ = await trade_logic.find_best_executor(item_to_find, quantity_to_find, exclude_id=my_id)
 
@@ -82,8 +82,6 @@ async def _cmd_focus_fire(event, parts):
         
         await progress_msg.edit(f"✅ `已定位助手` (ID: `...{best_account_id[-4:]}`)\n⏳ 正在通过 Redis 下达上架指令 (第一阶段)...")
         
-        # [核心优化] V3.0 - 创建一个future来等待执行者的回报
-        session_id = f"ff_{my_id}_{int(time.time())}"
         future = asyncio.Future()
         FOCUS_FIRE_SESSIONS[session_id] = future
         
@@ -102,12 +100,10 @@ async def _cmd_focus_fire(event, parts):
 
         await progress_msg.edit(f"✅ `上架指令已发送`\n正在等待助手回报挂单ID (第二阶段)...")
         
-        # 等待执行者通过Redis回调
         listing_id, executor_id = await asyncio.wait_for(future, timeout=settings.COMMAND_TIMEOUT)
         
         await progress_msg.edit(f"✅ `已收到挂单ID`: `{listing_id}`\n⏳ 正在执行购买并触发同步下架 (第三阶段)...")
         
-        # 并行发送购买指令和下架通知
         purchase_command = game_adaptor.buy_item(listing_id)
         purchase_task = asyncio.create_task(client.send_game_command_fire_and_forget(purchase_command))
         
@@ -129,12 +125,10 @@ async def _cmd_focus_fire(event, parts):
         await progress_msg.edit(error_text)
     finally:
         client.unpin_message(progress_msg)
-        # 清理可能存在的session
-        if 'session_id' in locals() and session_id in FOCUS_FIRE_SESSIONS:
+        if session_id in FOCUS_FIRE_SESSIONS:
             del FOCUS_FIRE_SESSIONS[session_id]
 
 async def _cmd_receive_goods(event, parts):
-    # ... (此函数无需修改)
     app = get_application()
     client = app.client
     my_id = str(client.me.id)
@@ -192,8 +186,8 @@ async def _cmd_receive_goods(event, parts):
     finally:
         client.unpin_message(progress_msg)
 
+
 async def _handle_game_event(app, event_data):
-    # ... (此函数无需修改)
     client = app.client
     my_id = str(client.me.id)
     account_id = event_data.get("account_id")
@@ -297,6 +291,7 @@ async def _handle_game_event(app, event_data):
     if update_details:
         await client.send_admin_notification(f"📦 **状态更新通知 (`@{my_username}`)**\n{', '.join(update_details)}")
 
+
 async def redis_message_handler(message):
     app = get_application()
     client = app.client
@@ -317,7 +312,6 @@ async def redis_message_handler(message):
                 if await handler(data):
                     return
         
-        # [核心优化] V3.0 - 新增集火流程的消息处理器
         if task_type == "listing_successful" and my_id == data.get("target_account_id"):
             session_id = payload.get("session_id")
             if future := FOCUS_FIRE_SESSIONS.pop(session_id, None):
@@ -328,11 +322,7 @@ async def redis_message_handler(message):
             item_id = payload.get("item_id")
             await trade_logic.execute_unlisting_task(item_id, is_auto=True)
             return
-
-        if task_type == "list_item_for_ff" and my_id == data.get("target_account_id"):
-             await trade_logic.execute_listing_task(data['requester_account_id'], **payload)
-             return
-             
+            
         if task_type == "broadcast_command":
             if my_id == str(settings.ADMIN_USER_ID): return
             target_sect = data.get("target_sect")
@@ -345,7 +335,6 @@ async def redis_message_handler(message):
             return
 
         if task_type == "initiate_knowledge_request" and my_id == data.get("target_account_id"):
-            # ... (此部分无需修改)
             item_name = payload["item_name"]
             quantity = payload["quantity"]
             list_command = game_adaptor.list_item("灵石", quantity, item_name, quantity)
@@ -371,7 +360,6 @@ async def redis_message_handler(message):
             return
             
         if task_type == "knowledge_listing_available":
-            # ... (此部分无需修改)
             if my_id == str(settings.ADMIN_USER_ID) or my_id == payload.get("student_id"): return
             item_name = payload.get("item_name")
             if await inventory_manager.get_item_count(item_name) > 0:
@@ -380,7 +368,6 @@ async def redis_message_handler(message):
             return
 
         if task_type == "cancel_knowledge_request" and my_id == data.get("target_account_id"):
-            # ... (此部分无需修改)
             listing_id = payload.get("listing_id")
             if listing_id:
                 command = game_adaptor.unlist_item(listing_id)
@@ -392,11 +379,13 @@ async def redis_message_handler(message):
         
         format_and_log("INFO", "Redis 任务匹配成功", {'任务类型': task_type, '详情': str(data)})
         
-        if task_type == "purchase_item":
+        # [核心修复] 新增对 list_item_for_ff 的处理
+        if task_type == "list_item_for_ff":
+            await trade_logic.execute_listing_task(data['requester_account_id'], **payload)
+        elif task_type == "purchase_item":
             await trade_logic.execute_purchase_task(payload)
         
         elif task_type == "crafting_material_delivered":
-            # ... (此部分无需修改)
             session_id = payload.get("session_id")
             supplier_id = payload.get("supplier_id")
             session_json = await app.redis_db.hget("crafting_sessions", session_id)
@@ -411,7 +400,6 @@ async def redis_message_handler(message):
                 await app.redis_db.hset("crafting_sessions", session_id, json.dumps(session_data))
 
         elif task_type == "trigger_final_craft":
-            # ... (此部分无需修改)
             session_id = payload.get("session_id")
             session_json = await app.redis_db.hget("crafting_sessions", session_id)
             if not session_json: return
@@ -428,7 +416,6 @@ async def redis_message_handler(message):
 
 
 async def _check_crafting_session_timeouts():
-    # ... (此函数无需修改)
     app = get_application()
     if not app.redis_db: return
     sessions = await app.redis_db.hgetall("crafting_sessions")
