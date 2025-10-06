@@ -12,21 +12,22 @@ HELP_TEXT_DELETE_QA = """🗑️ **删除题库问答**
 HELP_TEXT_UPDATE_QA = """✍️ **修改/添加题库问答**
 **用法**: `,修改题库 <题库> <编号|“问题”> “<新答案>”`"""
 
+# [重构] 更新帮助文档
 HELP_TEXT_CLEAR_CACHE = """🗑️ **清理助手缓存**
 **说明**: 当某个助手账号被封禁或不再使用时，可通过此指令清理其在 Redis 中的所有缓存数据。
 **用法**:
-  `,清理缓存 <名称>`
-  *第一步：根据 Telegram 用户名或游戏道号查找助手并请求确认。*
+  `,清理缓存 <用户名|ID>`
+  *第一步：根据 Telegram 用户名或用户ID查找助手并请求确认。*
   
-  `,清理缓存 <名称> 确认`
+  `,清理缓存 <用户名|ID> 确认`
   *第二步：确认并执行删除操作。*
 **示例**:
   `,清理缓存 my_helper_bot`
-  `,清理缓存 张三 确认`
+  `,清理缓存 123456789 确认`
 """
 
 HELP_TEXT_LIST_CACHES = """👥 **查询助手缓存列表**
-**说明**: 列出当前 Redis 中缓存的所有助手的 Telegram 用户名和游戏道号。
+**说明**: 列出当前 Redis 中缓存的所有助手的 Telegram 用户名和ID。
 **用法**: `,查询缓存`
 """
 
@@ -57,7 +58,6 @@ async def _cmd_clear_cache(event, parts):
     result = await data_logic.logic_find_and_clear_cache(name_to_find, confirmed)
     await get_application().client.reply_to_admin(event, result)
 
-# [新功能] 查询缓存列表指令
 async def _cmd_list_caches(event, parts):
     result = await data_logic.logic_list_cached_assistants()
     await get_application().client.reply_to_admin(event, result)
@@ -69,5 +69,4 @@ def initialize(app):
     app.register_command("删除题库", _cmd_delete_qa, help_text="🗑️ 删除题库问答", category="知识", usage=HELP_TEXT_DELETE_QA)
     app.register_command("修改题库", _cmd_update_qa, help_text="✍️ 修改/添加题库问答", category="知识", usage=HELP_TEXT_UPDATE_QA)
     app.register_command("清理缓存", _cmd_clear_cache, help_text="🗑️ 清理指定助手的缓存", category="系统", usage=HELP_TEXT_CLEAR_CACHE)
-    # [新功能] 注册新指令
     app.register_command("查询缓存", _cmd_list_caches, help_text="👥 列出所有已缓存的助手", category="系统", usage=HELP_TEXT_LIST_CACHES)

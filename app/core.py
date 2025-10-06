@@ -37,6 +37,7 @@ class Application:
         
         self.setup_logging()
         format_and_log("SYSTEM", "应用初始化", {'阶段': '开始...'})
+        gemini_client.initialize_gemini()
         self.client = TelegramClient()
         format_and_log("SYSTEM", "组件初始化", {'组件': 'Telegram 客户端', '状态': '实例化完成'})
 
@@ -52,14 +53,12 @@ class Application:
         while True: 
             try:
                 async with self.redis_db.pubsub() as pubsub:
-                    # [重构] 同时订阅任务频道和游戏事件频道
                     await pubsub.subscribe(TASK_CHANNEL, GAME_EVENTS_CHANNEL)
                     format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 监听器', '状态': '已订阅', '频道': f"{TASK_CHANNEL}, {GAME_EVENTS_CHANNEL}"})
                     
                     async for message in pubsub.listen():
                         if message and message.get('type') == 'message':
                             format_and_log("DEBUG", "Redis 监听器", {'阶段': '收到消息', '原始返回': str(message)})
-                            # 所有消息都由一个总处理器分发
                             asyncio.create_task(redis_message_handler(message))
 
             except (redis.exceptions.ConnectionError, asyncio.CancelledError) as e:
@@ -72,41 +71,45 @@ class Application:
         
     def setup_logging(self):
         print("开始配置日志系统...")
-        root_logger = logging.getLogger()
-        if root_logger.hasHandlers(): root_logger.handlers.clear()
-
+        # --- 1. 配置主日志记录器 (用于 docker logs) ---
+        app_logger = logging.getLogger("app")
+        if app_logger.hasHandlers(): app_logger.handlers.clear()
+        
         log_level = logging.DEBUG if settings.LOGGING_SWITCHES.get('debug_log') else logging.INFO
-        root_logger.setLevel(log_level)
+        app_logger.setLevel(log_level)
+        
+        # [BUG修复] 关闭日志传播，防止重复输出
+        app_logger.propagate = False
         
         console_formatter = logging.Formatter(fmt='%(message)s')
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setFormatter(console_formatter)
-        root_logger.addHandler(stream_handler)
-        app_log_formatter = TimezoneFormatter(
-            fmt='%(asctime)s - %(levelname)s:%(message)s', datefmt='%Y-%m-%d %H:%M:%S %Z', tz_name=settings.TZ
-        )
-        app_log_handler = logging.handlers.RotatingFileHandler(
-            settings.LOG_FILE, maxBytes=settings.LOG_ROTATION_CONFIG['max_bytes'], 
-            backupCount=settings.LOG_ROTATION_CONFIG['backup_count'], encoding='utf-8')
-        app_log_handler.setFormatter(app_log_formatter)
-        root_logger.addHandler(app_log_handler)
+        app_logger.addHandler(stream_handler)
+        
+        # --- 2. 配置独立的原始日志记录器 (用于写入文件) ---
+        raw_logger = logging.getLogger('raw_messages')
+        if raw_logger.hasHandlers(): raw_logger.handlers.clear()
+        raw_logger.propagate = False
+        
+        if settings.LOGGING_SWITCHES.get('original_log_enabled'):
+            raw_logger.setLevel(logging.INFO)
+            raw_log_formatter = TimezoneFormatter(
+                fmt='%(asctime)s - %(message)s\n--------------------\n', datefmt='%Y-%m-%d %H:%M:%S %Z', tz_name=settings.TZ
+            )
+            raw_log_handler = logging.handlers.RotatingFileHandler(
+                settings.RAW_LOG_FILE, maxBytes=settings.LOG_ROTATION_CONFIG['max_bytes'], 
+                backupCount=settings.LOG_ROTATION_CONFIG['backup_count'], encoding='utf-8')
+            raw_log_handler.setFormatter(raw_log_formatter)
+            raw_logger.addHandler(raw_log_handler)
+        else:
+            raw_logger.setLevel(logging.CRITICAL + 1)
+        
+        # --- 3. 屏蔽第三方库的日志 ---
         logging.getLogger('apscheduler').setLevel(logging.ERROR)
         logging.getLogger('telethon').setLevel(logging.WARNING)
         logging.getLogger('asyncio').setLevel(logging.WARNING)
-        raw_logger = logging.getLogger('raw_messages')
-        raw_logger.setLevel(logging.INFO)
-        raw_logger.propagate = False
-        if raw_logger.hasHandlers(): raw_logger.handlers.clear()
-        
-        raw_log_formatter = TimezoneFormatter(
-            fmt='%(asctime)s - %(message)s\n--------------------\n', datefmt='%Y-%m-%d %H:%M:%S %Z', tz_name=settings.TZ
-        )
-        raw_log_handler = logging.handlers.RotatingFileHandler(
-            settings.RAW_LOG_FILE, maxBytes=settings.LOG_ROTATION_CONFIG['max_bytes'], 
-            backupCount=settings.LOG_ROTATION_CONFIG['backup_count'], encoding='utf-8')
-        raw_log_handler.setFormatter(raw_log_formatter)
-        raw_logger.addHandler(raw_log_handler)
-        print(f"日志系统配置完成。当前日志级别: {logging.getLevelName(log_level)}")
+
+        print(f"日志系统配置完成。")
 
     def load_plugins_and_commands(self, is_reload=False):
         if is_reload:
@@ -203,8 +206,7 @@ class Application:
                 client.unpin_message(progress_message)
                 try:
                     await client._cancel_message_deletion(progress_message)
-                    edited_message = await progress_message.edit(final_text)
-                    client._schedule_message_deletion(edited_message, settings.AUTO_DELETE.get('delay_admin_command'), "编辑后的助手回复")
+                    await progress_message.edit(final_text)
                 except MessageEditTimeExpiredError:
                     await client.reply_to_admin(event, final_text)
 
@@ -213,7 +215,6 @@ class Application:
     async def reload_plugins_and_commands(self):
         format_and_log("SYSTEM", "热重载", {'阶段': '开始...'})
         try:
-            # 重新加载配置和所有插件模块
             reload(sys.modules['config.settings'])
             for module_name in list(sys.modules.keys()):
                 if module_name.startswith('app.plugins.'):
@@ -223,6 +224,5 @@ class Application:
             return
         
         self.load_plugins_and_commands(is_reload=True)
-        # 重新运行启动检查以重新调度任务
         asyncio.create_task(self._run_startup_checks())
         format_and_log("SYSTEM", "热重载", {'阶段': '完成'})

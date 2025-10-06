@@ -5,8 +5,6 @@ from collections import namedtuple
 from datetime import datetime
 from config import settings
 
-# [核心修复] 将 get_display_width 函数直接放在 logger 内部，因为它主要用于日志格式化
-# 这样可以彻底断开与 utils.py 的循环依赖
 def get_display_width(text: str) -> int:
     width = 0
     for char in text:
@@ -16,9 +14,9 @@ def get_display_width(text: str) -> int:
             width += 1
     return width
 
-# --- 日志分类的“真理之源” ---
 LogCategory = namedtuple('LogCategory', ['key', 'switch_name', 'description'])
 
+# [重构] 明确区分日志类型
 LOG_CATEGORIES = [
     LogCategory("SYSTEM",       "system_activity",      "系统活动"),
     LogCategory("TASK",         "task_activity",        "任务活动"),
@@ -28,8 +26,8 @@ LOG_CATEGORIES = [
     LogCategory("DEBUG",        "debug_log",            "调试日志"),
     LogCategory("MSG_EDIT",     "log_edits",            "消息编辑"),
     LogCategory("MSG_DELETE",   "log_deletes",          "消息删除"),
-    # [需求修改] 将描述名称更改为“原始日志”
-    LogCategory("MSG_SENT_SELF","original_log_enabled", "原始日志"),
+    LogCategory("MSG_SENT_SELF","msg_sent_self",        "发出的消息"), # 自己在其他设备发的消息
+    LogCategory("RAW_LOG",      "original_log_enabled", "原始日志"), # 原始日志独立开关
 ]
 
 LOG_TYPES = {cat.key: cat.switch_name for cat in LOG_CATEGORIES}
@@ -51,11 +49,12 @@ class TimezoneFormatter(logging.Formatter):
 LINE_WIDTH = 50
 
 def format_and_log(log_type_key: str, title: str, data: dict, level=logging.INFO):
+    """此函数现在只负责输出到控制台 (docker logs)"""
     log_switch_name = LOG_TYPES.get(log_type_key)
     if not (log_switch_name and settings.LOGGING_SWITCHES.get(log_switch_name, True)): 
         return
     
-    logger = logging.getLogger()
+    logger = logging.getLogger("app") # 使用名为 "app" 的主日志记录器
     top_border = "┌" + "─" * LINE_WIDTH
     middle_border = "├" + "─" * LINE_WIDTH
     bottom_border = "└" + "─" * LINE_WIDTH

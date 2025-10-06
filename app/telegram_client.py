@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timedelta
 from telethon import TelegramClient as TelethonTgClient, events
 from telethon.tl.functions.channels import GetFullChannelRequest
+from telethon.tl.functions.account import UpdateStatusRequest
 from telethon.tl.types import Message, UpdateDeleteChannelMessages, UpdateDeleteMessages, Channel
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError, SlowModeWaitError
 from telethon.utils import get_display_name
@@ -34,7 +35,6 @@ class TelegramClient:
         
         self.message_queue = asyncio.Queue()
         self.pending_req_by_id = {}
-        # [重构] 统一的、更健壮的编辑等待机制
         self.pending_edit_waits = {}
         self.deletion_tasks = {}
         self._pinned_messages = set()
@@ -43,8 +43,10 @@ class TelegramClient:
         if getattr(settings, 'TEST_GROUP_ID', None):
             all_configured_groups.append(settings.TEST_GROUP_ID)
         
-        self.client.on(events.NewMessage(chats=all_configured_groups, incoming=True))(self._message_handler)
-        self.client.on(events.MessageEdited(chats=all_configured_groups, incoming=True))(self._message_edited_handler)
+        listen_mode = None if settings.LOGGING_SWITCHES.get('original_log_enabled', False) else True
+        
+        self.client.on(events.NewMessage(chats=all_configured_groups, incoming=listen_mode))(self._message_handler)
+        self.client.on(events.MessageEdited(chats=all_configured_groups, incoming=listen_mode))(self._message_edited_handler)
         self.client.add_event_handler(self._deleted_message_handler, events.Raw(types=[UpdateDeleteChannelMessages, UpdateDeleteMessages]))
         
     async def reply_to_admin(self, event, text: str, **kwargs):
@@ -166,7 +168,6 @@ class TelegramClient:
             sent_message = await self._send_command_and_get_message(command)
             
             edit_future = asyncio.Future()
-            # [重构] 注册一个统一的等待任务
             self.pending_edit_waits[sent_message.id] = {
                 "future": edit_future,
                 "pattern": initial_reply_pattern,
@@ -189,12 +190,26 @@ class TelegramClient:
 
 
     async def start(self):
+        from app.state_manager import get_state, set_state
         await self.client.start()
         self.me = await self.client.get_me()
         my_name = get_display_name(self.me)
         identity = "主控账号 (Admin)" if str(self.me.id) == str(self.admin_id) else "辅助账号 (Helper)"
         from app.logger import format_and_log
         format_and_log("SYSTEM", "客户端状态", {'状态': '已成功连接', '当前用户': f"{my_name} (ID: {self.me.id})", '识别身份': identity})
+        
+        # [新功能] 启动时主动注册自己的身份信息到缓存
+        try:
+            profile = await get_state("character_profile", is_json=True, default={})
+            profile.update({
+                "用户": self.me.username,
+                "ID": self.me.id
+            })
+            await set_state("character_profile", profile)
+            format_and_log("SYSTEM", "身份注册", {'状态': '成功', '用户名': self.me.username, 'ID': self.me.id})
+        except Exception as e:
+            format_and_log("ERROR", "身份注册失败", {'错误': str(e)})
+            
         asyncio.create_task(self._message_sender_loop())
 
     async def _cache_chat_info(self):
@@ -222,7 +237,7 @@ class TelegramClient:
     async def disconnect(self): await self.client.disconnect()
     async def warm_up_entity_cache(self):
         try:
-            async for _ in self.client.iter_dialogs(limit=15): pass
+            async for _ in self.client.iter_dialogs(limit=20): pass
         except Exception: pass
 
     async def send_admin_notification(self, message: str):
@@ -302,7 +317,6 @@ class TelegramClient:
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         
         if not event.out:
-            # 简单回复的等待
             if self.pending_req_by_id and event.is_reply and event.message.reply_to_msg_id in self.pending_req_by_id:
                 future, _ = self.pending_req_by_id.pop(event.message.reply_to_msg_id)
                 if future and not future.done():
@@ -310,17 +324,13 @@ class TelegramClient:
                     future.set_result(event.message)
                 return
 
-            # [重构] 统一处理等待编辑的初始回复
             if self.pending_edit_waits and event.is_reply and event.message.reply_to_msg_id in self.pending_edit_waits:
                 wait_obj = self.pending_edit_waits[event.message.reply_to_msg_id]
-                # 检查是否匹配初始回复的模式
                 if re.search(wait_obj['pattern'], event.text, re.DOTALL):
-                    # 记录初始回复ID，等待编辑
                     wait_obj['initial_reply_id'] = event.id
                     format_and_log("DEBUG", "智能等待", {'状态': '已捕获初始回复', '消息ID': event.id})
                 return
 
-            # 智能关联 (作为最后的备选方案)
             if self.pending_req_by_id and event.sender_id in settings.GAME_BOT_IDS:
                 pending_in_chat = sorted([
                     (msg_id, future) for msg_id, (future, chat_id) in self.pending_req_by_id.items()
@@ -337,14 +347,12 @@ class TelegramClient:
         await log_event(self, LogType.MSG_EDIT, event)
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         
-        # [重构] 统一处理编辑事件
         if self.pending_edit_waits:
-            for sent_msg_id, wait_obj in self.pending_edit_waits.items():
+            for sent_msg_id, wait_obj in list(self.pending_edit_waits.items()):
                 if wait_obj['initial_reply_id'] == event.id:
                     future = wait_obj['future']
                     if future and not future.done():
                         future.set_result(event.message)
-                    # 任务完成，可以从字典中移除
                     self.pending_edit_waits.pop(sent_msg_id, None)
                     return
     

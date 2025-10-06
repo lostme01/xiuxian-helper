@@ -99,8 +99,8 @@ async def logic_update_answer(db_key: str, identifier: str, answer: str) -> str:
     return f"✅ 已在 **[{db_key}]** 题库中更新/添加:\n**问**: `{question}`\n**答**: `{answer}`"
 
 
-async def logic_find_and_clear_cache(name_to_find: str, confirmed: bool = False) -> str:
-    """根据用户名或道号查找并清理助手缓存"""
+async def logic_find_and_clear_cache(identifier: str, confirmed: bool = False) -> str:
+    """[重构版] 根据用户名或ID查找并清理助手缓存"""
     app = get_application()
     if not app.redis_db:
         return "❌ 错误: Redis 未连接。"
@@ -108,7 +108,6 @@ async def logic_find_and_clear_cache(name_to_find: str, confirmed: bool = False)
     keys_found = [key async for key in app.redis_db.scan_iter("tg_helper:task_states:*")]
     
     target_key = None
-    target_id = None
     profile_info = {}
 
     for key in keys_found:
@@ -118,43 +117,41 @@ async def logic_find_and_clear_cache(name_to_find: str, confirmed: bool = False)
         try:
             profile = json.loads(profile_json)
             user = profile.get("用户")
-            dao_name = profile.get("道号")
+            user_id = str(profile.get("ID", ""))
 
-            if (user and name_to_find.lower() == user.lower()) or \
-               (dao_name and name_to_find.lower() == dao_name.lower()):
+            # [重构] 同时支持按用户名和ID进行匹配
+            if (user and identifier.lower() == user.lower()) or \
+               (user_id and identifier == user_id):
                 
                 target_key = key
-                target_id = key.split(':')[-1]
                 profile_info = {
-                    "ID": f"`{target_id}`",
-                    "用户名": f"`{user}`",
-                    "道号": f"`{dao_name}`",
-                    "境界": f"`{profile.get('境界', '未知')}`",
+                    "TG 用户名": f"`{user or '未知'}`",
+                    "用户ID": f"`{user_id or '未知'}`",
+                    "游戏道号": f"`{profile.get('道号', '未知')}`",
                 }
                 break
         except (json.JSONDecodeError, IndexError):
             continue
 
     if not target_key:
-        return f"❓ 未找到用户名为或道号为 **{name_to_find}** 的助手缓存。"
+        return f"❓ 未找到用户名为或ID为 **{identifier}** 的助手缓存。"
 
     if not confirmed:
         details = "\n".join([f"- **{k}**: {v}" for k, v in profile_info.items()])
         return (f"**⚠️ 请确认是否要删除以下助手的全部缓存？**\n\n"
                 f"{details}\n\n"
                 f"**此操作不可逆！**\n"
-                f"确认请输入: `,清理缓存 {name_to_find} 确认`")
+                f"确认请输入: `,清理缓存 {identifier} 确认`")
 
     try:
         await app.redis_db.delete(target_key)
         return (f"✅ **缓存已成功删除**\n\n"
-                f"已清除ID为 `{target_id}` (名称: {name_to_find}) 的所有缓存数据。")
+                f"已清除标识为 **{identifier}** 的所有缓存数据。")
     except Exception as e:
         return f"❌ **删除失败**\n\n删除过程中发生错误: `{e}`"
 
-# [新功能] 列出所有缓存的助手
 async def logic_list_cached_assistants() -> str:
-    """扫描并列出所有已缓存助手的信息"""
+    """[重构版] 扫描并列出所有已缓存助手的信息"""
     app = get_application()
     if not app.redis_db:
         return "❌ 错误: Redis 未连接。"
@@ -170,9 +167,10 @@ async def logic_list_cached_assistants() -> str:
             continue
         try:
             profile = json.loads(profile_json)
+            user_id = profile.get("ID", key.split(':')[-1])
             user = profile.get("用户", "未知")
-            dao_name = profile.get("道号", "未知")
-            assistant_lines.append(f"- **TG 用户名**: `{user}`, **游戏道号**: `{dao_name}`")
+            # [重构] 按您的要求调整输出格式
+            assistant_lines.append(f"- **TG 用户名**: `{user}`, **ID**: `{user_id}`")
         except (json.JSONDecodeError, IndexError):
             continue
     
