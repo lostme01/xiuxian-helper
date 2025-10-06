@@ -1,5 +1,5 @@
 from app.context import get_application
-from .logic import gamestate_logic
+from app.plugins.logic.gamestate_logic import logic_reset_task_state
 from app.utils import require_args
 
 HELP_TEXT_RESET_TASK = """⏳ **重置任务冷却状态**
@@ -10,7 +10,7 @@ HELP_TEXT_RESET_TASK = """⏳ **重置任务冷却状态**
 
 @require_args(count=2, usage=HELP_TEXT_RESET_TASK)
 async def _cmd_reset_task(event, parts):
-    await get_application().client.reply_to_admin(event, await gamestate_logic.logic_reset_task_state(parts[1]))
+    await get_application().client.reply_to_admin(event, await logic_reset_task_state(parts[1]))
 
 def initialize(app):
     app.register_command(

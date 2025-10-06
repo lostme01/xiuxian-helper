@@ -8,9 +8,10 @@ from app.inventory_manager import inventory_manager
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
 from app import game_adaptor
+# [重构] 直接导入全局单例
+from app.data_manager import data_manager
 
 CRAFTING_RECIPES_KEY = "crafting_recipes"
-STATES_KEY_PATTERN = "tg_helper:task_states:*"
 
 async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler):
     """
@@ -31,7 +32,6 @@ async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler
         
         raw_text = final_reply.text
         
-        # [重构] 只负责反馈结果，库存交由事件总线处理
         if "炼制结束" in raw_text and "最终获得" in raw_text:
             await feedback_handler(f"✅ **炼制指令已成功**!\n系统将通过事件监听器自动更新库存。")
         else:
@@ -48,11 +48,10 @@ async def logic_check_local_materials(item_name: str, quantity: int = 1) -> dict
     """
     仅检查本地库存是否足够炼制指定物品。
     """
-    app = get_application()
-    if not app.redis_db:
+    if not data_manager.db:
         return "❌ 错误: Redis 未连接。"
     
-    recipe_json = await app.redis_db.hget(CRAFTING_RECIPES_KEY, item_name)
+    recipe_json = await data_manager.db.hget(CRAFTING_RECIPES_KEY, item_name)
     if not recipe_json:
         return f"❌ **规划失败**: 在配方数据库中未找到“{item_name}”的配方。"
     
@@ -82,11 +81,10 @@ async def logic_plan_crafting_session(item_name: str, initiator_id: str, quantit
     """
     规划一次多账号协同炼制任务，寻找材料供应方。
     """
-    app = get_application()
-    if not app.redis_db:
+    if not data_manager.db:
         return "❌ 错误: Redis 未连接。"
 
-    recipe_json = await app.redis_db.hget(CRAFTING_RECIPES_KEY, item_name)
+    recipe_json = await data_manager.db.hget(CRAFTING_RECIPES_KEY, item_name)
     if not recipe_json:
         return f"❌ **规划失败**: 在配方数据库中未找到“{item_name}”的配方。"
     
@@ -105,13 +103,13 @@ async def logic_plan_crafting_session(item_name: str, initiator_id: str, quantit
     accounts_inventories = {}
     total_network_inventory = defaultdict(int)
     
-    keys_found = [key async for key in app.redis_db.scan_iter(STATES_KEY_PATTERN)]
+    keys_found = await data_manager.get_all_assistant_keys()
     for key in keys_found:
         account_id = key.split(':')[-1]
         if account_id == initiator_id:
             continue
             
-        inventory_json = await app.redis_db.hget(key, "inventory")
+        inventory_json = await data_manager.db.hget(key, "inventory")
         if inventory_json:
             try:
                 inventory = json.loads(inventory_json)

@@ -12,6 +12,8 @@ from app.context import get_application
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
 from app import game_adaptor
+# [重构] 直接导入全局单例
+from app.data_manager import data_manager
 
 STATE_KEY_FORMATION = "formation_info"
 TASK_ID_FORMATION_BASE = 'formation_update_task_'
@@ -67,7 +69,7 @@ async def trigger_update_formation(force_run=False):
                 return f"❌ **[查询阵法]** 任务失败：返回信息格式不正确。\n\n**原始返回**:\n`{reply.text}`"
             return
 
-        await app.data_manager.save_value(STATE_KEY_FORMATION, formation_data)
+        await data_manager.save_value(STATE_KEY_FORMATION, formation_data)
         format_and_log("TASK", "查询阵法", {'阶段': '成功', '数据': formation_data})
         
         if force_run:
@@ -85,18 +87,23 @@ async def _cmd_query_formation(event, parts):
     await app.client.reply_to_admin(event, await trigger_update_formation(force_run=True))
 
 async def _cmd_view_cached_formation(event, parts):
-    app = get_application()
-    formation_data = await app.data_manager.get_value(STATE_KEY_FORMATION, is_json=True)
+    formation_data = await data_manager.get_value(STATE_KEY_FORMATION, is_json=True)
     if not formation_data:
-        await app.client.reply_to_admin(event, "ℹ️ 尚未缓存任何阵法信息，请先使用 `,我的阵法` 查询一次。")
+        await get_application().client.reply_to_admin(event, "ℹ️ 尚未缓存任何阵法信息，请先使用 `,我的阵法` 查询一次。")
         return
     reply_text = _format_formation_reply(formation_data, "📄 **已缓存的阵法信息**:")
-    await app.client.reply_to_admin(event, reply_text)
+    await get_application().client.reply_to_admin(event, reply_text)
 
 async def check_formation_update_startup():
-    app = get_application()
-    if not settings.TASK_SWITCHES.get('formation_update', True) or not app.data_manager: return
+    if not settings.TASK_SWITCHES.get('formation_update', True) or not data_manager.db: return
     
+    # [修复] 增加对当天是否已运行的检查
+    last_run_json = await data_manager.get_value("formation_last_run", is_json=True, default={})
+    today_str = date.today().isoformat()
+    if last_run_json.get("date") == today_str and last_run_json.get("count", 0) >= 2:
+        format_and_log("TASK", "查询阵法", {'阶段': '调度跳过', '原因': '今日任务已完成'})
+        return
+
     for job in scheduler.get_jobs():
         if job.id.startswith(TASK_ID_FORMATION_BASE):
             job.remove()
@@ -118,7 +125,18 @@ async def check_formation_update_startup():
             run_time = (now + timedelta(days=1)).replace(hour=random.randint(start_h, end_h-1), minute=random.randint(0, 59))
 
         job_id = f"{TASK_ID_FORMATION_BASE}{i}"
-        scheduler.add_job(trigger_update_formation, 'date', run_date=run_time, id=job_id)
+        
+        # [修复] 任务成功后更新运行记录
+        async def job_wrapper():
+            await trigger_update_formation()
+            current_run_info = await data_manager.get_value("formation_last_run", is_json=True, default={"date": "1970-01-01", "count": 0})
+            if current_run_info.get("date") != today_str:
+                current_run_info = {"date": today_str, "count": 1}
+            else:
+                current_run_info["count"] += 1
+            await data_manager.save_value("formation_last_run", current_run_info)
+
+        scheduler.add_job(job_wrapper, 'date', run_date=run_time, id=job_id)
         format_and_log("TASK", "查询阵法", {'阶段': '调度计划', '任务': f'每日第{i+1}次', '运行时间': run_time.strftime('%Y-%m-%d %H:%M:%S')})
 
 

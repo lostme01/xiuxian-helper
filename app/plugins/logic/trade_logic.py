@@ -12,6 +12,8 @@ from app.telegram_client import CommandTimeoutError, Message
 from app import redis_client, game_adaptor
 from config import settings
 from app.task_scheduler import scheduler
+# [重构] 直接导入全局单例
+from app.data_manager import data_manager
 
 TASK_CHANNEL = "tg_helper:tasks"
 
@@ -34,17 +36,16 @@ async def publish_task(task: dict, channel: str = TASK_CHANNEL) -> bool:
         return False
 
 async def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) -> (str, int):
-    app = get_application()
-    if not app.data_manager: return None, 0
+    if not data_manager.db: return None, 0
     best_account_id = None
     min_sufficient_quantity = float('inf') 
     try:
-        keys_found = await app.data_manager.get_all_assistant_keys()
+        keys_found = await data_manager.get_all_assistant_keys()
         for key in keys_found:
             account_id_str = key.split(':')[-1]
             if account_id_str == exclude_id: continue
             
-            inventory_json = await app.redis_db.hget(key, "inventory")
+            inventory_json = await data_manager.db.hget(key, "inventory")
             if not inventory_json: continue
 
             try:
@@ -63,10 +64,9 @@ async def find_best_executor(item_name: str, required_quantity: int, exclude_id:
     return best_account_id, found_quantity
 
 async def find_any_executor(exclude_id: str) -> str | None:
-    app = get_application()
-    if not app.data_manager: return None
+    if not data_manager.db: return None
     try:
-        keys_found = await app.data_manager.get_all_assistant_keys()
+        keys_found = await data_manager.get_all_assistant_keys()
         for key in keys_found:
             account_id_str = key.split(':')[-1]
             if account_id_str != exclude_id: return account_id_str
@@ -76,7 +76,6 @@ async def find_any_executor(exclude_id: str) -> str | None:
 
 async def execute_listing_task(requester_account_id: str, **kwargs):
     app = get_application()
-    inventory_manager = app.inventory_manager
     
     command = game_adaptor.list_item(
         sell_item=kwargs['item_to_sell_name'],
@@ -87,7 +86,6 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
     format_and_log("TASK", "集火-上架", {'阶段': '开始执行', '指令': command})
     
     try:
-        # [重构] 上架时不再操作库存，交由事件总线处理
         _sent, reply = await app.client.send_game_command_request_response(command)
         reply_text = reply.text
         
@@ -125,7 +123,6 @@ async def execute_unlisting_task(item_id: str, is_auto: bool = False):
     log_context = {'阶段': '开始执行', '指令': command, '自动任务': is_auto}
     format_and_log("TASK", "下架物品", log_context)
     try:
-        # [重构] 下架后不再操作库存，交由事件总线处理
         _sent, reply = await app.client.send_game_command_request_response(command)
         reply_text = reply.text
         if not ("成功将" in reply_text and "归还至你的储物袋" in reply_text) and not is_auto:
@@ -139,7 +136,6 @@ async def execute_purchase_task(payload: dict):
     command = game_adaptor.buy_item(payload.get("item_id"))
     format_and_log("TASK", "协同任务-购买", {'阶段': '开始执行', '指令': command})
     try:
-        # [重构] 购买后不再操作库存，交由事件总线处理
         _sent, reply = await app.client.send_game_command_request_response(command)
         reply_text = reply.text
         

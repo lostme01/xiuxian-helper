@@ -11,12 +11,14 @@ from app.task_scheduler import scheduler
 from app.plugins.logic import trade_logic
 from app.telegram_client import CommandTimeoutError
 from app import game_adaptor
+# [重构] 直接导入全局单例
+from app.data_manager import data_manager
 
 KNOWLEDGE_SESSIONS_KEY = "knowledge_sessions"
 
 async def _execute_resource_management():
     app = get_application()
-    if not settings.AUTO_RESOURCE_MANAGEMENT.get('enabled') or not app.data_manager:
+    if not settings.AUTO_RESOURCE_MANAGEMENT.get('enabled') or not data_manager.db:
         return
 
     my_id = str(app.client.me.id)
@@ -28,10 +30,10 @@ async def _execute_resource_management():
     if not rules:
         return
 
-    all_keys = await app.data_manager.get_all_assistant_keys()
+    all_keys = await data_manager.get_all_assistant_keys()
     for key in all_keys:
         account_id = key.split(':')[-1]
-        state = await app.data_manager.get_full_state(account_id)
+        state = await data_manager.get_full_state(account_id)
         
         inv = json.loads(state.get("inventory", "{}"))
         treasury = json.loads(state.get("sect_treasury", "{}"))
@@ -64,14 +66,14 @@ async def _execute_resource_management():
 
 async def _execute_knowledge_sharing():
     app = get_application()
-    if not settings.AUTO_KNOWLEDGE_SHARING.get('enabled') or not app.data_manager:
+    if not settings.AUTO_KNOWLEDGE_SHARING.get('enabled') or not data_manager.db:
         return
 
     my_id = str(app.client.me.id)
     if my_id != str(settings.ADMIN_USER_ID):
         return
 
-    if await app.redis_db.hlen(KNOWLEDGE_SESSIONS_KEY) > 0:
+    if await data_manager.db.hlen(KNOWLEDGE_SESSIONS_KEY) > 0:
         format_and_log("TASK", "知识共享", {'阶段': '跳过', '原因': '已有正在进行的任务'})
         return
 
@@ -79,11 +81,11 @@ async def _execute_knowledge_sharing():
 
     all_bots_data = {}
     all_known_recipes = set()
-    all_keys = await app.data_manager.get_all_assistant_keys()
+    all_keys = await data_manager.get_all_assistant_keys()
 
     for key in all_keys:
         account_id = key.split(':')[-1]
-        state = await app.data_manager.get_full_state(account_id)
+        state = await data_manager.get_full_state(account_id)
         learned = set(json.loads(state.get("learned_recipes", "[]")))
         inv = json.loads(state.get("inventory", "{}"))
         all_bots_data[account_id] = {'learned': learned, 'inventory': inv}
@@ -112,10 +114,9 @@ async def _execute_knowledge_sharing():
 
 
 async def _check_knowledge_session_timeouts():
-    app = get_application()
-    if not app.data_manager: return
+    if not data_manager.db: return
 
-    sessions = await app.redis_db.hgetall(KNOWLEDGE_SESSIONS_KEY)
+    sessions = await data_manager.db.hgetall(KNOWLEDGE_SESSIONS_KEY)
     now = time.time()
     for session_id, session_json in sessions.items():
         try:
@@ -124,7 +125,7 @@ async def _check_knowledge_session_timeouts():
                 format_and_log("TASK", "知识共享-超时检查", {'状态': '发现超时任务', '会话ID': session_id})
                 cancel_task = { "task_type": "cancel_knowledge_request", "target_account_id": session_data["student_id"], "payload": session_data }
                 await trade_logic.publish_task(cancel_task)
-                await app.redis_db.hdel(KNOWLEDGE_SESSIONS_KEY, session_id)
+                await data_manager.db.hdel(KNOWLEDGE_SESSIONS_KEY, session_id)
         except Exception as e:
             format_and_log("ERROR", "知识共享-超时检查", {'状态': '处理异常', '会话ID': session_id, '错误': str(e)})
 

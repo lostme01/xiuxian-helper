@@ -4,6 +4,8 @@ from config import settings
 from app.context import get_application
 from app import redis_client
 from app.logger import format_and_log
+# [重构] 直接导入全局单例
+from app.data_manager import data_manager
 
 def _normalize_formation_name(name: str) -> str:
     """
@@ -18,12 +20,12 @@ async def logic_check_knowledge_all_accounts() -> str:
     遍历每个助手，使用其自身的宝库缓存，并通过名称标准化进行精确对比。
     """
     app = get_application()
-    if not app.redis_db:
+    if not data_manager.db:
         return "❌ 错误: Redis 未连接。"
 
     my_id = str(app.client.me.id)
     report_lines = ["\n✨ **各助手学习进度盘点**\n---"]
-    keys_found = [key async for key in app.redis_db.scan_iter("tg_helper:task_states:*")]
+    keys_found = await data_manager.get_all_assistant_keys()
     
     other_accounts_count = 0
     for key in keys_found:
@@ -34,7 +36,7 @@ async def logic_check_knowledge_all_accounts() -> str:
         other_accounts_count += 1
         account_report = [f"**- 助手ID**: `...{account_id_str[-4:]}`"]
         
-        account_state = await app.redis_db.hgetall(key)
+        account_state = await data_manager.db.hgetall(key)
         
         treasury_json = account_state.get("sect_treasury")
         if not treasury_json:
@@ -44,7 +46,6 @@ async def logic_check_knowledge_all_accounts() -> str:
 
         try:
             treasury_data = json.loads(treasury_json)
-            # --- 核心修复：正确解析和分类宝库物品 ---
             all_recipes = set()
             all_blueprints = set()
             all_formations = set()
@@ -55,8 +56,7 @@ async def logic_check_knowledge_all_accounts() -> str:
                     all_recipes.add(item_name)
                 elif "图纸" in item_name:
                     all_blueprints.add(item_name)
-                elif "阵" in item_name: # 泛匹配与阵法相关的物品
-                    # --- 核心修复：对阵法名称进行标准化 ---
+                elif "阵" in item_name:
                     all_formations.add(_normalize_formation_name(item_name))
 
         except (json.JSONDecodeError, TypeError):
@@ -64,7 +64,6 @@ async def logic_check_knowledge_all_accounts() -> str:
             report_lines.append("\n".join(account_report))
             continue
 
-        # 对比丹方和图纸
         learned_recipes_json = account_state.get("learned_recipes")
         learned_recipes = set(json.loads(learned_recipes_json) if learned_recipes_json else [])
         
@@ -76,10 +75,9 @@ async def logic_check_knowledge_all_accounts() -> str:
         if unlearned_blueprints:
             account_report.append(f"  - **未学图纸**: `{', '.join(sorted(unlearned_blueprints))}`")
 
-        # 对比阵法
         formation_info_json = account_state.get("formation_info")
         formation_info = json.loads(formation_info_json) if formation_info_json else {}
-        learned_formations = set(formation_info.get("learned", [])) # 已学阵法名称已是标准格式
+        learned_formations = set(formation_info.get("learned", []))
         
         unlearned_formations = all_formations - learned_formations
         if unlearned_formations:
