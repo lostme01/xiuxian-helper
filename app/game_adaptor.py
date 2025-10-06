@@ -30,6 +30,12 @@ def unlist_item(listing_id: str) -> str:
     """
     return f".下架 {listing_id}"
 
+def get_my_stall() -> str:
+    """
+    [新增] 生成查询货摊的指令。
+    """
+    return ".我的货摊"
+
 # --- 炼制与学习行为 ---
 
 def craft_item(item_name: str, quantity: int) -> str:

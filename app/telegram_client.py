@@ -190,7 +190,6 @@ class TelegramClient:
 
 
     async def start(self):
-        # [重构] 启动流程简化，只负责登录和报告状态
         await self.client.start()
         self.me = await self.client.get_me()
         my_name = get_display_name(self.me)
@@ -299,11 +298,13 @@ class TelegramClient:
         self._schedule_message_deletion(message, settings.AUTO_DELETE.get('delay_admin_command'), "解钉后自动清理")
 
     async def _message_handler(self, event: events.NewMessage.Event):
+        from app.logger import format_and_log
         log_type = LogType.MSG_SENT_SELF if event.out else LogType.MSG_RECV
         await log_event(self, log_type, event)
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         
         if not event.out:
+            # [核心机制] 检查新消息是否是对我们正在等待的某条指令的直接回复
             if self.pending_req_by_id and event.is_reply and event.message.reply_to_msg_id in self.pending_req_by_id:
                 future, _ = self.pending_req_by_id.pop(event.message.reply_to_msg_id)
                 if future and not future.done():
@@ -311,24 +312,13 @@ class TelegramClient:
                     future.set_result(event.message)
                 return
 
+            # 处理需要等待消息被编辑的场景 (例如 .我的灵根)
             if self.pending_edit_waits and event.is_reply and event.message.reply_to_msg_id in self.pending_edit_waits:
                 wait_obj = self.pending_edit_waits[event.message.reply_to_msg_id]
                 if re.search(wait_obj['pattern'], event.text, re.DOTALL):
                     wait_obj['initial_reply_id'] = event.id
                     format_and_log("DEBUG", "智能等待", {'状态': '已捕获初始回复', '消息ID': event.id})
                 return
-
-            if self.pending_req_by_id and event.sender_id in settings.GAME_BOT_IDS:
-                pending_in_chat = sorted([
-                    (msg_id, future) for msg_id, (future, chat_id) in self.pending_req_by_id.items()
-                    if chat_id == event.chat_id and not future.done()
-                ], key=lambda x: x[0], reverse=True)
-                
-                if pending_in_chat:
-                    latest_msg_id, future_to_resolve = pending_in_chat[0]
-                    await log_event(self, LogType.REPLY_RECV, event, note="智能关联")
-                    future_to_resolve.set_result(event.message)
-                    self.pending_req_by_id.pop(latest_msg_id)
 
     async def _message_edited_handler(self, event: events.MessageEdited.Event):
         await log_event(self, LogType.MSG_EDIT, event)
