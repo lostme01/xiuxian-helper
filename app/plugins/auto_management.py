@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import time
+import random
 from asteval import Interpreter
 from app.context import get_application
 from app.logger import format_and_log
@@ -11,7 +12,6 @@ from app.task_scheduler import scheduler
 from app.plugins.logic import trade_logic
 from app.telegram_client import CommandTimeoutError
 from app import game_adaptor
-# [重构] 直接导入全局单例
 from app.data_manager import data_manager
 
 KNOWLEDGE_SESSIONS_KEY = "knowledge_sessions"
@@ -110,7 +110,11 @@ async def _execute_knowledge_sharing():
                 format_and_log("TASK", "知识共享", { '决策': '发起知识转移', '学生': f'...{student_id[-4:]}', '老师': f'...{teacher_id[-4:]}', '知识': recipe })
                 task = { "task_type": "initiate_knowledge_request", "target_account_id": student_id, "payload": { "item_name": recipe, "quantity": 1 } }
                 await trade_logic.publish_task(task)
-                return
+                
+                # [核心修复] 移除return，并增加随机延迟以避免任务刷屏
+                delay = random.uniform(30, 60)
+                format_and_log("TASK", "知识共享", {'阶段': '任务分派延迟', '秒数': f'{delay:.1f}'})
+                await asyncio.sleep(delay)
 
 
 async def _check_knowledge_session_timeouts():
