@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 from config import settings
 from app.context import get_application
 from app.state_manager import get_state
@@ -42,7 +43,6 @@ async def logic_query_qa_db(db_key: str) -> str:
     qa_data = await app.redis_db.hgetall(redis_key)
     if not qa_data: return f"📚 **{db_key}** 知识库为空。"
     
-    # --- 核心修改：显示编号 ---
     sorted_qa = sorted(qa_data.items())
     response_lines = [f"**{i}. 问**: `{q}`\n   **答**: `{a}`" for i, (q, a) in enumerate(sorted_qa, 1)]
     title = f"📚 **{db_key}** 知识库 (共 {len(sorted_qa)} 条)"
@@ -54,7 +54,6 @@ async def _get_question_by_id(redis_db, redis_key: str, item_id_str: str) -> str
         item_id = int(item_id_str)
         if item_id <= 0: return None
         
-        # Redis中没有顺序，我们需要先获取所有问题，排序后才能通过索引找到对应的问题
         all_questions = await redis_db.hkeys(redis_key)
         if not all_questions: return None
         
@@ -74,10 +73,9 @@ async def logic_delete_answer(db_key: str, identifier: str) -> str:
     
     redis_key = db_map[db_key]
     
-    # --- 核心修改：优先尝试按编号删除 ---
     question = await _get_question_by_id(app.redis_db, redis_key, identifier)
     if not question:
-        question = identifier # 如果不是有效编号，则假定为问题原文
+        question = identifier
         
     if await app.redis_db.hexists(redis_key, question):
         await app.redis_db.hdel(redis_key, question)
@@ -93,11 +91,93 @@ async def logic_update_answer(db_key: str, identifier: str, answer: str) -> str:
     
     redis_key = db_map[db_key]
     
-    # --- 核心修改：优先尝试按编号修改 ---
     question = await _get_question_by_id(app.redis_db, redis_key, identifier)
     if not question:
-        # 如果不是有效编号，则将标识符视为新问题进行添加
         question = identifier
         
     await app.redis_db.hset(redis_key, question, answer)
     return f"✅ 已在 **[{db_key}]** 题库中更新/添加:\n**问**: `{question}`\n**答**: `{answer}`"
+
+
+async def logic_find_and_clear_cache(name_to_find: str, confirmed: bool = False) -> str:
+    """根据用户名或道号查找并清理助手缓存"""
+    app = get_application()
+    if not app.redis_db:
+        return "❌ 错误: Redis 未连接。"
+
+    keys_found = [key async for key in app.redis_db.scan_iter("tg_helper:task_states:*")]
+    
+    target_key = None
+    target_id = None
+    profile_info = {}
+
+    for key in keys_found:
+        profile_json = await app.redis_db.hget(key, "character_profile")
+        if not profile_json:
+            continue
+        try:
+            profile = json.loads(profile_json)
+            user = profile.get("用户")
+            dao_name = profile.get("道号")
+
+            if (user and name_to_find.lower() == user.lower()) or \
+               (dao_name and name_to_find.lower() == dao_name.lower()):
+                
+                target_key = key
+                target_id = key.split(':')[-1]
+                profile_info = {
+                    "ID": f"`{target_id}`",
+                    "用户名": f"`{user}`",
+                    "道号": f"`{dao_name}`",
+                    "境界": f"`{profile.get('境界', '未知')}`",
+                }
+                break
+        except (json.JSONDecodeError, IndexError):
+            continue
+
+    if not target_key:
+        return f"❓ 未找到用户名为或道号为 **{name_to_find}** 的助手缓存。"
+
+    if not confirmed:
+        details = "\n".join([f"- **{k}**: {v}" for k, v in profile_info.items()])
+        return (f"**⚠️ 请确认是否要删除以下助手的全部缓存？**\n\n"
+                f"{details}\n\n"
+                f"**此操作不可逆！**\n"
+                f"确认请输入: `,清理缓存 {name_to_find} 确认`")
+
+    try:
+        await app.redis_db.delete(target_key)
+        return (f"✅ **缓存已成功删除**\n\n"
+                f"已清除ID为 `{target_id}` (名称: {name_to_find}) 的所有缓存数据。")
+    except Exception as e:
+        return f"❌ **删除失败**\n\n删除过程中发生错误: `{e}`"
+
+# [新功能] 列出所有缓存的助手
+async def logic_list_cached_assistants() -> str:
+    """扫描并列出所有已缓存助手的信息"""
+    app = get_application()
+    if not app.redis_db:
+        return "❌ 错误: Redis 未连接。"
+
+    keys_found = [key async for key in app.redis_db.scan_iter("tg_helper:task_states:*")]
+    if not keys_found:
+        return "ℹ️ Redis 中没有任何助手缓存数据。"
+
+    assistant_lines = []
+    for key in keys_found:
+        profile_json = await app.redis_db.hget(key, "character_profile")
+        if not profile_json:
+            continue
+        try:
+            profile = json.loads(profile_json)
+            user = profile.get("用户", "未知")
+            dao_name = profile.get("道号", "未知")
+            assistant_lines.append(f"- **TG 用户名**: `{user}`, **游戏道号**: `{dao_name}`")
+        except (json.JSONDecodeError, IndexError):
+            continue
+    
+    if not assistant_lines:
+        return "ℹ️ 未能从 Redis 缓存中解析出任何有效的助手信息。"
+
+    header = "👥 **当前已缓存的所有助手列表**:\n\n"
+    return header + "\n".join(sorted(assistant_lines))

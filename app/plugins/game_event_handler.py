@@ -36,7 +36,8 @@ async def handle_game_report(event):
     # 处理编辑消息
     elif hasattr(event, 'message') and event.message.edit_date:
         original_msg_id = event.message.id
-        if app.client.pending_edit_by_id.get(original_msg_id):
+        # [BUG修复] 使用正确的变量名 pending_edit_waits
+        if app.client.pending_edit_waits.get(original_msg_id):
              is_reply_to_me = True
 
     is_mentioning_me = f"@{my_username}" in event.text
@@ -138,7 +139,10 @@ async def handle_game_report(event):
             gained_items[item] = int(quantity_str.replace(',', ''))
         
         if gained_items:
-            event_payload = { "event_type": "HARVEST_COMPLETED", "gained_items": gained_items }
+            event_payload = {
+                "event_type": "HARVEST_COMPLETED",
+                "gained_items": gained_items
+            }
             format_and_log("SYSTEM", "事件总线", {'监听到': '采药成功'})
             
     # 8. 学习成功
@@ -146,10 +150,13 @@ async def handle_game_report(event):
         consumed_match = re.search(r"消耗了【(.+?)】", text)
         if consumed_match:
             item = consumed_match.group(1)
-            event_payload = { "event_type": "LEARNING_COMPLETED", "consumed_item": {item: 1} }
+            event_payload = {
+                "event_type": "LEARNING_COMPLETED",
+                "consumed_item": {item: 1}
+            }
             format_and_log("SYSTEM", "事件总线", {'监听到': '学习成功'})
 
-    # 9. [新] 播种成功
+    # 9. 播种成功
     elif "你已成功在" in text and "播下" in text:
         consumed_match = re.search(r"播下【(.+?)】", text)
         if consumed_match:
