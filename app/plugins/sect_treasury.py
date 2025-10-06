@@ -12,6 +12,9 @@ from app.telegram_client import CommandTimeoutError
 from app.utils import send_paginated_message, create_error_reply, get_display_width
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 from app import game_adaptor
+# [重构] 直接导入全局单例
+from app.data_manager import data_manager
+from app.character_stats_manager import stats_manager
 
 STATE_KEY_TREASURY = "sect_treasury"
 TASK_ID_TREASURY = "sect_treasury_daily_task"
@@ -36,7 +39,6 @@ async def trigger_update_treasury(force_run=False):
     from app.logger import format_and_log
     app = get_application()
     client = app.client
-    stats_manager = app.stats_manager
     command = game_adaptor.get_sect_treasury()
     format_and_log("TASK", "更新宗门宝库", {'阶段': '任务开始', '强制执行': force_run})
     try:
@@ -47,7 +49,7 @@ async def trigger_update_treasury(force_run=False):
             raise ValueError("无法从返回的信息中解析出宝库物品。")
 
         await stats_manager.set_contribution(treasury_data["contribution"])
-        await app.data_manager.save_value(STATE_KEY_TREASURY, treasury_data)
+        await data_manager.save_value(STATE_KEY_TREASURY, treasury_data) # 直接使用单例
         
         format_and_log("TASK", "更新宗门宝库", {'阶段': '任务成功', '贡献': treasury_data["contribution"], '物品数量': len(treasury_data["items"])})
         if force_run:
@@ -83,9 +85,8 @@ async def _cmd_query_treasury(event, parts):
             await client.reply_to_admin(event, final_text)
 
 async def _cmd_view_cached_treasury(event, parts):
-    app = get_application()
-    treasury_data = await app.data_manager.get_value(STATE_KEY_TREASURY, is_json=True)
-    contribution = await app.stats_manager.get_contribution()
+    treasury_data = await data_manager.get_value(STATE_KEY_TREASURY, is_json=True) # 直接使用单例
+    contribution = await stats_manager.get_contribution()
 
     if not treasury_data or not treasury_data.get('items'):
         reply_text = f"📄 **已缓存的宗门宝库信息**\n**当前贡献**: `{contribution}`\n\n(宝库为空或尚未缓存)"

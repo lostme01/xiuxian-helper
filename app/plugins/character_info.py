@@ -11,6 +11,8 @@ from app.context import get_application
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
 from app import game_adaptor
+# [重构] 直接导入全局单例
+from app.data_manager import data_manager
 
 STATE_KEY_PROFILE = "character_profile"
 
@@ -82,7 +84,7 @@ async def trigger_update_profile(force_run=False):
             format_and_log("ERROR", "角色信息解析失败", {'原始文本': final_message.text})
             raise ValueError(f"无法从最终返回的信息中解析出角色数据: {getattr(final_message, 'text', '无最终消息')}")
 
-        await app.data_manager.save_value(STATE_KEY_PROFILE, profile_data)
+        await data_manager.save_value(STATE_KEY_PROFILE, profile_data) # 直接使用单例
         
         if force_run:
             return _format_profile_reply(profile_data, "✅ **角色信息已更新并缓存**:")
@@ -120,13 +122,12 @@ async def _cmd_query_profile(event, parts):
 
 
 async def _cmd_view_cached_profile(event, parts):
-    app = get_application()
-    profile_data = await app.data_manager.get_value(STATE_KEY_PROFILE, is_json=True)
+    profile_data = await data_manager.get_value(STATE_KEY_PROFILE, is_json=True) # 直接使用单例
     if not profile_data:
-        await app.client.reply_to_admin(event, "ℹ️ 尚未缓存任何角色信息，请先使用 `,我的灵根` 查询一次。")
+        await get_application().client.reply_to_admin(event, "ℹ️ 尚未缓存任何角色信息，请先使用 `,我的灵根` 查询一次。")
         return
     reply_text = _format_profile_reply(profile_data, "📄 **已缓存的角色信息**:")
-    await app.client.reply_to_admin(event, reply_text)
+    await get_application().client.reply_to_admin(event, reply_text)
 
 
 def initialize(app):

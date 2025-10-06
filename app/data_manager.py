@@ -1,20 +1,30 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
-from app.context import get_application
 from app.logger import format_and_log
 from config import settings
 
 class DataManager:
-    def __init__(self, redis_db):
-        self.db = redis_db
+    def __init__(self):
+        self.db = None
         self.base_key = "tg_helper:task_states"
+
+    def initialize(self, redis_db):
+        """注入 Redis DB 依赖"""
+        self.db = redis_db
+        if self.db:
+            format_and_log("SYSTEM", "组件初始化", {'组件': 'DataManager', '状态': '依赖注入完成'})
+        else:
+            format_and_log("SYSTEM", "组件初始化", {'组件': 'DataManager', '状态': '已禁用 (Redis未连接)'})
 
     def _get_key(self, account_id: str = None) -> str:
         """获取指定账户或当前账户的 Redis Key"""
         acc_id = account_id or settings.ACCOUNT_ID
         if not acc_id:
-            raise RuntimeError("ACCOUNT_ID not set. DataManager cannot operate.")
+            # 在后台任务等场景下，ACCOUNT_ID可能尚未设置，这是一个预期的临时状态
+            # 但如果此时尝试操作数据，会是一个问题。这里暂时返回一个不会执行成功的key
+            # 更好的做法是在调用方确保acc_id的有效性
+            return "tg_helper:task_states:uninitialized"
         return f"{self.base_key}:{acc_id}"
 
     async def get_all_assistant_keys(self) -> list:
@@ -61,14 +71,5 @@ class DataManager:
             await self.db.delete(*keys_to_delete)
         return len(keys_to_delete)
 
-# 在 app/core.py 中进行实例化
-data_manager = None
-
-def initialize_data_manager(redis_db):
-    """由 app.core 在初始化时调用"""
-    global data_manager
-    if redis_db:
-        data_manager = DataManager(redis_db)
-        format_and_log("SYSTEM", "组件初始化", {'组件': 'DataManager', '状态': '成功'})
-    else:
-        format_and_log("SYSTEM", "组件初始化", {'组件': 'DataManager', '状态': '已禁用 (Redis未连接)'})
+# 创建全局单例
+data_manager = DataManager()

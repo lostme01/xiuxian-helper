@@ -20,11 +20,3 @@ async def logic_reset_task_state(task_key: str) -> str:
     await app.data_manager.delete_value(state_key)
     
     return f"✅ 已清除 **[{task_key}]** 的状态。相关任务将在下次检查时重新执行。"
-
-async def logic_reset_database() -> str:
-    """清空所有助手缓存"""
-    app = get_application()
-    if not app.data_manager: return "❌ 错误: DataManager 未初始化。"
-
-    deleted_count = await app.data_manager.clear_all_data()
-    return f"✅ **数据库已重置**\n\n成功清除了 **{deleted_count}** 个助手的所有缓存数据。"

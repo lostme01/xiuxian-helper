@@ -14,7 +14,8 @@ from config import settings
 from app.task_scheduler import scheduler, shutdown
 from app.telegram_client import TelegramClient, CommandTimeoutError
 from app.redis_client import initialize_redis
-from app.data_manager import initialize_data_manager, data_manager
+# [重构] 导入全局实例
+from app.data_manager import data_manager
 from app import gemini_client
 from app.plugins import load_all_plugins
 from app.logger import format_and_log, TimezoneFormatter
@@ -28,8 +29,8 @@ class Application:
     def __init__(self):
         self.client: TelegramClient = None
         self.redis_db = None
-        self.data_manager = None
         # [重构] 直接引用全局实例
+        self.data_manager = data_manager
         self.inventory_manager = inventory_manager
         self.stats_manager = stats_manager
         self.startup_checks = []
@@ -131,13 +132,11 @@ class Application:
         background_tasks = set()
         try:
             self.redis_db = await initialize_redis()
-            initialize_data_manager(self.redis_db)
-            self.data_manager = data_manager
-
+            
             # [重构] 依赖注入
-            if self.data_manager:
-                self.inventory_manager.initialize(self.data_manager)
-                self.stats_manager.initialize(self.data_manager)
+            self.data_manager.initialize(self.redis_db)
+            self.inventory_manager.initialize(self.data_manager)
+            self.stats_manager.initialize(self.data_manager)
 
             if settings.REDIS_CONFIG.get('enabled') and not self.redis_db:
                 format_and_log("CRITICAL", "启动失败", {'原因': 'Redis配置为启用，但连接失败，程序退出。'})
@@ -149,7 +148,7 @@ class Application:
             settings.ACCOUNT_ID = str(self.client.me.id)
             format_and_log("SYSTEM", "账户初始化", {'账户ID': settings.ACCOUNT_ID, '状态': '已设置为全局标识'})
 
-            if self.data_manager:
+            if self.data_manager.db: # 检查DB是否成功注入
                 try:
                     profile = await self.data_manager.get_value("character_profile", is_json=True, default={})
                     profile.update({ "用户": self.client.me.username, "ID": self.client.me.id })

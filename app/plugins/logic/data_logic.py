@@ -173,3 +173,11 @@ async def logic_list_cached_assistants() -> str:
 
     header = "👥 **当前已缓存的所有助手列表**:\n\n"
     return header + "\n".join(sorted(assistant_lines))
+
+async def logic_reset_database() -> str:
+    """清空所有助手缓存"""
+    app = get_application()
+    if not app.data_manager: return "❌ 错误: DataManager 未初始化。"
+
+    deleted_count = await app.data_manager.clear_all_data()
+    return f"✅ **数据库已重置**\n\n成功清除了 **{deleted_count}** 个助手的所有缓存数据。"

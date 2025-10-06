@@ -14,6 +14,9 @@ from telethon.tl.functions.account import UpdateStatusRequest
 from app.telegram_client import CommandTimeoutError
 from app.context import get_application
 from app import game_adaptor
+# [重构] 直接导入全局单例
+from app.data_manager import data_manager
+from app.inventory_manager import inventory_manager
 
 TASK_ID_BIGUAN = 'biguan_xiulian_task'
 STATE_KEY_BIGUAN = "biguan"
@@ -56,7 +59,7 @@ async def update_inventory_cache(force_run=False):
         _sent, reply = await client.send_game_command_request_response(game_adaptor.get_inventory())
         inventory = parse_inventory_text(reply)
         if inventory:
-            await app.inventory_manager.set_inventory(inventory)
+            await inventory_manager.set_inventory(inventory) # 直接使用单例
             format_and_log("TASK", "刷新背包", {'阶段': '任务成功', '详情': f'解析并校准了 {len(inventory)} 种物品。'})
             if force_run:
                 return f"✅ **[立即刷新背包]** 任务完成，已校准 {len(inventory)} 种物品。"
@@ -81,12 +84,12 @@ async def trigger_chuang_ta(force_run=False):
         else:
             format_and_log("WARNING", "自动闯塔", {'阶段': '解析失败', '原因': '未收到预期的战报格式', '返回': final_reply.text})
     finally:
-        if not force_run and app.data_manager:
+        if not force_run and data_manager.db: # 检查DB是否成功注入
             today_str = date.today().isoformat()
-            state = await app.data_manager.get_value(STATE_KEY_CHUANG_TA, is_json=True, default={"date": today_str, "completed_count": 0})
+            state = await data_manager.get_value(STATE_KEY_CHUANG_TA, is_json=True, default={"date": today_str, "completed_count": 0})
             if state.get("date") != today_str: state = {"date": today_str, "completed_count": 1}
             else: state["completed_count"] = state.get("completed_count", 0) + 1
-            await app.data_manager.save_value(STATE_KEY_CHUANG_TA, state)
+            await data_manager.save_value(STATE_KEY_CHUANG_TA, state)
             format_and_log("TASK", "自动闯塔", {'阶段': '状态更新', '今日已完成': state["completed_count"]})
 
 @resilient_task()
@@ -107,16 +110,15 @@ async def trigger_biguan_xiulian(force_run=False):
         else:
             format_and_log("TASK", "闭关修炼", {'阶段': '解析失败', '详情': '未找到冷却时间，将在15分钟后重试。'})
     finally:
-        if app.data_manager:
+        if data_manager.db:
             scheduler.add_job(trigger_biguan_xiulian, 'date', run_date=next_run_time, id=TASK_ID_BIGUAN, replace_existing=True)
-            await app.data_manager.save_value(STATE_KEY_BIGUAN, next_run_time.isoformat())
+            await data_manager.save_value(STATE_KEY_BIGUAN, next_run_time.isoformat())
             format_and_log("TASK", "闭关修炼", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
 
 async def check_biguan_startup():
-    app = get_application()
-    if not settings.TASK_SWITCHES.get('biguan') or not app.data_manager: return
+    if not settings.TASK_SWITCHES.get('biguan') or not data_manager.db: return
     if scheduler.get_job(TASK_ID_BIGUAN): return
-    iso_str = await app.data_manager.get_value(STATE_KEY_BIGUAN)
+    iso_str = await data_manager.get_value(STATE_KEY_BIGUAN)
     beijing_tz = pytz.timezone(settings.TZ)
     state_time = datetime.fromisoformat(iso_str).astimezone(beijing_tz) if iso_str else None
     if state_time and state_time > datetime.now(beijing_tz):
@@ -149,12 +151,11 @@ async def check_inventory_refresh_startup():
         format_and_log("TASK", "刷新背包", {'阶段': '调度计划', '详情': '首次校准任务已计划在1分钟后运行'})
 
 async def check_chuang_ta_startup():
-    app = get_application()
-    if not settings.TASK_SWITCHES.get('chuang_ta', True) or not app.data_manager: return
+    if not settings.TASK_SWITCHES.get('chuang_ta', True) or not data_manager.db: return
     today_str = date.today().isoformat()
-    state = await app.data_manager.get_value(STATE_KEY_CHUANG_TA, is_json=True, default={"date": "1970-01-01", "completed_count": 0})
+    state = await data_manager.get_value(STATE_KEY_CHUANG_TA, is_json=True, default={"date": "1970-01-01", "completed_count": 0})
     if state.get("date") != today_str:
-        state = {"date": today_str, "completed_count": 0}; await app.data_manager.save_value(STATE_KEY_CHUANG_TA, state)
+        state = {"date": today_str, "completed_count": 0}; await data_manager.save_value(STATE_KEY_CHUANG_TA, state)
         format_and_log("TASK", "自动闯塔", {'阶段': '状态重置', '新的一天': today_str})
     completed_count = state.get("completed_count", 0)
     total_runs_per_day = 2

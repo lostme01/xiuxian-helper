@@ -12,6 +12,7 @@ from app.telegram_client import CommandTimeoutError
 from app.context import get_application
 from app.utils import resilient_task
 from app import game_adaptor
+from app.data_manager import data_manager # 直接导入单例
 
 TASK_ID_LEARN_RECIPES = 'learn_recipes_task'
 STATE_KEY_LEARNED = "learned_recipes"
@@ -26,7 +27,7 @@ async def trigger_learn_recipes(force_run=False):
     _sent_msg, reply = await client.send_game_command_request_response(game_adaptor.get_crafting_list())
     
     learned_recipes = re.findall(r'\(来自:\s*([^)]*(?:图纸|丹方))\)', reply.text)
-    await app.data_manager.save_value(STATE_KEY_LEARNED, learned_recipes)
+    await data_manager.save_value(STATE_KEY_LEARNED, learned_recipes) # 直接使用单例
     format_and_log("TASK", "自动学习", {'阶段': '解析已学列表', '数量': len(learned_recipes)})
     
     inventory = await inventory_manager.get_inventory()

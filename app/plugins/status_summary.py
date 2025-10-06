@@ -5,6 +5,10 @@ from app.plugins.sect_treasury import _cmd_view_cached_treasury as view_treasury
 from app.plugins.data_management import _cmd_view_inventory as view_inventory
 from app.plugins.formation_info import _cmd_view_cached_formation as view_formation
 from app.utils import create_error_reply
+# [重构] 直接导入全局单例
+from app.data_manager import data_manager
+from app.inventory_manager import inventory_manager
+from app.character_stats_manager import stats_manager
 
 HELP_TEXT_STATUS = """📊 **统一状态查询**
 **说明**: 融合了多个查询指令，提供一站式状态概览。
@@ -20,9 +24,9 @@ async def _cmd_status(event, parts):
     
     if len(parts) == 1:
         # 显示总览
-        profile_data = await app.data_manager.get_value("character_profile", is_json=True)
-        contribution = await app.stats_manager.get_contribution()
-        ling_shi_count = await app.inventory_manager.get_item_count("灵石")
+        profile_data = await data_manager.get_value("character_profile", is_json=True)
+        contribution = await stats_manager.get_contribution()
+        ling_shi_count = await inventory_manager.get_item_count("灵石")
         
         if not profile_data:
             await app.client.reply_to_admin(event, "ℹ️ 尚未缓存任何角色信息，无法生成总览。请先使用 `,我的灵根` 查询一次。")
@@ -48,7 +52,7 @@ async def _cmd_status(event, parts):
         elif sub_command == "宝库":
             await view_treasury(event, parts)
         elif sub_command == "角色":
-            profile_data = await app.data_manager.get_value("character_profile", is_json=True)
+            profile_data = await data_manager.get_value("character_profile", is_json=True)
             if not profile_data:
                 await app.client.reply_to_admin(event, "ℹ️ 尚未缓存任何角色信息。请先使用 `,我的灵根` 查询。")
                 return
