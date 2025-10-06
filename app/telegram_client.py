@@ -34,7 +34,8 @@ class TelegramClient:
         
         self.message_queue = asyncio.Queue()
         self.pending_req_by_id = {}
-        self.pending_edit_by_id = {}
+        # [重构] 统一的、更健壮的编辑等待机制
+        self.pending_edit_waits = {}
         self.deletion_tasks = {}
         self._pinned_messages = set()
 
@@ -160,39 +161,31 @@ class TelegramClient:
             timeout = settings.COMMAND_TIMEOUT
         
         sent_message = None
-        initial_reply = None
         try:
             format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '开始', '指令': command})
-            sent_message, initial_reply = await self.send_game_command_request_response(command, timeout=timeout)
-            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '已收到初始回复', '消息ID': initial_reply.id})
-
-            if not re.search(initial_reply_pattern, initial_reply.text, re.DOTALL):
-                format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '初始回复与预期模式不符，直接返回', '模式': initial_reply_pattern})
-                return sent_message, initial_reply
+            sent_message = await self._send_command_and_get_message(command)
             
-            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '初始回复匹配成功，开始等待编辑', '消息ID': initial_reply.id})
             edit_future = asyncio.Future()
-            self.pending_edit_by_id[initial_reply.id] = edit_future
+            # [重构] 注册一个统一的等待任务
+            self.pending_edit_waits[sent_message.id] = {
+                "future": edit_future,
+                "pattern": initial_reply_pattern,
+                "initial_reply_id": None
+            }
 
-            time_elapsed = (datetime.now(pytz.utc) - sent_message.date).total_seconds()
-            remaining_timeout = timeout - time_elapsed
+            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '进入等待状态', '总超时': f"{timeout}s"})
+            final_message = await asyncio.wait_for(edit_future, timeout=timeout)
+            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '成功捕获到最终事件', '消息ID': final_message.id})
             
-            if remaining_timeout <= 0:
-                format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '超时', '原因': '获取初始回复后没有剩余时间'})
-                raise CommandTimeoutError("获取初始回复后没有剩余时间等待编辑。")
-
-            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '进入等待编辑状态', '剩余时间': f"{remaining_timeout:.2f}s"})
-            final_message = await asyncio.wait_for(edit_future, timeout=remaining_timeout)
-            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '成功捕获到编辑事件', '消息ID': final_message.id})
             return sent_message, final_message
 
-        except (CommandTimeoutError, asyncio.TimeoutError) as e:
-            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '等待编辑超时或失败', '错误': str(e)})
+        except asyncio.TimeoutError as e:
+            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '等待超时或失败', '错误': str(e)})
             raise CommandTimeoutError(f"等待指令 '{command}' 的响应或编辑超时 (总时长 {timeout} 秒)。") from e
         finally:
-            if initial_reply:
-                self.pending_edit_by_id.pop(initial_reply.id, None)
-            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '清理编辑监听器', '消息ID': getattr(initial_reply, 'id', 'N/A')})
+            if sent_message:
+                self.pending_edit_waits.pop(sent_message.id, None)
+            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '清理编辑监听器', '消息ID': getattr(sent_message, 'id', 'N/A')})
 
 
     async def start(self):
@@ -308,44 +301,58 @@ class TelegramClient:
         await log_event(self, log_type, event)
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         
-        if not event.out and self.pending_req_by_id:
-            if event.is_reply and event.message.reply_to_msg_id in self.pending_req_by_id:
+        if not event.out:
+            # 简单回复的等待
+            if self.pending_req_by_id and event.is_reply and event.message.reply_to_msg_id in self.pending_req_by_id:
                 future, _ = self.pending_req_by_id.pop(event.message.reply_to_msg_id)
                 if future and not future.done():
                     await log_event(self, LogType.REPLY_RECV, event)
                     future.set_result(event.message)
                 return
 
-            elif event.sender_id in settings.GAME_BOT_IDS:
-                pending_in_chat = []
-                for msg_id, (future, chat_id) in self.pending_req_by_id.items():
-                    if chat_id == event.chat_id and not future.done():
-                        pending_in_chat.append((msg_id, future))
+            # [重构] 统一处理等待编辑的初始回复
+            if self.pending_edit_waits and event.is_reply and event.message.reply_to_msg_id in self.pending_edit_waits:
+                wait_obj = self.pending_edit_waits[event.message.reply_to_msg_id]
+                # 检查是否匹配初始回复的模式
+                if re.search(wait_obj['pattern'], event.text, re.DOTALL):
+                    # 记录初始回复ID，等待编辑
+                    wait_obj['initial_reply_id'] = event.id
+                    format_and_log("DEBUG", "智能等待", {'状态': '已捕获初始回复', '消息ID': event.id})
+                return
+
+            # 智能关联 (作为最后的备选方案)
+            if self.pending_req_by_id and event.sender_id in settings.GAME_BOT_IDS:
+                pending_in_chat = sorted([
+                    (msg_id, future) for msg_id, (future, chat_id) in self.pending_req_by_id.items()
+                    if chat_id == event.chat_id and not future.done()
+                ], key=lambda x: x[0], reverse=True)
                 
                 if pending_in_chat:
-                    pending_in_chat.sort(key=lambda x: x[0], reverse=True)
                     latest_msg_id, future_to_resolve = pending_in_chat[0]
-
-                    if future_to_resolve and not future_to_resolve.done():
-                        await log_event(self, LogType.REPLY_RECV, event, note="智能关联")
-                        future_to_resolve.set_result(event.message)
-                        self.pending_req_by_id.pop(latest_msg_id)
+                    await log_event(self, LogType.REPLY_RECV, event, note="智能关联")
+                    future_to_resolve.set_result(event.message)
+                    self.pending_req_by_id.pop(latest_msg_id)
 
     async def _message_edited_handler(self, event: events.MessageEdited.Event):
         await log_event(self, LogType.MSG_EDIT, event)
-        # [新功能] 更新最后通信时间戳
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         
-        future = self.pending_edit_by_id.get(event.message.id)
-        if future and not future.done():
-            future.set_result(event.message)
+        # [重构] 统一处理编辑事件
+        if self.pending_edit_waits:
+            for sent_msg_id, wait_obj in self.pending_edit_waits.items():
+                if wait_obj['initial_reply_id'] == event.id:
+                    future = wait_obj['future']
+                    if future and not future.done():
+                        future.set_result(event.message)
+                    # 任务完成，可以从字典中移除
+                    self.pending_edit_waits.pop(sent_msg_id, None)
+                    return
     
     async def _deleted_message_handler(self, update):
         chat_id = None
         if isinstance(update, UpdateDeleteChannelMessages):
             chat_id = int(f"-100{update.channel_id}")
         elif isinstance(update, UpdateDeleteMessages):
-            # 私聊或小群的删除事件，我们暂时不处理
             return
 
         all_groups = settings.GAME_GROUP_IDS + ([settings.CONTROL_GROUP_ID] if settings.CONTROL_GROUP_ID else [])
@@ -353,7 +360,6 @@ class TelegramClient:
             all_groups.append(settings.TEST_GROUP_ID)
             
         if chat_id and chat_id in all_groups:
-            # [新功能] 更新最后通信时间戳
             self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
             fake_event = type('FakeEvent', (object,), {'chat_id': chat_id})
             await log_event(self, LogType.MSG_DELETE, fake_event, deleted_ids=update.messages)

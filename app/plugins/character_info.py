@@ -15,37 +15,46 @@ from app import game_adaptor
 
 STATE_KEY_PROFILE = "character_profile"
 
+# [终极修复 V3] 采用老板提供的全兼容正则表达式
 PROFILE_PATTERN = re.compile(
-    r"\*\*@(?P<user>[\w\d]+)\*\*\s*的天命玉牒\s*"
-    r"(?:称号\s*:\s*【(?P<title>[^】]*)】\s*)?"
-    r"宗门\s*:\s*【(?P<sect>[^】]*)】\s*"
-    r"(?:道号\s*:\s*(?P<dao_name>.+?)\s*\n)?"
-    r"(?:灵根\s*:\s*(?P<root>.+?)\s*\n)?"
-    r"境界\s*:\s*(?P<realm>.+?)\s*"
-    r"修为\s*:\s*(?P<exp_cur>\d+)\s*/\s*(?P<exp_max>\d+)\s*"
-    r"丹毒\s*:\s*(?P<pill_poison>-?\d+)\s*点\s*"
-    r"杀戮\s*:\s*(?P<kills>\d+)\s*人",
-    re.S
+    r"\*\*@([^\*]+)\*\*.*?天命玉牒.*?"  # 用户名
+    r"(?:\*\*称号\*\*[:：]?\s*【?([^】\n]+)】?.*?)?" # 称号（可选）
+    r"\*\*宗门\*\*[:：]?\s*[【]?([^】\n]+)[】]?\s*"   # 宗门
+    r"\*\*道号\*\*[:：]?\s*([^\n]+)\s*"           # 道号
+    r"\*\*灵根\*\*[:：]?\s*([^\n]+)\s*"           # 灵根
+    r"\*\*境界\*\*[:：]?\s*([^\n]+)\s*"           # 境界
+    r"\*\*修为\*\*[:：]?\s*(-?\d+)\s*/\s*(\d+)\s*"    # 修为
+    r"\*\*丹毒\*\*[:：]?\s*(-?\d+)\s*点.*?"      # 丹毒
+    r"(?:\*\*杀戮\*\*[:：]?\s*(\d+)\s*人.*?)?"     # 杀戮（可选）
+    , re.S | re.I
 )
 
 def _parse_profile_text(text: str) -> dict:
     match = PROFILE_PATTERN.search(text)
+    format_and_log("DEBUG", "角色信息解析", {'正则表达式匹配成功': bool(match)})
+    
     if not match:
         return {}
-
-    profile = {k: v.strip() if v else v for k, v in match.groupdict().items()}
     
-    # 将字符串数字转换为整数
-    for key in ["当前修为", "修为上限", "丹毒", "杀戮"]:
-        new_key = key.replace("当前", "")
-        if profile.get(key):
-            try:
-                profile[new_key] = int(profile[key])
-            except (ValueError, TypeError):
-                pass
-            del profile[key]
+    # [重构] 按捕获组顺序解析
+    groups = match.groups()
+    
+    profile_data = {
+        "用户": groups[0],
+        "称号": groups[1],
+        "宗门": groups[2],
+        "道号": groups[3],
+        "灵根": groups[4],
+        "境界": groups[5],
+        "修为": int(groups[6]),
+        "修为上限": int(groups[7]),
+        "丹毒": int(groups[8]),
+        "杀戮": int(groups[9]) if groups[9] else 0,
+    }
 
-    return profile
+    # 清理 None 值
+    return {k: v.strip() if isinstance(v, str) else v for k, v in profile_data.items() if v is not None}
+
 
 def _format_profile_reply(profile_data: dict, title: str) -> str:
     display_map = [
@@ -81,6 +90,7 @@ async def trigger_update_profile(force_run=False):
         profile_data = _parse_profile_text(final_message.text)
 
         if not profile_data.get("境界"):
+            format_and_log("ERROR", "角色信息解析失败", {'原始文本': final_message.text})
             raise ValueError(f"无法从最终返回的信息中解析出角色数据: {getattr(final_message, 'text', '无最终消息')}")
 
         await set_state(STATE_KEY_PROFILE, profile_data)

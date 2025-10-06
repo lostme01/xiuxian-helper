@@ -21,14 +21,27 @@ async def logic_get_task_list() -> str:
     jobs = scheduler.get_jobs()
     if not jobs: return "🗓️ 当前没有正在计划中的任务。"
     
-    # 任务 ID 到中文名称的映射
+    # [优化] 补全所有已知任务的汉化
     job_map = {
-        'biguan_xiulian_task': '闭关修炼', 'heartbeat_check_task': '被动心跳',
-        'active_status_heartbeat_task': '主动心跳', 'zongmen_dianmao_task_0': '宗门点卯(1)',
-        'zongmen_dianmao_task_1': '宗门点卯(2)','taiyi_yindao_task': '太一门·引道',
-        'huangfeng_garden_task': '黄枫谷·小药园','inventory_refresh_task': '刷新背包',
-        'learn_recipes_task': '学习图纸丹方','chuang_ta_task_0': '自动闯塔(1)',
-        'chuang_ta_task_1': '自动闯塔(2)', 'sect_treasury_daily_task': '每日更新宝库'
+        'biguan_xiulian_task': '闭关修炼',
+        'active_heartbeat_task': '主动心跳',
+        'passive_heartbeat_task': '被动心跳监测',
+        'daily_dialog_sync_task': '每日对话同步',
+        'zongmen_dianmao_task_0': '宗门点卯 (任务1)',
+        'zongmen_dianmao_task_1': '宗门点卯 (任务2)',
+        'taiyi_yindao_task': '太一门·引道',
+        'huangfeng_garden_task': '黄枫谷·小药园',
+        'inventory_refresh_task': '刷新背包',
+        'learn_recipes_task': '自动学习图纸丹方',
+        'chuang_ta_task_0': '自动闯塔 (任务1)',
+        'chuang_ta_task_1': '自动闯塔 (任务2)',
+        'sect_treasury_daily_task': '每日更新宝库',
+        'formation_update_task_0': '自动更新阵法 (任务1)',
+        'formation_update_task_1': '自动更新阵法 (任务2)',
+        'auto_resource_management_task': '智能资源管理',
+        'auto_knowledge_sharing_task': '自动化知识共享',
+        'knowledge_timeout_checker_task': '知识共享超时检查',
+        'crafting_timeout_checker_task': '智能炼制超时检查',
     }
     beijing_tz = pytz.timezone(settings.TZ)
     reply_text = "🗓️ **当前计划任务列表**:\n"
@@ -37,7 +50,7 @@ async def logic_get_task_list() -> str:
     
     for job in sorted_jobs:
         if job.id.startswith('delete_msg_'): continue
-        job_name = job_map.get(job.id, job.id)
+        job_name = job_map.get(job.id, job.id) # 如果没找到翻译，则显示原始ID
         if job.next_run_time:
             next_run = job.next_run_time.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
             reply_text += f"\n- **{job_name}**\n  `下次运行:` {next_run}"

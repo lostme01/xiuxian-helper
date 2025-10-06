@@ -8,7 +8,6 @@ import functools
 import asyncio
 from datetime import datetime, timedelta
 from telethon.tl.types import Message
-# [核心修复] 不再从顶部导入 app.logger
 from app.context import get_application
 from config import settings
 
@@ -183,15 +182,19 @@ def parse_inventory_text(message: Message) -> dict:
     for match in matches: inventory[match[0]] = int(match[1])
     return inventory
 
-def get_qa_answer_from_redis(redis_db, db_name: str, question: str) -> str | None:
+# [BUG修复] 修复异步调用问题
+async def get_qa_answer_from_redis(redis_db, db_name: str, question: str) -> str | None:
     if not redis_db: return None
-    try: return redis_db.hget(db_name, question)
-    except Exception as e: return None
+    try: 
+        return await redis_db.hget(db_name, question)
+    except Exception as e: 
+        return None
 
-def save_qa_answer_to_redis(redis_db, db_name: str, question: str, answer: str):
+# [BUG修复] 修复异步调用问题
+async def save_qa_answer_to_redis(redis_db, db_name: str, question: str, answer: str):
     from app.logger import format_and_log
     if not redis_db: return
     try:
-        redis_db.hset(db_name, question, answer)
+        await redis_db.hset(db_name, question, answer)
     except Exception as e:
         format_and_log("SYSTEM", "Redis写入失败", {'数据库': db_name, '键': question, '错误': str(e)}, level=logging.ERROR)

@@ -19,9 +19,7 @@ async def run_test():
     """
     执行一次独立的 Gemini API 调用测试，使用最终选定的模型和配置。
     """
-    # --- 最终配置 ---
-    # 根据您的可用列表和决定，我们使用 gemini-1.5-pro
-    # 修正：根据您的最新指示和列表，我们使用 gemini-2.5-pro
+    # [模型升级] 根据您的最新指示和列表，我们使用 gemini-2.5-pro
     model_name = 'gemini-2.5-pro'
     
     print(f"--- 开始 Gemini API 最终测试 (模型: {model_name}) ---")
@@ -30,10 +28,12 @@ async def run_test():
     try:
         with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
-        api_key = config.get('exam_solver', {}).get('gemini_api_key')
-        if not api_key:
-            print(f"\n❌ 错误: 未在 {CONFIG_FILE_PATH} 文件中找到 gemini_api_key。")
+        # [重构] 读取 key 列表中的第一个 key 用于测试
+        api_keys = config.get('exam_solver', {}).get('gemini_api_keys', [])
+        if not api_keys:
+            print(f"\n❌ 错误: 未在 {CONFIG_FILE_PATH} 文件中找到 gemini_api_keys 列表。")
             return
+        api_key = api_keys[0]
     except FileNotFoundError:
         print(f"\n❌ 错误: 配置文件 {CONFIG_FILE_PATH} 未找到。")
         return
@@ -94,4 +94,3 @@ async def run_test():
 
 if __name__ == "__main__":
     asyncio.run(run_test())
-

@@ -48,7 +48,8 @@ TZ = config.get('timezone', 'Asia/Shanghai')
 COMMAND_TIMEOUT = config.get('command_timeout', 60)
 
 EXAM_SOLVER_CONFIG = _merge_config('exam_solver', {
-    'gemini_model_name': 'models/gemini-1.5-pro-latest',
+    # [模型升级] 更新为 2.5 系列模型优先级列表
+    'gemini_model_names': ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
     'gemini_api_keys': [],
     'reply_delay': {'min': 5, 'max': 15}
 })
@@ -123,7 +124,6 @@ TRADE_COORDINATION_CONFIG = _merge_config('trade_coordination', {
     'crafting_session_timeout_seconds': 300
 })
 
-# [新功能] 心跳与维护配置
 HEARTBEAT_CONFIG = _merge_config('heartbeat', {
     'active_enabled': True,
     'active_interval_minutes': 10,
@@ -134,7 +134,7 @@ HEARTBEAT_CONFIG = _merge_config('heartbeat', {
     'sync_run_time': '04:30'
 })
 
-GEMINI_MODEL_NAME = EXAM_SOLVER_CONFIG.get('gemini_model_name')
+GEMINI_MODEL_NAMES = EXAM_SOLVER_CONFIG.get('gemini_model_names')
 
 gemini_keys_from_env = os.getenv('GEMINI_API_KEYS')
 if gemini_keys_from_env:

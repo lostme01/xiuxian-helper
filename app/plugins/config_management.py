@@ -27,16 +27,25 @@ HELP_TEXT_SET_CONFIG = """⚙️ **动态修改详细配置**
 - 不带参数发送可查看所有支持动态修改的配置项。
 **用法**: `,修改配置 <配置别名> <新值>`"""
 
+# [重构] 更新可修改配置列表
 MODIFIABLE_CONFIG_MAP = {
+    # 核心行为
+    "指令全局超时": "command_timeout",
+    "最小发送延迟": "send_delay.min",
+    "最大发送延迟": "send_delay.max",
+    # 消息删除策略
     "管理员指令删除延迟": "auto_delete.delay_admin_command",
     "成功回复后删除延迟": "auto_delete_strategies.request_response.delay_self_on_reply",
     "超时回复后删除延迟": "auto_delete_strategies.request_response.delay_self_on_timeout",
-    "最小发送延迟": "send_delay.min",
-    "最大发送延迟": "send_delay.max",
-    "指令全局超时": "command_timeout",
+    # AI 答题
     "AI答题延迟-最小": "exam_solver.reply_delay.min",
     "AI答题延迟-最大": "exam_solver.reply_delay.max",
-    "AI模型名称": "exam_solver.gemini_model_name",
+    # 协同与自动化
+    "智能炼制超时秒数": "trade_coordination.crafting_session_timeout_seconds",
+    # 心跳与维护
+    "主动心跳间隔分钟": "heartbeat.active_interval_minutes",
+    "被动心跳阈值分钟": "heartbeat.passive_threshold_minutes",
+    # 宗门专属
     "黄枫谷-药园播种": "huangfeng_valley.garden_sow_seed",
     "太一门-引道冷却": "taiyi_sect.yindao_success_cooldown_hours",
 }
@@ -139,11 +148,11 @@ async def _cmd_set_config(event, parts):
         await client.reply_to_admin(event, header + '\n'.join(items) + usage)
         return
 
-    if len(parts) != 3:
+    if len(parts) < 3:
         await client.reply_to_admin(event, f"❌ 参数格式错误！\n\n{HELP_TEXT_SET_CONFIG}")
         return
         
-    alias, value = parts[1], parts[2]
+    alias, value = parts[1], " ".join(parts[2:])
     
     if alias not in MODIFIABLE_CONFIG_MAP:
         await client.reply_to_admin(event, f"❌ 未知的配置别名: `{alias}`")

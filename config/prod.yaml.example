@@ -30,11 +30,15 @@ timezone: 'Asia/Shanghai'
 
 # ----------------- AI 答题配置 -----------------
 exam_solver:
-  # 答题模型
-  gemini_model_name: 'models/gemini-1.5-pro-latest'
+  # [模型升级] 答题模型优先级列表。程序会优先使用第一个，如果因限额等问题失败，会自动尝试下一个。
+  gemini_model_names:
+    - 'gemini-2.5-pro'
+    - 'gemini-2.5-flash'
+    - 'gemini-2.5-flash-lite'
   # Gemini API Key列表，可以填多个以轮询使用
   gemini_api_keys:
     - "AIzaSy...your...first...key"
+    - "AIzaSy...your...second...key"
   # 答题前的随机延迟（秒）
   reply_delay: { min: 5, max: 15 }
 
@@ -131,13 +135,13 @@ logging_switches:
   log_edits: false
   log_deletes: true
   original_log_enabled: false
-
-# ----------------- [新] 心跳与维护配置 -----------------
+  
+# ----------------- 心跳与维护配置 -----------------
 heartbeat:
-  active_enabled: true                  # 主动心跳开关
-  active_interval_minutes: 10           # 主动心跳频率（分钟）
-  passive_enabled: true                 # 被动心跳（连接丢失检测）开关
-  passive_check_interval_minutes: 5     # 被动心跳的检查频率（分钟）
-  passive_threshold_minutes: 30         # 超过多少分钟无消息则报警
-  sync_enabled: true                    # 每日全量同步开关
-  sync_run_time: '04:30'                # 每日同步的执行时间
+  active_enabled: true
+  active_interval_minutes: 10
+  passive_enabled: true
+  passive_check_interval_minutes: 5
+  passive_threshold_minutes: 30
+  sync_enabled: true
+  sync_run_time: '04:30'

@@ -31,7 +31,8 @@ class BaseExamSolver:
         prompt = f"请根据以下单项选择题，仅返回正确答案的字母（A, B, C, D）。不要解释。\n问题：{question}\nA. {options.get('A','')}\nB. {options.get('B','')}\nC. {options.get('C','')}\nD. {options.get('D','')}"
         format_and_log("TASK", f"{self.log_module_name}: AI作答", {'状态': '开始请求Gemini'})
         try:
-            response = await gemini_client.generate_content_with_rotation(prompt)
+            # [重构] 调用新的、带模型降级的Gemini客户端
+            response = await gemini_client.generate_content(prompt)
             answer = re.sub(r'[^A-D]', '', response.text.upper())
             if answer in options:
                 format_and_log("TASK", f"{self.log_module_name}: AI作答", {'状态': '成功', '解析答案': answer})
@@ -43,9 +44,11 @@ class BaseExamSolver:
             format_and_log("TASK", f"{self.log_module_name}: AI作答", {'状态': '异常', '完整错误': repr(e)}, level=logging.ERROR)
             return None
 
-    def _find_answer_in_db(self, question: str, options: dict) -> str | None:
+    # [BUG修复] 修复异步调用问题
+    async def _find_answer_in_db(self, question: str, options: dict) -> str | None:
         format_and_log("TASK", f"{self.log_module_name}: 数据库查询", {'问题': question})
-        if stored_answer_text := get_qa_answer_from_redis(self.redis_db, self.redis_db_name, question):
+        stored_answer_text = await get_qa_answer_from_redis(self.redis_db, self.redis_db_name, question)
+        if stored_answer_text:
             for letter, text in options.items():
                 if text == stored_answer_text:
                     format_and_log("TASK", f"{self.log_module_name}: 数据库查询", {'状态': '命中', '答案': f'{letter} ({text})'})
@@ -53,14 +56,14 @@ class BaseExamSolver:
         format_and_log("TASK", f"{self.log_module_name}: 数据库查询", {'状态': '未命中'})
         return None
 
-    def _save_answer_to_db(self, question: str, answer_text: str):
-        save_qa_answer_to_redis(self.redis_db, self.redis_db_name, question, answer_text)
+    # [BUG修复] 修复异步调用问题
+    async def _save_answer_to_db(self, question: str, answer_text: str):
+        await save_qa_answer_to_redis(self.redis_db, self.redis_db_name, question, answer_text)
         format_and_log("TASK", f"{self.log_module_name}: 答案入库", {'问题': question, '答案': answer_text})
 
     async def handler(self, event):
         if not self.me: return
         
-        # [核心修复] 全局统一使用 .text
         message = event.message
         text = message.text
         
@@ -87,13 +90,14 @@ class BaseExamSolver:
             
         format_and_log("TASK", f"{self.log_module_name}: 题目解析", {'问题': question, '选项': str(options), '是否轮到我': is_our_turn})
         
-        answer_letter, source = self._find_answer_in_db(question, options), "本地知识库"
+        # [BUG修复] 修复异步调用问题
+        answer_letter, source = await self._find_answer_in_db(question, options), "本地知识库"
         
         if not answer_letter:
             source = "Gemini AI"
             answer_letter = await self._ask_gemini(question, options)
             if answer_letter:
-                self._save_answer_to_db(question, options[answer_letter])
+                await self._save_answer_to_db(question, options[answer_letter])
             else:
                 format_and_log("TASK", f"流程中止: {self.log_module_name}", {'原因': 'AI未能返回有效答案'})
 

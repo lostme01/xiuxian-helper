@@ -8,7 +8,7 @@ from app.logger import format_and_log
 
 class ApiKeyManager:
     def __init__(self, keys):
-        self._api_keys = keys
+        self._api_keys = keys if keys else []
         self._current_key_index = 0
         if self._api_keys:
             self._current_key_index = random.randint(0, len(self._api_keys) - 1)
@@ -25,14 +25,15 @@ class ApiKeyManager:
         return len(self._api_keys)
 
 _api_key_manager = None
-_default_model_name = None 
+_model_priority_list = []
 _tool_config = {"function_calling_config": {"mode": "none"}}
 
 def initialize_gemini():
-    """从配置加载API Keys并准备轮询"""
-    global _api_key_manager, _default_model_name
+    """从配置加载API Keys和模型列表并准备轮询"""
+    global _api_key_manager, _model_priority_list
     
-    _default_model_name = settings.GEMINI_MODEL_NAME
+    # [重构] 加载模型优先级列表
+    _model_priority_list = settings.GEMINI_MODEL_NAMES
     keys = settings.EXAM_SOLVER_CONFIG.get('gemini_api_keys', [])
 
     if not keys or not isinstance(keys, list):
@@ -45,54 +46,62 @@ def initialize_gemini():
         '组件': 'Gemini Client', 
         '状态': '初始化成功',
         '可用Key数量': _api_key_manager.key_count,
-        '默认模型 (答题用)': _default_model_name
+        '答题模型优先级': ' -> '.join(_model_priority_list)
     })
     return True
 
 
-async def generate_content_with_rotation(prompt: str, model_name: str = None):
+async def generate_content(prompt: str):
     """
-    [最终版]
-    使用轮询和重试机制来生成内容，并确保记录详细的原始错误信息。
+    [重构版]
+    使用模型优先级和API Key轮询来生成内容。
     """
     if not _api_key_manager or _api_key_manager.key_count == 0:
         raise RuntimeError("Gemini Client 未成功初始化或未配置 API Keys。")
 
-    final_model_name = model_name or _default_model_name
-    format_and_log("DEBUG", "Gemini-请求", {'模型': final_model_name, 'Prompt': prompt})
+    format_and_log("DEBUG", "Gemini-请求", {'Prompt': prompt})
 
     keys_to_try = _api_key_manager.get_all_keys_with_start_index()
-    
-    failed_reasons = []
+    all_errors = []
 
-    for selected_key, current_index in keys_to_try:
-        try:
-            genai.configure(api_key=selected_key)
-            model = genai.GenerativeModel(model_name=final_model_name, tool_config=_tool_config)
-            
-            response = await asyncio.wait_for(
-                model.generate_content_async(prompt),
-                timeout=30.0
-            )
-            
-            format_and_log("DEBUG", "Gemini-响应", {'Key索引': current_index, '原始返回': response.text})
-            
-            _api_key_manager._current_key_index = (current_index + 1) % _api_key_manager.key_count
-            return response
+    # [新功能] 外层循环：按优先级遍历模型
+    for model_name in _model_priority_list:
+        model_errors = []
+        format_and_log("DEBUG", "Gemini-模型尝试", {'模型': model_name})
         
-        except Exception as e:
-            error_repr = repr(e)
-            failed_reasons.append(f"Key[{current_index}]: {error_repr}")
+        # 内层循环：轮询所有API Key
+        for selected_key, current_index in keys_to_try:
+            try:
+                genai.configure(api_key=selected_key)
+                model = genai.GenerativeModel(model_name=model_name, tool_config=_tool_config)
+                
+                response = await asyncio.wait_for(
+                    model.generate_content_async(prompt),
+                    timeout=30.0
+                )
+                
+                format_and_log("DEBUG", "Gemini-响应", {'模型': model_name, 'Key索引': current_index, '原始返回': response.text})
+                
+                # 成功后，更新下一个要使用的Key的索引
+                _api_key_manager._current_key_index = (current_index + 1) % _api_key_manager.key_count
+                return response
+            
+            except Exception as e:
+                error_repr = repr(e)
+                model_errors.append(f"Key[{current_index}]: {error_repr}")
+                format_and_log(
+                    "WARNING",
+                    "Gemini-单次调用失败", {
+                        '模型': model_name,
+                        'Key索引': current_index,
+                        '原始错误': error_repr,
+                        '操作': '将自动尝试下一个Key...'
+                    }
+                )
+                await asyncio.sleep(1)
+        
+        all_errors.append(f"模型 [{model_name}] 失败:\n" + "\n".join(model_errors))
 
-            format_and_log(
-                "ERROR",
-                "Gemini-单次调用失败", {
-                    'Key索引': current_index,
-                    '原始错误': error_repr,
-                    '操作': '将自动尝试下一个Key...'
-                }
-            )
-            await asyncio.sleep(1)
-
-    all_errors = "\n".join(failed_reasons)
-    raise RuntimeError(f"所有API Key均调用失败。\n\n详细原因:\n{all_errors}")
+    # 如果所有模型和所有Key都失败了
+    final_error_report = "\n\n".join(all_errors)
+    raise RuntimeError(f"所有模型和API Key均调用失败。\n\n详细原因:\n{final_error_report}")

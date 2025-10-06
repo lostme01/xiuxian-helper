@@ -8,22 +8,22 @@ HELP_TEXT_QUERY_QA = """📚 **查询题库内容**
 
 HELP_TEXT_DELETE_ANSWER = """🗑️ **删除题库问答**
 **说明**: 通过编号或问题原文，从指定题库中删除一个问答条目。
-**用法**: `,删除答案 <题库> <编号|“问题”>`
+**用法**: `,删除题库 <题库> <编号|“问题”>`
 **参数**:
   - `题库`: `玄骨` 或 `天机`
   - `编号|“问题”`: 要删除的问题编号 (通过 `,查询题库` 获取) 或完整的带英文引号的问题原文。
-**示例 1 (按编号)**: `,删除答案 玄骨 5`
-**示例 2 (按问题)**: `,删除答案 天机 "第一道题的题目是什么？"`"""
+**示例 1 (按编号)**: `,删除题库 玄骨 5`
+**示例 2 (按问题)**: `,删除题库 天机 "第一道题的题目是什么？"`"""
 
 HELP_TEXT_UPDATE_ANSWER = """✍️ **修改/添加题库问答**
 **说明**: 通过编号修改现有答案，或通过问题原文直接添加/覆盖一个问答条目。
-**用法**: `,修改答案 <题库> <编号|“问题”> “<新答案>”`
+**用法**: `,修改题库 <题库> <编号|“问题”> “<新答案>”`
 **参数**:
   - `题库`: `玄骨` 或 `天机`
   - `编号|“问题”`: 要修改的问题编号或问题原文。如果提供的“问题”不存在，则会添加为新条目。
   - `答案`: 新的正确答案（需要用英文引号包裹）。
-**示例 1 (按编号修改)**: `,修改答案 天机 1 "这是新的正确答案"`
-**示例 2 (按问题添加/覆盖)**: `,修改答案 玄骨 "某个新问题" "这是它的答案"`"""
+**示例 1 (按编号修改)**: `,修改题库 天机 1 "这是新的正确答案"`
+**示例 2 (按问题添加/覆盖)**: `,修改题库 玄骨 "某个新问题" "这是它的答案"`"""
 
 async def _cmd_redis_status(event, parts):
     await get_application().client.reply_to_admin(event, await data_logic.logic_get_redis_status())
@@ -49,5 +49,6 @@ def initialize(app):
     app.register_command("查询redis", _cmd_redis_status, help_text="🗄️ 检查Redis状态", category="查询", aliases=['redis'])
     app.register_command("查看背包", _cmd_view_inventory, help_text="🎒 查看缓存的背包", category="查询")
     app.register_command("查询题库", _cmd_query_qa_db, help_text="📚 查询题库内容", category="知识", usage=HELP_TEXT_QUERY_QA)
-    app.register_command("删除答案", _cmd_delete_answer, help_text="🗑️ 删除题库问答", category="知识", usage=HELP_TEXT_DELETE_ANSWER)
-    app.register_command("修改答案", _cmd_update_answer, help_text="✍️ 修改/添加题库问答", category="知识", usage=HELP_TEXT_UPDATE_ANSWER)
+    # [重构] 指令更名，提升清晰度
+    app.register_command("删除题库", _cmd_delete_answer, help_text="🗑️ 删除题库问答", category="知识", usage=HELP_TEXT_DELETE_ANSWER)
+    app.register_command("修改题库", _cmd_update_answer, help_text="✍️ 修改/添加题库问答", category="知识", usage=HELP_TEXT_UPDATE_ANSWER)
