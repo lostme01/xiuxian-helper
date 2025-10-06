@@ -54,7 +54,7 @@ class Application:
             try:
                 async with self.redis_db.pubsub() as pubsub:
                     await pubsub.subscribe(TASK_CHANNEL, GAME_EVENTS_CHANNEL)
-                    format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 监听器', '状态': '已订阅', '频道': f"{TASK_CHANNEL}, {GAME_EVENTS_CHANNEL}"})
+                    format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '已订阅', '频道': f"{TASK_CHANNEL}, {GAME_EVENTS_CHANNEL}"})
                     
                     async for message in pubsub.listen():
                         if message and message.get('type') == 'message':
@@ -71,14 +71,12 @@ class Application:
         
     def setup_logging(self):
         print("开始配置日志系统...")
-        # --- 1. 配置主日志记录器 (用于 docker logs) ---
         app_logger = logging.getLogger("app")
         if app_logger.hasHandlers(): app_logger.handlers.clear()
         
         log_level = logging.DEBUG if settings.LOGGING_SWITCHES.get('debug_log') else logging.INFO
         app_logger.setLevel(log_level)
         
-        # [BUG修复] 关闭日志传播，防止重复输出
         app_logger.propagate = False
         
         console_formatter = logging.Formatter(fmt='%(message)s')
@@ -86,7 +84,6 @@ class Application:
         stream_handler.setFormatter(console_formatter)
         app_logger.addHandler(stream_handler)
         
-        # --- 2. 配置独立的原始日志记录器 (用于写入文件) ---
         raw_logger = logging.getLogger('raw_messages')
         if raw_logger.hasHandlers(): raw_logger.handlers.clear()
         raw_logger.propagate = False
@@ -104,7 +101,6 @@ class Application:
         else:
             raw_logger.setLevel(logging.CRITICAL + 1)
         
-        # --- 3. 屏蔽第三方库的日志 ---
         logging.getLogger('apscheduler').setLevel(logging.ERROR)
         logging.getLogger('telethon').setLevel(logging.WARNING)
         logging.getLogger('asyncio').setLevel(logging.WARNING)
@@ -137,9 +133,25 @@ class Application:
             
             scheduler.start()
             await self.client.start()
+            
+            # [BUG修复] 将身份设置和注册逻辑移到此处，保证执行顺序
+            # 1. 设置全局 ACCOUNT_ID
             settings.ACCOUNT_ID = str(self.client.me.id)
             format_and_log("SYSTEM", "账户初始化", {'账户ID': settings.ACCOUNT_ID, '状态': '已设置为全局标识'})
-            
+
+            # 2. 安全地执行身份注册
+            from app.state_manager import get_state, set_state
+            try:
+                profile = await get_state("character_profile", is_json=True, default={})
+                profile.update({
+                    "用户": self.client.me.username,
+                    "ID": self.client.me.id
+                })
+                await set_state("character_profile", profile)
+                format_and_log("SYSTEM", "身份注册", {'状态': '成功', '用户名': self.client.me.username, 'ID': self.client.me.id})
+            except Exception as e:
+                format_and_log("ERROR", "身份注册失败", {'错误': str(e)})
+
             self.load_plugins_and_commands()
             
             if self.redis_db:

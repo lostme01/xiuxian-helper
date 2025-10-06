@@ -190,7 +190,6 @@ class TelegramClient:
 
 
     async def start(self):
-        from app.state_manager import get_state, set_state
         await self.client.start()
         self.me = await self.client.get_me()
         my_name = get_display_name(self.me)
@@ -198,18 +197,6 @@ class TelegramClient:
         from app.logger import format_and_log
         format_and_log("SYSTEM", "客户端状态", {'状态': '已成功连接', '当前用户': f"{my_name} (ID: {self.me.id})", '识别身份': identity})
         
-        # [新功能] 启动时主动注册自己的身份信息到缓存
-        try:
-            profile = await get_state("character_profile", is_json=True, default={})
-            profile.update({
-                "用户": self.me.username,
-                "ID": self.me.id
-            })
-            await set_state("character_profile", profile)
-            format_and_log("SYSTEM", "身份注册", {'状态': '成功', '用户名': self.me.username, 'ID': self.me.id})
-        except Exception as e:
-            format_and_log("ERROR", "身份注册失败", {'错误': str(e)})
-            
         asyncio.create_task(self._message_sender_loop())
 
     async def _cache_chat_info(self):
