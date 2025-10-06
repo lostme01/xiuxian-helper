@@ -95,32 +95,16 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
             item_id = match_id.group(1)
             format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id})
             
-            # [核心优化] 将通知发起者和执行者下架两个操作并行化
-            
-            # 1. 准备购买任务，先通知发起者
-            task_payload = {
-                "item_id": item_id,
-                "cost": {
-                    "name": kwargs.get('item_to_buy_name', '灵石'),
-                    "quantity": kwargs.get('item_to_buy_quantity', 1)
+            # [核心优化] V3.0 - 仅回报挂单ID，等待发起者触发下架
+            result_task = {
+                "task_type": "listing_successful", 
+                "target_account_id": requester_account_id, 
+                "payload": {
+                    "item_id": item_id,
+                    "executor_id": str(app.client.me.id)
                 }
             }
-            result_task = {"task_type": "purchase_item", "target_account_id": requester_account_id, "payload": task_payload}
-            
-            # 2. 创建两个并行的异步任务
-            publish_to_requester_task = asyncio.create_task(publish_task(result_task))
-            delist_item_task = asyncio.create_task(asyncio.sleep(0)) # 默认为空任务
-
-            if settings.TRADE_COORDINATION_CONFIG.get('focus_fire_auto_delist', True):
-                async def delist_with_delay():
-                    await asyncio.sleep(random.uniform(0.5, 1.5)) 
-                    format_and_log("TASK", "集火-安全操作", {'阶段': '发送立即下架指令', '挂单ID': item_id})
-                    await execute_unlisting_task(item_id, is_auto=True)
-                delist_item_task = asyncio.create_task(delist_with_delay())
-
-            # 3. 等待两个任务完成
-            await asyncio.gather(publish_to_requester_task, delist_item_task)
-
+            await publish_task(result_task)
         else:
             format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '游戏返回上架失败信息', '回复': reply_text})
             await app.client.send_admin_notification(f"❌ **集火-上架失败**\n助手号上架 `{kwargs['item_to_sell_name']}` 时，游戏返回错误:\n`{reply_text}`")
@@ -133,10 +117,7 @@ async def execute_unlisting_task(item_id: str, is_auto: bool = False):
     log_context = {'阶段': '开始执行', '指令': command, '自动任务': is_auto}
     format_and_log("TASK", "下架物品", log_context)
     try:
-        _sent, reply = await app.client.send_game_command_request_response(command)
-        reply_text = reply.text
-        if not ("成功将" in reply_text and "归还至你的储物袋" in reply_text) and not is_auto:
-            await app.client.send_admin_notification(f"⚠️ **下架失败** (挂单ID: `{item_id}`)\n游戏返回: `{reply_text}`")
+        await app.client.send_game_command_fire_and_forget(command)
     except Exception as e:
         if not is_auto:
             await app.client.send_admin_notification(f"❌ **下架失败** (挂单ID: `{item_id}`)\n发生异常: `{e}`")
