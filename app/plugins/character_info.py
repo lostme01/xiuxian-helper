@@ -8,24 +8,22 @@ from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 from config import settings
 from app.logger import format_and_log
 from app.context import get_application
-from app.state_manager import set_state, get_state
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
 from app import game_adaptor
 
 STATE_KEY_PROFILE = "character_profile"
 
-# [终极修复 V3] 采用老板提供的全兼容正则表达式
 PROFILE_PATTERN = re.compile(
-    r"\*\*@([^\*]+)\*\*.*?天命玉牒.*?"  # 用户名
-    r"(?:\*\*称号\*\*[:：]?\s*【?([^】\n]+)】?.*?)?" # 称号（可选）
-    r"\*\*宗门\*\*[:：]?\s*[【]?([^】\n]+)[】]?\s*"   # 宗门
-    r"\*\*道号\*\*[:：]?\s*([^\n]+)\s*"           # 道号
-    r"\*\*灵根\*\*[:：]?\s*([^\n]+)\s*"           # 灵根
-    r"\*\*境界\*\*[:：]?\s*([^\n]+)\s*"           # 境界
-    r"\*\*修为\*\*[:：]?\s*(-?\d+)\s*/\s*(\d+)\s*"    # 修为
-    r"\*\*丹毒\*\*[:：]?\s*(-?\d+)\s*点.*?"      # 丹毒
-    r"(?:\*\*杀戮\*\*[:：]?\s*(\d+)\s*人.*?)?"     # 杀戮（可选）
+    r"\*\*@([^\*]+)\*\*.*?天命玉牒.*?"
+    r"(?:\*\*称号\*\*[:：]?\s*【?([^】\n]+)】?.*?)?"
+    r"\*\*宗门\*\*[:：]?\s*[【]?([^】\n]+)[】]?\s*"
+    r"\*\*道号\*\*[:：]?\s*([^\n]+)\s*"
+    r"\*\*灵根\*\*[:：]?\s*([^\n]+)\s*"
+    r"\*\*境界\*\*[:：]?\s*([^\n]+)\s*"
+    r"\*\*修为\*\*[:：]?\s*(-?\d+)\s*/\s*(\d+)\s*"
+    r"\*\*丹毒\*\*[:：]?\s*(-?\d+)\s*点.*?"
+    r"(?:\*\*杀戮\*\*[:：]?\s*(\d+)\s*人.*?)?"
     , re.S | re.I
 )
 
@@ -36,23 +34,14 @@ def _parse_profile_text(text: str) -> dict:
     if not match:
         return {}
     
-    # [重构] 按捕获组顺序解析
     groups = match.groups()
     
     profile_data = {
-        "用户": groups[0],
-        "称号": groups[1],
-        "宗门": groups[2],
-        "道号": groups[3],
-        "灵根": groups[4],
-        "境界": groups[5],
-        "修为": int(groups[6]),
-        "修为上限": int(groups[7]),
-        "丹毒": int(groups[8]),
-        "杀戮": int(groups[9]) if groups[9] else 0,
+        "用户": groups[0], "称号": groups[1], "宗门": groups[2], "道号": groups[3],
+        "灵根": groups[4], "境界": groups[5], "修为": int(groups[6]), "修为上限": int(groups[7]),
+        "丹毒": int(groups[8]), "杀戮": int(groups[9]) if groups[9] else 0,
     }
 
-    # 清理 None 值
     return {k: v.strip() if isinstance(v, str) else v for k, v in profile_data.items() if v is not None}
 
 
@@ -93,7 +82,7 @@ async def trigger_update_profile(force_run=False):
             format_and_log("ERROR", "角色信息解析失败", {'原始文本': final_message.text})
             raise ValueError(f"无法从最终返回的信息中解析出角色数据: {getattr(final_message, 'text', '无最终消息')}")
 
-        await set_state(STATE_KEY_PROFILE, profile_data)
+        await app.data_manager.save_value(STATE_KEY_PROFILE, profile_data)
         
         if force_run:
             return _format_profile_reply(profile_data, "✅ **角色信息已更新并缓存**:")
@@ -132,7 +121,7 @@ async def _cmd_query_profile(event, parts):
 
 async def _cmd_view_cached_profile(event, parts):
     app = get_application()
-    profile_data = await get_state(STATE_KEY_PROFILE, is_json=True)
+    profile_data = await app.data_manager.get_value(STATE_KEY_PROFILE, is_json=True)
     if not profile_data:
         await app.client.reply_to_admin(event, "ℹ️ 尚未缓存任何角色信息，请先使用 `,我的灵根` 查询一次。")
         return

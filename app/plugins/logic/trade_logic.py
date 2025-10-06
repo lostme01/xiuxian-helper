@@ -12,8 +12,6 @@ from app.telegram_client import CommandTimeoutError, Message
 from app import redis_client, game_adaptor
 from config import settings
 from app.task_scheduler import scheduler
-from app.plugins.common_tasks import update_inventory_cache
-from app.inventory_manager import inventory_manager
 
 TASK_CHANNEL = "tg_helper:tasks"
 
@@ -36,16 +34,17 @@ async def publish_task(task: dict, channel: str = TASK_CHANNEL) -> bool:
         return False
 
 async def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) -> (str, int):
-    if not redis_client.db: return None, 0
+    app = get_application()
+    if not app.data_manager: return None, 0
     best_account_id = None
     min_sufficient_quantity = float('inf') 
     try:
-        keys_found = [key async for key in redis_client.db.scan_iter("tg_helper:task_states:*")]
+        keys_found = await app.data_manager.get_all_assistant_keys()
         for key in keys_found:
             account_id_str = key.split(':')[-1]
             if account_id_str == exclude_id: continue
             
-            inventory_json = await redis_client.db.hget(key, "inventory")
+            inventory_json = await app.redis_db.hget(key, "inventory")
             if not inventory_json: continue
 
             try:
@@ -64,9 +63,11 @@ async def find_best_executor(item_name: str, required_quantity: int, exclude_id:
     return best_account_id, found_quantity
 
 async def find_any_executor(exclude_id: str) -> str | None:
-    if not redis_client.db: return None
+    app = get_application()
+    if not app.data_manager: return None
     try:
-        async for key in redis_client.db.scan_iter("tg_helper:task_states:*"):
+        keys_found = await app.data_manager.get_all_assistant_keys()
+        for key in keys_found:
             account_id_str = key.split(':')[-1]
             if account_id_str != exclude_id: return account_id_str
     except Exception as e:
@@ -75,8 +76,8 @@ async def find_any_executor(exclude_id: str) -> str | None:
 
 async def execute_listing_task(requester_account_id: str, **kwargs):
     app = get_application()
+    inventory_manager = app.inventory_manager
     
-    # [重构] 使用 game_adaptor 生成指令
     command = game_adaptor.list_item(
         sell_item=kwargs['item_to_sell_name'],
         sell_quantity=kwargs['item_to_sell_quantity'],
@@ -86,6 +87,7 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
     format_and_log("TASK", "集火-上架", {'阶段': '开始执行', '指令': command})
     
     try:
+        # [重构] 上架时不再操作库存，交由事件总线处理
         _sent, reply = await app.client.send_game_command_request_response(command)
         reply_text = reply.text
         
@@ -95,9 +97,6 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
                 raise ValueError("上架成功但无法解析挂单ID。")
             
             item_id = match_id.group(1)
-
-            await inventory_manager.remove_item(kwargs['item_to_sell_name'], kwargs['item_to_sell_quantity'])
-            
             format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id})
             
             if settings.TRADE_COORDINATION_CONFIG.get('focus_fire_auto_delist', True):
@@ -114,82 +113,56 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
             }
             result_task = {"task_type": "purchase_item", "target_account_id": requester_account_id, "payload": task_payload}
             await publish_task(result_task)
-
         else:
             format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '游戏返回上架失败信息', '回复': reply_text})
             await app.client.send_admin_notification(f"❌ **集火-上架失败**\n助手号上架 `{kwargs['item_to_sell_name']}` 时，游戏返回错误:\n`{reply_text}`")
-
     except Exception as e:
         await app.client.send_admin_notification(f"❌ **集火-上架异常**\n助手号上架 `{kwargs['item_to_sell_name']}` 时发生异常: `{e}`")
 
 async def execute_unlisting_task(item_id: str, is_auto: bool = False):
     app = get_application()
-    # [重构] 使用 game_adaptor 生成指令
     command = game_adaptor.unlist_item(item_id)
     log_context = {'阶段': '开始执行', '指令': command, '自动任务': is_auto}
     format_and_log("TASK", "下架物品", log_context)
     try:
+        # [重构] 下架后不再操作库存，交由事件总线处理
         _sent, reply = await app.client.send_game_command_request_response(command)
         reply_text = reply.text
-
-        if "成功将" in reply_text and "归还至你的储物袋" in reply_text:
-            match_item = re.search(r"\*\*【(.+?)】x(\d+)\*\*", reply_text)
-            if match_item:
-                returned_item, returned_quantity = match_item.group(1), int(match_item.group(2))
-                await inventory_manager.add_item(returned_item, returned_quantity)
-        elif not is_auto:
+        if not ("成功将" in reply_text and "归还至你的储物袋" in reply_text) and not is_auto:
             await app.client.send_admin_notification(f"⚠️ **下架失败** (挂单ID: `{item_id}`)\n游戏返回: `{reply_text}`")
-    
     except Exception as e:
         if not is_auto:
             await app.client.send_admin_notification(f"❌ **下架失败** (挂单ID: `{item_id}`)\n发生异常: `{e}`")
 
 async def execute_purchase_task(payload: dict):
     app = get_application()
-    my_id = str(app.client.me.id)
-    item_id = payload.get("item_id")
-    cost = payload.get("cost")
-    crafting_session_id = payload.get("crafting_session_id")
-
-    # [重构] 使用 game_adaptor 生成指令
-    command = game_adaptor.buy_item(item_id)
+    command = game_adaptor.buy_item(payload.get("item_id"))
     format_and_log("TASK", "协同任务-购买", {'阶段': '开始执行', '指令': command})
     try:
+        # [重构] 购买后不再操作库存，交由事件总线处理
         _sent, reply = await app.client.send_game_command_request_response(command)
         reply_text = reply.text
         
         if "交易成功" in reply_text:
-            format_and_log("TASK", "协同任务-购买", {'阶段': '成功', '挂单ID': item_id})
-            
-            match_gain = re.search(r"你成功购得 \*\*【(.+?)】\*\*x\*\*(\d+)\*\*", reply_text)
-            if match_gain:
-                gained_item, gained_quantity = match_gain.group(1), int(match_gain.group(2))
-                await inventory_manager.add_item(gained_item, gained_quantity)
-            
-            if cost and cost.get('name') and cost.get('quantity'):
-                await inventory_manager.remove_item(cost['name'], cost['quantity'])
+            format_and_log("TASK", "协同任务-购买", {'阶段': '成功', '挂单ID': payload.get("item_id")})
+            await app.client.send_admin_notification(f"✅ **协同购买成功** (挂单ID: `{payload.get('item_id')}`)\n系统将通过事件监听自动更新库存。")
 
-            await app.client.send_admin_notification(f"✅ **协同购买成功** (挂单ID: `{item_id}`)\n库存已实时更新。")
-
-            if crafting_session_id:
+            if crafting_session_id := payload.get("crafting_session_id"):
                 receipt_task = {
                     "task_type": "crafting_material_delivered",
-                    "target_account_id": crafting_session_id.split('_')[1],
-                    "session_id": crafting_session_id,
-                    "supplier_id": my_id
+                    "payload": {
+                        "session_id": crafting_session_id,
+                        "supplier_id": str(app.client.me.id)
+                    },
+                    "target_account_id": crafting_session_id.split('_')[1]
                 }
                 await publish_task(receipt_task)
                 format_and_log("DEBUG", "智能炼制-回执", {'状态': '已发送送达回执', '会话ID': crafting_session_id})
-
         else:
             error_reason = "未知"
-            if "你还缺少" in reply_text: 
-                error_reason = "购买方物品不足"
-            elif "已被捷足先登" in reply_text: 
-                error_reason = "已被抢购"
-            
-            format_and_log("WARNING", "协同任务-购买", {'阶段': '失败', '挂单ID': item_id, '原因': error_reason, '回复': reply_text})
-            await app.client.send_admin_notification(f"⚠️ **协同购买失败** (挂单ID: `{item_id}`)\n**原因**: `{error_reason}`\n**游戏回复**:\n`{reply_text}`")
-            
+            if "你还缺少" in reply_text: error_reason = "购买方物品不足"
+            elif "已被捷足先登" in reply_text: error_reason = "已被抢购"
+            format_and_log("WARNING", "协同任务-购买", {'阶段': '失败', '挂单ID': payload.get("item_id"), '原因': error_reason, '回复': reply_text})
+            await app.client.send_admin_notification(f"⚠️ **协同购买失败** (挂单ID: `{payload.get('item_id')}`)\n**原因**: `{error_reason}`\n**游戏回复**:\n`{reply_text}`")
     except Exception as e:
-        await app.client.send_admin_notification(f"❌ **协同购买异常** (挂单ID: `{item_id}`)\n发生异常: `{e}`。")
+        await app.client.send_admin_notification(f"❌ **协同购买异常** (挂单ID: `{payload.get('item_id')}`)\n发生异常: `{e}`。")

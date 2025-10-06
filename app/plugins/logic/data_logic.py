@@ -2,7 +2,6 @@
 import json
 from config import settings
 from app.context import get_application
-from app.state_manager import get_state
 from app.utils import mask_string
 
 async def logic_get_redis_status() -> str:
@@ -24,7 +23,8 @@ async def logic_get_redis_status() -> str:
 
 async def logic_view_inventory() -> str:
     """查看缓存的背包内容"""
-    inventory = await get_state("inventory", is_json=True, default={})
+    app = get_application()
+    inventory = await app.inventory_manager.get_inventory()
     if not inventory: return "🎒 你的储物袋是空的或尚未缓存。"
     header = "🎒 **储物袋内容 (缓存)**:\n"
     items = [f"- `{name}` x {count}" for name, count in sorted(inventory.items())]
@@ -100,33 +100,32 @@ async def logic_update_answer(db_key: str, identifier: str, answer: str) -> str:
 
 
 async def logic_find_and_clear_cache(identifier: str, confirmed: bool = False) -> str:
-    """[重构版] 根据用户名或ID查找并清理助手缓存"""
+    """根据用户名或ID查找并清理助手缓存"""
     app = get_application()
-    if not app.redis_db:
-        return "❌ 错误: Redis 未连接。"
+    if not app.data_manager: return "❌ 错误: DataManager 未初始化。"
 
-    keys_found = [key async for key in app.redis_db.scan_iter("tg_helper:task_states:*")]
+    keys_found = await app.data_manager.get_all_assistant_keys()
     
     target_key = None
     profile_info = {}
 
     for key in keys_found:
-        profile_json = await app.redis_db.hget(key, "character_profile")
-        if not profile_json:
-            continue
         try:
-            profile = json.loads(profile_json)
-            user = profile.get("用户")
-            user_id = str(profile.get("ID", ""))
+            key_user_id = key.split(':')[-1]
+            profile = await app.data_manager.get_value("character_profile", account_id=key_user_id, is_json=True, default={})
 
-            # [重构] 同时支持按用户名和ID进行匹配
-            if (user and identifier.lower() == user.lower()) or \
-               (user_id and identifier == user_id):
-                
+            profile_user = profile.get("用户")
+            profile_user_id = str(profile.get("ID", ""))
+
+            is_match = (profile_user and identifier.lower() == profile_user.lower()) or \
+                       (profile_user_id and identifier == profile_user_id) or \
+                       (key_user_id and identifier == key_user_id)
+
+            if is_match:
                 target_key = key
                 profile_info = {
-                    "TG 用户名": f"`{user or '未知'}`",
-                    "用户ID": f"`{user_id or '未知'}`",
+                    "TG 用户名": f"`{profile_user or '未知'}`",
+                    "用户ID": f"`{key_user_id}`",
                     "游戏道号": f"`{profile.get('道号', '未知')}`",
                 }
                 break
@@ -151,25 +150,20 @@ async def logic_find_and_clear_cache(identifier: str, confirmed: bool = False) -
         return f"❌ **删除失败**\n\n删除过程中发生错误: `{e}`"
 
 async def logic_list_cached_assistants() -> str:
-    """[重构版] 扫描并列出所有已缓存助手的信息"""
+    """扫描并列出所有已缓存助手的信息"""
     app = get_application()
-    if not app.redis_db:
-        return "❌ 错误: Redis 未连接。"
+    if not app.data_manager: return "❌ 错误: DataManager 未初始化。"
 
-    keys_found = [key async for key in app.redis_db.scan_iter("tg_helper:task_states:*")]
+    keys_found = await app.data_manager.get_all_assistant_keys()
     if not keys_found:
         return "ℹ️ Redis 中没有任何助手缓存数据。"
 
     assistant_lines = []
     for key in keys_found:
-        profile_json = await app.redis_db.hget(key, "character_profile")
-        if not profile_json:
-            continue
         try:
-            profile = json.loads(profile_json)
-            user_id = profile.get("ID", key.split(':')[-1])
+            user_id = key.split(':')[-1]
+            profile = await app.data_manager.get_value("character_profile", account_id=user_id, is_json=True, default={})
             user = profile.get("用户", "未知")
-            # [重构] 按您的要求调整输出格式
             assistant_lines.append(f"- **TG 用户名**: `{user}`, **ID**: `{user_id}`")
         except (json.JSONDecodeError, IndexError):
             continue

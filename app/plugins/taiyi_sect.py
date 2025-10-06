@@ -4,7 +4,6 @@ import random
 import pytz
 import asyncio
 from datetime import datetime, timedelta
-from app.state_manager import get_state, set_state
 from app.utils import parse_cooldown_time
 from config import settings
 from app.logger import format_and_log
@@ -18,7 +17,8 @@ TASK_ID_YINDAO = 'taiyi_yindao_task'
 STATE_KEY_YINDAO = "taiyi_yindao"
 
 async def trigger_yindao(force_run=False):
-    client = get_application().client
+    app = get_application()
+    client = app.client
     format_and_log("TASK", "太一门引道", {'阶段': '任务开始', '强制执行': force_run})
     beijing_tz = pytz.timezone(settings.TZ)
     next_run_time = datetime.now(beijing_tz) + timedelta(minutes=15) 
@@ -46,12 +46,13 @@ async def trigger_yindao(force_run=False):
         format_and_log("TASK", "太一门引道", {'阶段': '任务异常', '错误': str(e)}, level=logging.ERROR)
     finally:
         scheduler.add_job(trigger_yindao, 'date', run_date=next_run_time, id=TASK_ID_YINDAO, replace_existing=True)
-        await set_state(STATE_KEY_YINDAO, next_run_time.isoformat())
+        await app.data_manager.save_value(STATE_KEY_YINDAO, next_run_time.isoformat())
         format_and_log("TASK", "太一门引道", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
 
 async def check_yindao_startup():
-    if scheduler.get_job(TASK_ID_YINDAO): return
-    iso_str = await get_state(STATE_KEY_YINDAO)
+    app = get_application()
+    if not app.data_manager or scheduler.get_job(TASK_ID_YINDAO): return
+    iso_str = await app.data_manager.get_value(STATE_KEY_YINDAO)
     state_time = datetime.fromisoformat(iso_str).astimezone(pytz.timezone(settings.TZ)) if iso_str else None
     now = datetime.now(pytz.timezone(settings.TZ))
     run_date = state_time if state_time and state_time > now else now + timedelta(seconds=random.uniform(10, 60))
@@ -65,3 +66,4 @@ def initialize(app):
         help_text="立即执行一次太一门的引道任务。"
     )
     app.startup_checks.append(check_yindao_startup)
+

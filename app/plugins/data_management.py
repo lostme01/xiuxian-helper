@@ -13,21 +13,18 @@ HELP_TEXT_UPDATE_QA = """✍️ **修改/添加题库问答**
 **用法**: `,修改题库 <题库> <编号|“问题”> “<新答案>”`"""
 
 HELP_TEXT_CLEAR_CACHE = """🗑️ **清理助手缓存**
-**说明**: 当某个助手账号被封禁或不再使用时，可通过此指令清理其在 Redis 中的所有缓存数据。
 **用法**:
   `,清理缓存 <用户名|ID>`
-  *第一步：根据 Telegram 用户名或用户ID查找助手并请求确认。*
-  
-  `,清理缓存 <用户名|ID> 确认`
-  *第二步：确认并执行删除操作。*
-**示例**:
-  `,清理缓存 my_helper_bot`
-  `,清理缓存 123456789 确认`
-"""
+  `,清理缓存 <用户名|ID> 确认`"""
 
 HELP_TEXT_LIST_CACHES = """👥 **查询助手缓存列表**
-**说明**: 列出当前 Redis 中缓存的所有助手的 Telegram 用户名和ID。
-**用法**: `,查询缓存`
+**用法**: `,查询缓存`"""
+
+HELP_TEXT_RESET_DB = """💥 **重置数据库**
+**说明**: [高危] 清空 Redis 中所有与本助手相关的数据，包括所有助手的库存、角色信息、任务状态等。
+**用法**:
+  `,重置数据库` (请求确认)
+  `,重置数据库 确认` (执行操作)
 """
 
 async def _cmd_redis_status(event, parts):
@@ -61,8 +58,16 @@ async def _cmd_list_caches(event, parts):
     result = await data_logic.logic_list_cached_assistants()
     await get_application().client.reply_to_admin(event, result)
 
+async def _cmd_reset_db(event, parts):
+    client = get_application().client
+    confirmed = len(parts) > 1 and parts[1].lower() == '确认'
+    if not confirmed:
+        await client.reply_to_admin(event, "**⚠️ 高危操作警告**\n\n此操作将**清空所有助手**的缓存数据！\n\n确认请输入: `,重置数据库 确认`")
+        return
+    result = await data_logic.logic_reset_database()
+    await client.reply_to_admin(event, result)
+
 def initialize(app):
-    # [重构] 调整指令分类
     app.register_command("查询redis", _cmd_redis_status, help_text="🗄️ 检查Redis状态", category="数据查询", aliases=['redis'])
     app.register_command("查看背包", _cmd_view_inventory, help_text="🎒 查看缓存的背包", category="查询")
     app.register_command("查询题库", _cmd_query_qa_db, help_text="📚 查询题库内容", category="知识", usage=HELP_TEXT_QUERY_QA)
@@ -70,3 +75,4 @@ def initialize(app):
     app.register_command("修改题库", _cmd_update_qa, help_text="✍️ 修改/添加题库问答", category="知识", usage=HELP_TEXT_UPDATE_QA)
     app.register_command("清理缓存", _cmd_clear_cache, help_text="🗑️ 清理指定助手的缓存", category="系统", usage=HELP_TEXT_CLEAR_CACHE)
     app.register_command("查询缓存", _cmd_list_caches, help_text="👥 列出所有已缓存的助手", category="数据查询", usage=HELP_TEXT_LIST_CACHES)
+    app.register_command("重置数据库", _cmd_reset_db, help_text="💥 [高危] 清空所有助手缓存", category="系统", usage=HELP_TEXT_RESET_DB)

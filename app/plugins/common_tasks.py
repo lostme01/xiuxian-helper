@@ -6,7 +6,6 @@ import asyncio
 import sys
 import re
 from datetime import datetime, timedelta, date, time
-from app.state_manager import get_state, set_state
 from app.utils import parse_cooldown_time, parse_inventory_text, resilient_task
 from config import settings
 from app.logger import format_and_log
@@ -14,8 +13,6 @@ from app.task_scheduler import scheduler
 from telethon.tl.functions.account import UpdateStatusRequest
 from app.telegram_client import CommandTimeoutError
 from app.context import get_application
-from app.inventory_manager import inventory_manager
-from app.character_stats_manager import stats_manager
 from app import game_adaptor
 
 TASK_ID_BIGUAN = 'biguan_xiulian_task'
@@ -23,37 +20,27 @@ STATE_KEY_BIGUAN = "biguan"
 TASK_ID_CHUANG_TA_BASE = 'chuang_ta_task_'
 STATE_KEY_CHUANG_TA = "chuang_ta"
 TASK_ID_INVENTORY_REFRESH = 'inventory_refresh_task'
-STATE_KEY_INVENTORY = "inventory"
 
 @resilient_task()
 async def trigger_dianmao_chuangong(force_run=False):
-    client = get_application().client
+    app = get_application()
+    client = app.client
     format_and_log("TASK", "宗门点卯", {'阶段': '任务开始', '强制执行': force_run})
     sent_dianmao = None
     try:
         sent_dianmao, reply_dianmao = await client.send_game_command_long_task(game_adaptor.sect_check_in())
         client.pin_message(sent_dianmao)
-
-        log_text = reply_dianmao.text.replace('\n', ' ')
-        format_and_log("TASK", "宗门点卯", {'阶段': '点卯指令', '返回': log_text})
+        format_and_log("TASK", "宗门点卯", {'阶段': '点卯指令', '返回': reply_dianmao.text.replace('\n', ' ')})
         
         max_attempts = 5
         for i in range(max_attempts):
-            _sent_cg, reply_cg = await client.send_game_command_request_response(
-                game_adaptor.sect_contribute_skill(), 
-                reply_to=sent_dianmao.id
-            )
-            
-            log_text_cg = reply_cg.text.replace('\n', ' ')
-            format_and_log("TASK", "宗门点卯", {'阶段': f'传功尝试 {i+1}/{max_attempts}', '返回': log_text_cg})
-
-            if "过于频繁" in log_text_cg or "已经指点" in log_text_cg or "今日次数已用完" in log_text_cg:
+            _sent_cg, reply_cg = await client.send_game_command_request_response(game_adaptor.sect_contribute_skill(), reply_to=sent_dianmao.id)
+            format_and_log("TASK", "宗门点卯", {'阶段': f'传功尝试 {i+1}/{max_attempts}', '返回': reply_cg.text.replace('\n', ' ')})
+            if "过于频繁" in reply_cg.text or "已经指点" in reply_cg.text or "今日次数已用完" in reply_cg.text:
                 format_and_log("TASK", "宗门点卯", {'阶段': '传功已达上限', '详情': '任务链正常结束。'})
                 if force_run: return "✅ **[立即点卯]** 任务已成功执行完毕（点卯和传功均已完成）。"
                 return
-
         if force_run: return "✅ **[立即点卯]** 任务已成功执行完毕。"
-
     finally:
         if sent_dianmao:
             client.unpin_message(sent_dianmao)
@@ -62,14 +49,14 @@ async def trigger_dianmao_chuangong(force_run=False):
 
 @resilient_task()
 async def update_inventory_cache(force_run=False):
-    client = get_application().client
+    app = get_application()
+    client = app.client
     format_and_log("TASK", "刷新背包", {'阶段': '任务开始', '强制执行': force_run})
-    
     try:
         _sent, reply = await client.send_game_command_request_response(game_adaptor.get_inventory())
         inventory = parse_inventory_text(reply)
         if inventory:
-            await inventory_manager.set_inventory(inventory)
+            await app.inventory_manager.set_inventory(inventory)
             format_and_log("TASK", "刷新背包", {'阶段': '任务成功', '详情': f'解析并校准了 {len(inventory)} 种物品。'})
             if force_run:
                 return f"✅ **[立即刷新背包]** 任务完成，已校准 {len(inventory)} 种物品。"
@@ -84,32 +71,28 @@ async def update_inventory_cache(force_run=False):
 
 @resilient_task()
 async def trigger_chuang_ta(force_run=False):
-    client = get_application().client
+    app = get_application()
+    client = app.client
     format_and_log("TASK", "自动闯塔", {'阶段': '任务开始', '强制执行': force_run})
-    
     try:
-        # [重构] 只负责发指令和等待结果，不再处理库存
-        _sent, final_reply = await client.send_and_wait_for_edit(
-            game_adaptor.challenge_tower(),
-            initial_reply_pattern=r"踏入了古塔的第"
-        )
-        
+        _sent, final_reply = await client.send_and_wait_for_edit(game_adaptor.challenge_tower(), initial_reply_pattern=r"踏入了古塔的第")
         if "【试炼古塔 - 战报】" in final_reply.text and "总收获" in final_reply.text:
             format_and_log("TASK", "自动闯塔", {'阶段': '成功', '详情': '事件将由事件总线处理'})
         else:
             format_and_log("WARNING", "自动闯塔", {'阶段': '解析失败', '原因': '未收到预期的战报格式', '返回': final_reply.text})
     finally:
-        if not force_run:
+        if not force_run and app.data_manager:
             today_str = date.today().isoformat()
-            state = await get_state(STATE_KEY_CHUANG_TA, is_json=True, default={"date": today_str, "completed_count": 0})
+            state = await app.data_manager.get_value(STATE_KEY_CHUANG_TA, is_json=True, default={"date": today_str, "completed_count": 0})
             if state.get("date") != today_str: state = {"date": today_str, "completed_count": 1}
             else: state["completed_count"] = state.get("completed_count", 0) + 1
-            await set_state(STATE_KEY_CHUANG_TA, state)
+            await app.data_manager.save_value(STATE_KEY_CHUANG_TA, state)
             format_and_log("TASK", "自动闯塔", {'阶段': '状态更新', '今日已完成': state["completed_count"]})
 
 @resilient_task()
 async def trigger_biguan_xiulian(force_run=False):
-    client = get_application().client
+    app = get_application()
+    client = app.client
     format_and_log("TASK", "闭关修炼", {'阶段': '任务开始', '强制执行': force_run})
     beijing_tz = pytz.timezone(settings.TZ)
     next_run_time = datetime.now(beijing_tz) + timedelta(minutes=15)
@@ -124,14 +107,16 @@ async def trigger_biguan_xiulian(force_run=False):
         else:
             format_and_log("TASK", "闭关修炼", {'阶段': '解析失败', '详情': '未找到冷却时间，将在15分钟后重试。'})
     finally:
-        scheduler.add_job(trigger_biguan_xiulian, 'date', run_date=next_run_time, id=TASK_ID_BIGUAN, replace_existing=True)
-        await set_state(STATE_KEY_BIGUAN, next_run_time.isoformat())
-        format_and_log("TASK", "闭关修炼", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
+        if app.data_manager:
+            scheduler.add_job(trigger_biguan_xiulian, 'date', run_date=next_run_time, id=TASK_ID_BIGUAN, replace_existing=True)
+            await app.data_manager.save_value(STATE_KEY_BIGUAN, next_run_time.isoformat())
+            format_and_log("TASK", "闭关修炼", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
 
 async def check_biguan_startup():
-    if not settings.TASK_SWITCHES.get('biguan'): return
+    app = get_application()
+    if not settings.TASK_SWITCHES.get('biguan') or not app.data_manager: return
     if scheduler.get_job(TASK_ID_BIGUAN): return
-    iso_str = await get_state(STATE_KEY_BIGUAN)
+    iso_str = await app.data_manager.get_value(STATE_KEY_BIGUAN)
     beijing_tz = pytz.timezone(settings.TZ)
     state_time = datetime.fromisoformat(iso_str).astimezone(beijing_tz) if iso_str else None
     if state_time and state_time > datetime.now(beijing_tz):
@@ -164,11 +149,12 @@ async def check_inventory_refresh_startup():
         format_and_log("TASK", "刷新背包", {'阶段': '调度计划', '详情': '首次校准任务已计划在1分钟后运行'})
 
 async def check_chuang_ta_startup():
-    if not settings.TASK_SWITCHES.get('chuang_ta', True): return
+    app = get_application()
+    if not settings.TASK_SWITCHES.get('chuang_ta', True) or not app.data_manager: return
     today_str = date.today().isoformat()
-    state = await get_state(STATE_KEY_CHUANG_TA, is_json=True, default={"date": "1970-01-01", "completed_count": 0})
+    state = await app.data_manager.get_value(STATE_KEY_CHUANG_TA, is_json=True, default={"date": "1970-01-01", "completed_count": 0})
     if state.get("date") != today_str:
-        state = {"date": today_str, "completed_count": 0}; await set_state(STATE_KEY_CHUANG_TA, state)
+        state = {"date": today_str, "completed_count": 0}; await app.data_manager.save_value(STATE_KEY_CHUANG_TA, state)
         format_and_log("TASK", "自动闯塔", {'阶段': '状态重置', '新的一天': today_str})
     completed_count = state.get("completed_count", 0)
     total_runs_per_day = 2

@@ -6,9 +6,9 @@ import re
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 from app.context import get_application
 from app.utils import create_error_reply
-from app.inventory_manager import inventory_manager
 from app.plugins.logic import crafting_logic, trade_logic
 from app.plugins.crafting_actions import _cmd_craft_item as execute_craft_item
+from app import game_adaptor
 
 HELP_TEXT_SMART_CRAFT = """✨ **智能炼制 (全自动版)**
 **说明**: 终极一键指令。自动检查材料，如果不足，则自动向其他助手收集，材料收齐后将自动执行最终的炼制操作。
@@ -42,9 +42,8 @@ async def _cmd_smart_craft(event, parts):
     client.pin_message(progress_message)
 
     try:
-        # 检查本地材料是否足够
         required_materials = await crafting_logic.logic_check_local_materials(item_to_craft, quantity)
-        if isinstance(required_materials, str): # 如果返回的是错误字符串
+        if isinstance(required_materials, str):
             raise ValueError(required_materials)
 
         if not required_materials:
@@ -53,10 +52,8 @@ async def _cmd_smart_craft(event, parts):
             await execute_craft_item(event, craft_parts)
             return 
 
-        # --- 材料不足，启动全自动收集与炼制流程 ---
         await progress_message.edit(f"⚠️ **本地材料不足**\n正在启动P2P协同，规划材料收集...")
         
-        # 1. 制定收集计划
         plan = await crafting_logic.logic_plan_crafting_session(item_to_craft, my_id, quantity)
         if isinstance(plan, str): raise RuntimeError(plan)
         if not plan:
@@ -64,16 +61,14 @@ async def _cmd_smart_craft(event, parts):
             client.unpin_message(progress_message)
             return
 
-        # 2. 创建一个炼制会话
         session_id = f"craft_{my_id}_{int(time.time())}"
         session_data = {
             "item": item_to_craft, "quantity": quantity, "status": "gathering",
             "needed_from": {executor_id: False for executor_id in plan.keys()},
-            "timestamp": time.time()  # [新功能] 添加时间戳用于超时判断
+            "timestamp": time.time()
         }
         await app.redis_db.hset("crafting_sessions", session_id, json.dumps(session_data))
         
-        # 3. 分派任务
         report_lines = [f"✅ **规划完成 (会话ID: `{session_id[-6:]}`)**:"]
         for executor_id, materials in plan.items():
             materials_str = " ".join([f"{name}*{count}" for name, count in materials.items()])
@@ -82,7 +77,7 @@ async def _cmd_smart_craft(event, parts):
             try:
                 await progress_message.edit("\n".join(report_lines) + f"\n- 正在上架交易...")
                 
-                list_command = f".上架 灵石*1 换 {materials_str}"
+                list_command = game_adaptor.list_item("灵石", 1, materials_str, 1) # 这里materials_str本身就是"A*1 B*2"的格式，所以数量填1
                 _sent, reply = await client.send_game_command_request_response(list_command)
                 
                 match = re.search(r"挂单ID\D+(\d+)", reply.text)

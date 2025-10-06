@@ -9,7 +9,6 @@ from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 from config import settings
 from app.logger import format_and_log
 from app.context import get_application
-from app.state_manager import set_state, get_state
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
 from app import game_adaptor
@@ -68,7 +67,7 @@ async def trigger_update_formation(force_run=False):
                 return f"❌ **[查询阵法]** 任务失败：返回信息格式不正确。\n\n**原始返回**:\n`{reply.text}`"
             return
 
-        await set_state(STATE_KEY_FORMATION, formation_data)
+        await app.data_manager.save_value(STATE_KEY_FORMATION, formation_data)
         format_and_log("TASK", "查询阵法", {'阶段': '成功', '数据': formation_data})
         
         if force_run:
@@ -87,7 +86,7 @@ async def _cmd_query_formation(event, parts):
 
 async def _cmd_view_cached_formation(event, parts):
     app = get_application()
-    formation_data = await get_state(STATE_KEY_FORMATION, is_json=True)
+    formation_data = await app.data_manager.get_value(STATE_KEY_FORMATION, is_json=True)
     if not formation_data:
         await app.client.reply_to_admin(event, "ℹ️ 尚未缓存任何阵法信息，请先使用 `,我的阵法` 查询一次。")
         return
@@ -95,8 +94,8 @@ async def _cmd_view_cached_formation(event, parts):
     await app.client.reply_to_admin(event, reply_text)
 
 async def check_formation_update_startup():
-    if not settings.TASK_SWITCHES.get('formation_update', True):
-        return
+    app = get_application()
+    if not settings.TASK_SWITCHES.get('formation_update', True) or not app.data_manager: return
     
     for job in scheduler.get_jobs():
         if job.id.startswith(TASK_ID_FORMATION_BASE):

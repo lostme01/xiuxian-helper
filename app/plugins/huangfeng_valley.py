@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 from telethon.tl.types import Message
 from config import settings
 from app.logger import format_and_log
-from app.state_manager import get_state, set_state
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
 from app.context import get_application
@@ -61,7 +60,6 @@ async def trigger_garden_check(force_run=False):
         format_and_log("TASK", "小药园", {'阶段': '执行采药', '目标地块': str(matured_plots)})
         _sent_harvest, reply_harvest = await client.send_game_command_request_response(game_adaptor.huangfeng_harvest())
         
-        # [重构] 只判断是否成功，库存更新交由事件总线
         if "一键采药完成" in reply_harvest.text:
             format_and_log("TASK", "小药园", {'阶段': '采药成功', '详情': '已成熟地块将加入待播种列表。事件将由事件总线处理。'})
             plots_to_sow.update(matured_plots)
@@ -143,7 +141,6 @@ async def _sow_seeds(client, plots_to_sow: list):
         command = game_adaptor.huangfeng_sow(plot_id, seed)
         _sent, reply = await client.send_game_command_request_response(command)
         if "成功" in reply.text:
-            # [重构] 不再直接操作库存，事件总线会处理消耗
             format_and_log("TASK", "小药园", {'阶段': '播种成功', '地块': plot_id, '种子': seed})
         else:
              format_and_log("TASK", "小药园", {'阶段': '播种失败', '地块': plot_id, '返回': reply.text}, level=logging.WARNING)

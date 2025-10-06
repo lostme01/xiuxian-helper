@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
 from app.context import get_application
-from app.state_manager import get_state
-from app.inventory_manager import inventory_manager
-from app.character_stats_manager import stats_manager
 from app.plugins.character_info import _format_profile_reply
 from app.plugins.sect_treasury import _cmd_view_cached_treasury as view_treasury
 from app.plugins.data_management import _cmd_view_inventory as view_inventory
@@ -23,9 +20,9 @@ async def _cmd_status(event, parts):
     
     if len(parts) == 1:
         # 显示总览
-        profile_data = await get_state("character_profile", is_json=True)
-        contribution = await stats_manager.get_contribution()
-        ling_shi_count = await inventory_manager.get_item_count("灵石")
+        profile_data = await app.data_manager.get_value("character_profile", is_json=True)
+        contribution = await app.stats_manager.get_contribution()
+        ling_shi_count = await app.inventory_manager.get_item_count("灵石")
         
         if not profile_data:
             await app.client.reply_to_admin(event, "ℹ️ 尚未缓存任何角色信息，无法生成总览。请先使用 `,我的灵根` 查询一次。")
@@ -36,10 +33,9 @@ async def _cmd_status(event, parts):
             f"-----------------\n"
             f"- **道号**: `{profile_data.get('道号', '未知')}`\n"
             f"- **境界**: `{profile_data.get('境界', '未知')}`\n"
-            f"- **修为**: `{profile_data.get('当前修为', 'N/A')} / {profile_data.get('修为上限', 'N/A')}`\n"
+            f"- **修为**: `{profile_data.get('修为', 'N/A')} / {profile_data.get('修为上限', 'N/A')}`\n"
             f"- **灵石**: `{ling_shi_count}`\n"
             f"- **贡献**: `{contribution}`\n\n"
-            # [核心优化] 增加子模块提示
             f"**使用 `,状态 <模块>` 查看更多详情。**\n"
             f"**可用模块**: `背包`, `宝库`, `角色`, `阵法`"
         )
@@ -52,7 +48,7 @@ async def _cmd_status(event, parts):
         elif sub_command == "宝库":
             await view_treasury(event, parts)
         elif sub_command == "角色":
-            profile_data = await get_state("character_profile", is_json=True)
+            profile_data = await app.data_manager.get_value("character_profile", is_json=True)
             if not profile_data:
                 await app.client.reply_to_admin(event, "ℹ️ 尚未缓存任何角色信息。请先使用 `,我的灵根` 查询。")
                 return
@@ -64,7 +60,6 @@ async def _cmd_status(event, parts):
             error_msg = create_error_reply("状态", "未知的模块", details=f"可用模块: 背包, 宝库, 角色, 阵法", usage_text=HELP_TEXT_STATUS)
             await app.client.reply_to_admin(event, error_msg)
     else:
-        # 对于错误的参数数量，也给予清晰提示
         usage = app.commands.get('状态', {}).get('usage')
         error_msg = create_error_reply("状态", "参数格式错误", usage_text=usage)
         await app.client.reply_to_admin(event, error_msg)

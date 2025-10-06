@@ -14,11 +14,13 @@ from config import settings
 from app.task_scheduler import scheduler, shutdown
 from app.telegram_client import TelegramClient, CommandTimeoutError
 from app.redis_client import initialize_redis
+from app.data_manager import initialize_data_manager, data_manager
 from app import gemini_client
 from app.plugins import load_all_plugins
 from app.logger import format_and_log, TimezoneFormatter
 from app.context import set_application, set_scheduler, get_application
 from app.utils import create_error_reply
+# [重构] 导入全局实例
 from app.inventory_manager import inventory_manager
 from app.character_stats_manager import stats_manager
 
@@ -26,6 +28,8 @@ class Application:
     def __init__(self):
         self.client: TelegramClient = None
         self.redis_db = None
+        self.data_manager = None
+        # [重构] 直接引用全局实例
         self.inventory_manager = inventory_manager
         self.stats_manager = stats_manager
         self.startup_checks = []
@@ -54,7 +58,7 @@ class Application:
             try:
                 async with self.redis_db.pubsub() as pubsub:
                     await pubsub.subscribe(TASK_CHANNEL, GAME_EVENTS_CHANNEL)
-                    format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '已订阅', '频道': f"{TASK_CHANNEL}, {GAME_EVENTS_CHANNEL}"})
+                    format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 监听器', '状态': '已订阅', '频道': f"{TASK_CHANNEL}, {GAME_EVENTS_CHANNEL}"})
                     
                     async for message in pubsub.listen():
                         if message and message.get('type') == 'message':
@@ -127,6 +131,14 @@ class Application:
         background_tasks = set()
         try:
             self.redis_db = await initialize_redis()
+            initialize_data_manager(self.redis_db)
+            self.data_manager = data_manager
+
+            # [重构] 依赖注入
+            if self.data_manager:
+                self.inventory_manager.initialize(self.data_manager)
+                self.stats_manager.initialize(self.data_manager)
+
             if settings.REDIS_CONFIG.get('enabled') and not self.redis_db:
                 format_and_log("CRITICAL", "启动失败", {'原因': 'Redis配置为启用，但连接失败，程序退出。'})
                 sys.exit(1)
@@ -134,23 +146,17 @@ class Application:
             scheduler.start()
             await self.client.start()
             
-            # [BUG修复] 将身份设置和注册逻辑移到此处，保证执行顺序
-            # 1. 设置全局 ACCOUNT_ID
             settings.ACCOUNT_ID = str(self.client.me.id)
             format_and_log("SYSTEM", "账户初始化", {'账户ID': settings.ACCOUNT_ID, '状态': '已设置为全局标识'})
 
-            # 2. 安全地执行身份注册
-            from app.state_manager import get_state, set_state
-            try:
-                profile = await get_state("character_profile", is_json=True, default={})
-                profile.update({
-                    "用户": self.client.me.username,
-                    "ID": self.client.me.id
-                })
-                await set_state("character_profile", profile)
-                format_and_log("SYSTEM", "身份注册", {'状态': '成功', '用户名': self.client.me.username, 'ID': self.client.me.id})
-            except Exception as e:
-                format_and_log("ERROR", "身份注册失败", {'错误': str(e)})
+            if self.data_manager:
+                try:
+                    profile = await self.data_manager.get_value("character_profile", is_json=True, default={})
+                    profile.update({ "用户": self.client.me.username, "ID": self.client.me.id })
+                    await self.data_manager.save_value("character_profile", profile)
+                    format_and_log("SYSTEM", "身份注册", {'状态': '成功', '用户名': self.client.me.username, 'ID': self.client.me.id})
+                except Exception as e:
+                    format_and_log("ERROR", "身份注册失败", {'错误': str(e)})
 
             self.load_plugins_and_commands()
             

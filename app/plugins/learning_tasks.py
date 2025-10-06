@@ -5,13 +5,11 @@ import pytz
 import asyncio
 import re
 from datetime import datetime, timedelta
-from app.state_manager import get_state, set_state
 from config import settings
 from app.logger import format_and_log
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
 from app.context import get_application
-from app.inventory_manager import inventory_manager
 from app.utils import resilient_task
 from app import game_adaptor
 
@@ -20,13 +18,15 @@ STATE_KEY_LEARNED = "learned_recipes"
 
 @resilient_task()
 async def trigger_learn_recipes(force_run=False):
-    client = get_application().client
+    app = get_application()
+    client = app.client
+    inventory_manager = app.inventory_manager
     format_and_log("TASK", "自动学习", {'阶段': '任务开始', '强制执行': force_run})
 
     _sent_msg, reply = await client.send_game_command_request_response(game_adaptor.get_crafting_list())
     
     learned_recipes = re.findall(r'\(来自:\s*([^)]*(?:图纸|丹方))\)', reply.text)
-    await set_state(STATE_KEY_LEARNED, learned_recipes)
+    await app.data_manager.save_value(STATE_KEY_LEARNED, learned_recipes)
     format_and_log("TASK", "自动学习", {'阶段': '解析已学列表', '数量': len(learned_recipes)})
     
     inventory = await inventory_manager.get_inventory()
@@ -49,17 +49,13 @@ async def trigger_learn_recipes(force_run=False):
             command = game_adaptor.learn_recipe(recipe)
             _sent_learn, reply_learn = await client.send_game_command_request_response(command, timeout=10)
             
-            # [重构] 只反馈结果，库存交由事件总线处理
             if "成功领悟了" in reply_learn.text:
                 format_and_log("TASK", "自动学习", {'阶段': '学习成功', '物品': recipe, '详情': '事件将由事件总线处理'})
             
             elif "你的储物袋中没有此物可供学习" in reply_learn.text:
                 await inventory_manager.remove_item(recipe, 1)
                 format_and_log("WARNING", "自动学习-库存校准", {
-                    '阶段': '学习失败', 
-                    '物品': recipe, 
-                    '原因': '背包缓存与实际不符，已自动移除',
-                    '返回': reply_learn.text
+                    '阶段': '学习失败', '物品': recipe, '原因': '背包缓存与实际不符，已自动移除', '返回': reply_learn.text
                 })
 
             else:
@@ -77,9 +73,7 @@ async def trigger_learn_recipes(force_run=False):
 async def check_learn_recipes_startup():
     if settings.TASK_SWITCHES.get('learn_recipes'):
         scheduler.add_job(
-            trigger_learn_recipes, 
-            'interval', 
-            hours=random.randint(4, 6), 
+            trigger_learn_recipes, 'interval', hours=random.randint(4, 6), 
             id=TASK_ID_LEARN_RECIPES, 
             next_run_time=datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=5),
             replace_existing=True

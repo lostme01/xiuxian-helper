@@ -190,13 +190,13 @@ class TelegramClient:
 
 
     async def start(self):
+        # [重构] 启动流程简化，只负责登录和报告状态
         await self.client.start()
         self.me = await self.client.get_me()
         my_name = get_display_name(self.me)
         identity = "主控账号 (Admin)" if str(self.me.id) == str(self.admin_id) else "辅助账号 (Helper)"
         from app.logger import format_and_log
         format_and_log("SYSTEM", "客户端状态", {'状态': '已成功连接', '当前用户': f"{my_name} (ID: {self.me.id})", '识别身份': identity})
-        
         asyncio.create_task(self._message_sender_loop())
 
     async def _cache_chat_info(self):

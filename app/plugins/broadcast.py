@@ -1,75 +1,44 @@
 # -*- coding: utf-8 -*-
-import asyncio
-import re
-from telethon import events
-
-from config import settings
 from app.context import get_application
-from app.logger import format_and_log
 from app.plugins.logic.trade_logic import publish_task
+from config import settings
 
-async def _handle_broadcast_command(event):
+async def _cmd_broadcast(event, parts):
     """
-    [最终版] 处理全局广播和宗门广播指令。
+    ,b <指令> - 向所有助手广播游戏指令 (. 开头)
+    ,b <宗门> <指令> - 向指定宗门广播
     """
     app = get_application()
-    client = app.client
     
-    command_text = event.text.strip()
-    
-    match = re.match(r"\*(all|[\u4e00-\u9fa5]+)\s+(.+)", command_text)
-    if not match:
+    if len(parts) < 2:
+        await app.client.reply_to_admin(event, "❌ **广播指令格式错误**\n请提供要执行的指令。")
         return
-
-    target_group, command_to_run = match.groups()
     
-    if not command_to_run:
-        await client.reply_to_admin(event, "❌ **广播指令错误**: 未指定要执行的命令。")
+    target_sect = None
+    command_to_run = ""
+    
+    if len(parts) > 2 and not parts[1].startswith('.'):
+        target_sect = parts[1]
+        command_to_run = " ".join(parts[2:])
+    else:
+        command_to_run = " ".join(parts[1:])
+        
+    if not command_to_run.startswith('.'):
+        await app.client.reply_to_admin(event, "❌ **广播失败**\n出于安全考虑，只能广播以 `.` 开头的游戏指令。")
         return
-
-    for prefix in settings.COMMAND_PREFIXES:
-        if command_to_run.startswith(prefix):
-            await client.reply_to_admin(event, f"❌ **广播安全中止**\n检测到您试图广播一个脚本指令 (`{command_to_run}`)，该操作已被禁止。")
-            format_and_log("WARNING", "广播安全中止", {'指令': command_to_run, '原因': '尝试广播脚本指令'})
-            return
 
     task = {
         "task_type": "broadcast_command",
         "command_to_run": command_to_run
     }
-    
-    if target_group != "all":
-        task["target_sect"] = target_group
+    if target_sect:
+        task["target_sect"] = target_sect
 
-    log_context = {'指令': command_to_run, '目标': target_group}
-    format_and_log("TASK", "广播指令-发布", log_context)
-    
     if await publish_task(task):
-        await client.reply_to_admin(event, f"✅ **广播指令已发布** (目标: `{target_group}`): 所有匹配的助手将执行 `{command_to_run}`。")
+        target_str = f"宗门 **[{target_sect}]**" if target_sect else "**所有**"
+        await app.client.reply_to_admin(event, f"✅ 已向 {target_str} 助手广播指令:\n`{command_to_run}`")
     else:
-        await client.reply_to_admin(event, f"❌ **广播指令发布失败**: 无法连接到 Redis，请检查服务状态。")
-
+        await app.client.reply_to_admin(event, "❌ **广播失败**\n无法将任务发布到 Redis。")
 
 def initialize(app):
-    """
-    初始化广播指令监听器。
-    """
-    client = app.client
-    
-    if not settings.CONTROL_GROUP_ID:
-        return
-
-    @client.client.on(events.NewMessage(chats=[settings.CONTROL_GROUP_ID]))
-    async def broadcast_handler(event):
-        # --- 核心修复：明确分工 ---
-        # 1. 只有管理员才能发送广播指令
-        if event.sender_id != settings.ADMIN_USER_ID:
-            return
-            
-        # 2. 只有管理员号对应的实例才能成为“发布者”
-        if str(client.me.id) != str(settings.ADMIN_USER_ID):
-            return
-
-        # 3. 如果满足条件，则处理广播指令
-        await _handle_broadcast_command(event)
-
+    app.register_command("b", _cmd_broadcast, help_text="📢 向所有 (或指定宗门) 的助手广播游戏指令。", category="协同")
