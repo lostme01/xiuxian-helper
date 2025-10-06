@@ -48,18 +48,18 @@ async def _cmd_focus_fire(event, parts):
         await client.reply_to_admin(event, f"❌ 参数不足！\n\n{HELP_TEXT_FOCUS_FIRE}")
         return
 
-    task_payload = {"task_type": "list_item", "requester_account_id": my_id}
+    item_details = {}
     try:
         if len(parts) == 3:
-            task_payload.update({
+            item_details = {
                 "item_to_sell_name": parts[1], "item_to_sell_quantity": int(parts[2]),
                 "item_to_buy_name": "灵石", "item_to_buy_quantity": 1
-            })
+            }
         elif len(parts) == 5:
-            task_payload.update({
+            item_details = {
                 "item_to_sell_name": parts[1], "item_to_sell_quantity": int(parts[2]),
                 "item_to_buy_name": parts[3], "item_to_buy_quantity": int(parts[4])
-            })
+            }
         else:
             await client.reply_to_admin(event, f"❌ 参数格式错误！\n\n{HELP_TEXT_FOCUS_FIRE}")
             return
@@ -67,8 +67,8 @@ async def _cmd_focus_fire(event, parts):
         await client.reply_to_admin(event, f"❌ 参数中的“数量”必须是数字！\n\n{HELP_TEXT_FOCUS_FIRE}")
         return
 
-    item_to_find = task_payload["item_to_sell_name"]
-    quantity_to_find = task_payload["item_to_sell_quantity"]
+    item_to_find = item_details["item_to_sell_name"]
+    quantity_to_find = item_details["item_to_sell_quantity"]
     progress_msg = await client.reply_to_admin(event, f"⏳ `[{my_username}] 集火任务启动`\n正在扫描网络查找 `{item_to_find}`...")
     client.pin_message(progress_msg)
     
@@ -79,8 +79,16 @@ async def _cmd_focus_fire(event, parts):
             raise RuntimeError(f"未在网络中找到拥有足够数量 `{item_to_find}` 的其他助手。")
         
         await progress_msg.edit(f"✅ `已定位助手` (ID: `...{best_account_id[-4:]}`)\n⏳ 正在通过 Redis 下达上架指令...")
-        task_payload["target_account_id"] = best_account_id
-        if await trade_logic.publish_task(task_payload):
+        
+        # [核心修复] 构造带有'payload'字段的正确任务格式
+        task_to_publish = {
+            "task_type": "list_item",
+            "requester_account_id": my_id,
+            "target_account_id": best_account_id,
+            "payload": item_details
+        }
+        
+        if await trade_logic.publish_task(task_to_publish):
             await progress_msg.edit(f"✅ `指令已发送`\n等待助手号回报上架结果...")
         else:
             raise ConnectionError("任务发布至 Redis 失败，请检查连接。")
@@ -152,7 +160,6 @@ async def _cmd_receive_goods(event, parts):
 
 
 async def _handle_game_event(app, event_data):
-    """[新功能] 统一处理所有游戏事件的中央处理器"""
     client = app.client
     my_id = str(client.me.id)
     account_id = event_data.get("account_id")
@@ -206,12 +213,10 @@ async def _handle_game_event(app, event_data):
         item_name = crafted_item.get("name")
         quantity_crafted = crafted_item.get("quantity", 1)
 
-        # 1. 增加成品
         for item, quantity in event_data.get("gained_items", {}).items():
             await inventory_manager.add_item(item, quantity)
             update_details.append(f"获得 `{item} x{quantity}` (炼制)")
             
-        # 2. 扣除原料 (配方反查)
         if app.redis_db and item_name:
             recipe_json = await app.redis_db.hget(CRAFTING_RECIPES_KEY, item_name)
             if recipe_json:
@@ -235,14 +240,12 @@ async def _handle_game_event(app, event_data):
             await inventory_manager.remove_item(item, quantity)
             update_details.append(f"消耗 `{item} x{quantity}` (学习)")
 
-    # [新功能] 处理播种事件
     elif event_type == "SOWING_COMPLETED":
         for item, quantity in event_data.get("consumed_item", {}).items():
             await inventory_manager.remove_item(item, quantity)
             update_details.append(f"消耗 `{item} x{quantity}` (播种)")
 
 
-    # 知识共享 V2 - 事件驱动的特殊逻辑
     if await app.redis_db.hlen(KNOWLEDGE_SESSIONS_KEY) > 0:
         gained_items = event_data.get("gained", {})
         for item in gained_items.keys():
@@ -373,7 +376,6 @@ async def redis_message_handler(message):
 
 
 async def _check_crafting_session_timeouts():
-    """定时检查超时的智能炼制任务"""
     app = get_application()
     if not app.redis_db: return
     sessions = await app.redis_db.hgetall("crafting_sessions")

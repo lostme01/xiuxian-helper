@@ -26,19 +26,18 @@ async def handle_game_report(event):
     is_reply_to_me = False
     original_message = None # 被回复或被编辑的原始消息
     
-    # 处理新消息（回复）
     if event.is_reply:
         reply_to_msg = await event.get_reply_message()
         if reply_to_msg and reply_to_msg.sender_id == client.me.id:
             is_reply_to_me = True
             original_message = reply_to_msg
             
-    # 处理编辑消息
     elif hasattr(event, 'message') and event.message.edit_date:
-        original_msg_id = event.message.id
-        # [BUG修复] 使用正确的变量名 pending_edit_waits
-        if app.client.pending_edit_waits.get(original_msg_id):
-             is_reply_to_me = True
+        # 这是一个被编辑的消息，我们需要检查它是否是某个我们等待的初始回复
+        for wait_obj in app.client.pending_edit_waits.values():
+            if wait_obj.get('initial_reply_id') == event.message.id:
+                is_reply_to_me = True
+                break
 
     is_mentioning_me = f"@{my_username}" in event.text
     
@@ -53,11 +52,15 @@ async def handle_game_report(event):
         format_and_log("SYSTEM", "事件总线", {'监听到': '万宝楼快报', '用户': my_username})
         gained_items = {}
         sold_items = {}
-        gain_match = re.search(r"你获得了：(.+)", text)
+        
+        # [核心修复] 使用非贪婪正则表达式，确保只捕获“获得”的部分
+        gain_match = re.search(r"你获得了：(.*?)(?:你成功出售了|$)", text, re.DOTALL)
         if gain_match:
             gained_items_str = gain_match.group(1).strip().rstrip('。')
             for item, quantity_str in re.findall(r"【(.+?)】x([\d,]+)", gained_items_str):
                 gained_items[item] = int(quantity_str.replace(',', ''))
+        
+        # 修复后，这里的出售逻辑将不再受到干扰
         sold_match = re.search(r"你成功出售了【(.+?)】x([\d,]+)", text)
         if sold_match:
             item, quantity_str = sold_match.groups()
