@@ -48,7 +48,6 @@ TZ = config.get('timezone', 'Asia/Shanghai')
 COMMAND_TIMEOUT = config.get('command_timeout', 60)
 
 EXAM_SOLVER_CONFIG = _merge_config('exam_solver', {
-    # [模型升级] 更新为 2.5 系列模型优先级列表
     'gemini_model_names': ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
     'gemini_api_keys': [],
     'reply_delay': {'min': 5, 'max': 15}
@@ -132,6 +131,14 @@ HEARTBEAT_CONFIG = _merge_config('heartbeat', {
     'passive_threshold_minutes': 30,
     'sync_enabled': True,
     'sync_run_time': '04:30'
+})
+
+# [新功能] 广播指令防刷屏配置
+BROADCAST_CONFIG = _merge_config('broadcast', {
+    'noisy_commands': [
+        "任务列表", "查看配置", "日志开关", "任务开关", "帮助", "菜单", 
+        "help", "menu", "状态", "查看背包", "查看宝库", "查看角色", "查看阵法"
+    ]
 })
 
 GEMINI_MODEL_NAMES = EXAM_SOLVER_CONFIG.get('gemini_model_names')

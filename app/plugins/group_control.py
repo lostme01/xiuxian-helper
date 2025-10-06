@@ -90,8 +90,6 @@ async def execute_command(event):
     client = app.client
     text = event.text.strip()
     
-    # [核心修改] 移除了此处多余的“彩蛋”日志
-
     used_prefix = next((p for p in settings.COMMAND_PREFIXES if text.startswith(p)), None)
     if not used_prefix: return
 
@@ -138,7 +136,8 @@ async def execute_command(event):
                 "管理员指令原文"
             )
 
-        noisy_commands = ["任务列表", "查看配置", "日志开关", "任务开关", "帮助", "菜单", "help", "menu", "状态", "查看背包", "查看宝库", "查看角色", "查看阵法"]
+        # [重构] 从配置中读取防刷屏指令列表
+        noisy_commands = settings.BROADCAST_CONFIG.get('noisy_commands', [])
         is_broadcast_in_group = is_admin_sender and event.is_group and not event.is_reply
         if is_broadcast_in_group and cmd_name in noisy_commands and not is_main_bot:
             format_and_log("INFO", "指令忽略", {'指令': cmd_name, '执行者': my_id, '原因': '非主控号，避免群内刷屏'})
