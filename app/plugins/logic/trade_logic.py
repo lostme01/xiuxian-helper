@@ -12,13 +12,11 @@ from app.telegram_client import CommandTimeoutError, Message
 from app import redis_client, game_adaptor
 from config import settings
 from app.task_scheduler import scheduler
-# [重构] 直接导入全局单例
 from app.data_manager import data_manager
 
 TASK_CHANNEL = "tg_helper:tasks"
 
 async def publish_task(task: dict, channel: str = TASK_CHANNEL) -> bool:
-    """[升级版] 可向指定频道发布任务或事件"""
     if not redis_client.db:
         format_and_log("ERROR", "任务/事件发布失败", {'原因': 'Redis未连接'}, level=logging.ERROR)
         return False
@@ -97,11 +95,9 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
             item_id = match_id.group(1)
             format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id})
             
-            if settings.TRADE_COORDINATION_CONFIG.get('focus_fire_auto_delist', True):
-                await asyncio.sleep(random.uniform(1, 2)) 
-                format_and_log("TASK", "集火-安全操作", {'阶段': '发送立即下架指令', '挂单ID': item_id})
-                await execute_unlisting_task(item_id, is_auto=True)
+            # [核心优化] 将通知发起者和执行者下架两个操作并行化
             
+            # 1. 准备购买任务，先通知发起者
             task_payload = {
                 "item_id": item_id,
                 "cost": {
@@ -110,7 +106,21 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
                 }
             }
             result_task = {"task_type": "purchase_item", "target_account_id": requester_account_id, "payload": task_payload}
-            await publish_task(result_task)
+            
+            # 2. 创建两个并行的异步任务
+            publish_to_requester_task = asyncio.create_task(publish_task(result_task))
+            delist_item_task = asyncio.create_task(asyncio.sleep(0)) # 默认为空任务
+
+            if settings.TRADE_COORDINATION_CONFIG.get('focus_fire_auto_delist', True):
+                async def delist_with_delay():
+                    await asyncio.sleep(random.uniform(0.5, 1.5)) 
+                    format_and_log("TASK", "集火-安全操作", {'阶段': '发送立即下架指令', '挂单ID': item_id})
+                    await execute_unlisting_task(item_id, is_auto=True)
+                delist_item_task = asyncio.create_task(delist_with_delay())
+
+            # 3. 等待两个任务完成
+            await asyncio.gather(publish_to_requester_task, delist_item_task)
+
         else:
             format_and_log("WARNING", "集火-上架", {'阶段': '失败', '原因': '游戏返回上架失败信息', '回复': reply_text})
             await app.client.send_admin_notification(f"❌ **集火-上架失败**\n助手号上架 `{kwargs['item_to_sell_name']}` 时，游戏返回错误:\n`{reply_text}`")

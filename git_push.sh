@@ -6,7 +6,7 @@
 # 配置区
 REPO_DIR="$HOME/tg-game-helper"   # 本地仓库路径
 COMMIT_MSG="$1"                   # 提交信息，来自命令行参数
-CACHE_TIMEOUT=360000              # HTTPS 缓存时间（秒）
+CACHE_TIMEOUT=3600000              # HTTPS 缓存时间（秒）
 BRANCH="main"                     # 默认分支
 
 # 如果没输入提交信息，使用默认
