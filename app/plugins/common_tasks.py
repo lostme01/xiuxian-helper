@@ -25,15 +25,6 @@ STATE_KEY_CHUANG_TA = "chuang_ta"
 TASK_ID_INVENTORY_REFRESH = 'inventory_refresh_task'
 STATE_KEY_INVENTORY = "inventory"
 
-def _parse_and_update_contribution(reply_text: str):
-    """[旧版逻辑] 仅用于日志记录和调试，实际更新由事件总线处理"""
-    contrib_match = re.search(r"获得了 \*\*([\d,]+)\*\* 点宗门贡献", reply_text)
-    if contrib_match:
-        gained_contrib = int(contrib_match.group(1).replace(',', ''))
-        # [重构] 不再直接调用, 只记录日志
-        format_and_log("DEBUG", "贡献度解析", {'来源': '点卯/传功', '识别到增加': gained_contrib})
-        # asyncio.create_task(stats_manager.add_contribution(gained_contrib))
-
 @resilient_task()
 async def trigger_dianmao_chuangong(force_run=False):
     client = get_application().client
@@ -46,10 +37,6 @@ async def trigger_dianmao_chuangong(force_run=False):
         log_text = reply_dianmao.text.replace('\n', ' ')
         format_and_log("TASK", "宗门点卯", {'阶段': '点卯指令', '返回': log_text})
         
-        # [重构] 即使事件总线会处理，这里也保留一次调用以防万一
-        if "获得了" in log_text:
-            _parse_and_update_contribution(reply_dianmao.text)
-        
         max_attempts = 5
         for i in range(max_attempts):
             _sent_cg, reply_cg = await client.send_game_command_request_response(
@@ -59,9 +46,6 @@ async def trigger_dianmao_chuangong(force_run=False):
             
             log_text_cg = reply_cg.text.replace('\n', ' ')
             format_and_log("TASK", "宗门点卯", {'阶段': f'传功尝试 {i+1}/{max_attempts}', '返回': log_text_cg})
-
-            if "获得了" in log_text_cg:
-                _parse_and_update_contribution(reply_cg.text)
 
             if "过于频繁" in log_text_cg or "已经指点" in log_text_cg or "今日次数已用完" in log_text_cg:
                 format_and_log("TASK", "宗门点卯", {'阶段': '传功已达上限', '详情': '任务链正常结束。'})
@@ -73,7 +57,6 @@ async def trigger_dianmao_chuangong(force_run=False):
     finally:
         if sent_dianmao:
             client.unpin_message(sent_dianmao)
-            # [BUG修复] 使用 .get() 安全地访问配置，提供默认值
             delay = settings.AUTO_DELETE_STRATEGIES.get('long_task', {}).get('delay_anchor', 30)
             client._schedule_message_deletion(sent_dianmao, delay, "宗门点卯(任务链结束)")
 
@@ -105,23 +88,14 @@ async def trigger_chuang_ta(force_run=False):
     format_and_log("TASK", "自动闯塔", {'阶段': '任务开始', '强制执行': force_run})
     
     try:
+        # [重构] 只负责发指令和等待结果，不再处理库存
         _sent, final_reply = await client.send_and_wait_for_edit(
             game_adaptor.challenge_tower(),
             initial_reply_pattern=r"踏入了古塔的第"
         )
         
         if "【试炼古塔 - 战报】" in final_reply.text and "总收获" in final_reply.text:
-            gained_items = re.findall(r"获得了【(.+?)】x([\d,]+)", final_reply.text)
-            
-            if gained_items:
-                log_details = []
-                for item, quantity_str in gained_items:
-                    quantity = int(quantity_str.replace(',', ''))
-                    await inventory_manager.add_item(item, quantity)
-                    log_details.append(f"{item} x{quantity}")
-                format_and_log("TASK", "自动闯塔", {'阶段': '成功', '奖励已入库': ', '.join(log_details)})
-            else:
-                format_and_log("TASK", "自动闯塔", {'阶段': '完成', '详情': '本次闯塔无物品奖励。'})
+            format_and_log("TASK", "自动闯塔", {'阶段': '成功', '详情': '事件将由事件总线处理'})
         else:
             format_and_log("WARNING", "自动闯塔", {'阶段': '解析失败', '原因': '未收到预期的战报格式', '返回': final_reply.text})
     finally:

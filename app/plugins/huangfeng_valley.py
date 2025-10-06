@@ -60,8 +60,10 @@ async def trigger_garden_check(force_run=False):
     if matured_plots:
         format_and_log("TASK", "小药园", {'阶段': '执行采药', '目标地块': str(matured_plots)})
         _sent_harvest, reply_harvest = await client.send_game_command_request_response(game_adaptor.huangfeng_harvest())
+        
+        # [重构] 只判断是否成功，库存更新交由事件总线
         if "一键采药完成" in reply_harvest.text:
-            format_and_log("TASK", "小药园", {'阶段': '采药成功', '详情': '已成熟地块将加入待播种列表。'})
+            format_and_log("TASK", "小药园", {'阶段': '采药成功', '详情': '已成熟地块将加入待播种列表。事件将由事件总线处理。'})
             plots_to_sow.update(matured_plots)
         else:
             format_and_log("TASK", "小药园", {'阶段': '采药失败', '原因': '未收到成功确认', '返回': reply_harvest.text}, level=logging.WARNING)
@@ -97,7 +99,6 @@ def _parse_garden_status(message: Message):
     status = {}
     text = message.text
 
-    # [终极修复] 使用 finditer 定位所有地块的起始点，兼容所有已知格式
     matches = list(re.finditer(r'(\d+)号灵田', text))
     if not matches:
         return {}
@@ -106,12 +107,10 @@ def _parse_garden_status(message: Message):
         try:
             plot_id = int(match.group(1))
             
-            # 截取当前地块到下一个地块之间的文本
             start_pos = match.start()
             end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(text)
             chunk = text[start_pos:end_pos]
             
-            # 在截取的文本块中查找状态关键词
             plot_status = next((s for s in GARDEN_STATUS_KEYWORDS if s in chunk), '未知')
             status[plot_id] = plot_status
         except (ValueError, IndexError):
@@ -144,7 +143,7 @@ async def _sow_seeds(client, plots_to_sow: list):
         command = game_adaptor.huangfeng_sow(plot_id, seed)
         _sent, reply = await client.send_game_command_request_response(command)
         if "成功" in reply.text:
-            await inventory_manager.remove_item(seed, 1)
+            # [重构] 不再直接操作库存，事件总线会处理消耗
             format_and_log("TASK", "小药园", {'阶段': '播种成功', '地块': plot_id, '种子': seed})
         else:
              format_and_log("TASK", "小药园", {'阶段': '播种失败', '地块': plot_id, '返回': reply.text}, level=logging.WARNING)

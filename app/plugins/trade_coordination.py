@@ -19,7 +19,7 @@ from app.plugins.common_tasks import update_inventory_cache
 from app.utils import create_error_reply
 from app.inventory_manager import inventory_manager
 from app.character_stats_manager import stats_manager
-from app.plugins.logic.crafting_logic import logic_execute_crafting
+from app.plugins.logic.crafting_logic import logic_execute_crafting, CRAFTING_RECIPES_KEY
 from app.plugins.game_event_handler import GAME_EVENTS_CHANNEL
 from app import game_adaptor
 
@@ -190,12 +190,57 @@ async def _handle_game_event(app, event_data):
             await stats_manager.remove_contribution(consumed_contrib)
             update_details.append(f"消耗 `{consumed_contrib}` 点贡献")
 
-    # [新功能] 处理点卯/传功的贡献增加
     elif event_type == "CONTRIBUTION_GAINED":
         gained_contrib = event_data.get("gained_contribution", 0)
         if gained_contrib > 0:
             await stats_manager.add_contribution(gained_contrib)
             update_details.append(f"获得 `{gained_contrib}` 点贡献 (来自点卯/传功)")
+
+    elif event_type == "TOWER_CHALLENGE_COMPLETED":
+        for item, quantity in event_data.get("gained_items", {}).items():
+            await inventory_manager.add_item(item, quantity)
+            update_details.append(f"获得 `{item} x{quantity}` (闯塔)")
+
+    elif event_type == "CRAFTING_COMPLETED":
+        crafted_item = event_data.get("crafted_item", {})
+        item_name = crafted_item.get("name")
+        quantity_crafted = crafted_item.get("quantity", 1)
+
+        # 1. 增加成品
+        for item, quantity in event_data.get("gained_items", {}).items():
+            await inventory_manager.add_item(item, quantity)
+            update_details.append(f"获得 `{item} x{quantity}` (炼制)")
+            
+        # 2. 扣除原料 (配方反查)
+        if app.redis_db and item_name:
+            recipe_json = await app.redis_db.hget(CRAFTING_RECIPES_KEY, item_name)
+            if recipe_json:
+                try:
+                    recipe = json.loads(recipe_json)
+                    for material, count_per_unit in recipe.items():
+                        if material == "修为": continue
+                        total_consumed = count_per_unit * quantity_crafted
+                        await inventory_manager.remove_item(material, total_consumed)
+                        update_details.append(f"消耗 `{material} x{total_consumed}`")
+                except json.JSONDecodeError:
+                    pass
+    
+    elif event_type == "HARVEST_COMPLETED":
+        for item, quantity in event_data.get("gained_items", {}).items():
+            await inventory_manager.add_item(item, quantity)
+            update_details.append(f"获得 `{item} x{quantity}` (采药)")
+
+    elif event_type == "LEARNING_COMPLETED":
+        for item, quantity in event_data.get("consumed_item", {}).items():
+            await inventory_manager.remove_item(item, quantity)
+            update_details.append(f"消耗 `{item} x{quantity}` (学习)")
+
+    # [新功能] 处理播种事件
+    elif event_type == "SOWING_COMPLETED":
+        for item, quantity in event_data.get("consumed_item", {}).items():
+            await inventory_manager.remove_item(item, quantity)
+            update_details.append(f"消耗 `{item} x{quantity}` (播种)")
+
 
     # 知识共享 V2 - 事件驱动的特殊逻辑
     if await app.redis_db.hlen(KNOWLEDGE_SESSIONS_KEY) > 0:

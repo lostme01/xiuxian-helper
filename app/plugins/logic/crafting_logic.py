@@ -14,15 +14,11 @@ STATES_KEY_PATTERN = "tg_helper:task_states:*"
 
 async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler):
     """
-    [重构版] 核心炼制逻辑，兼容手动和自动调用。
-    :param item_name: 要炼制的物品名称。
-    :param quantity: 数量。
-    :param feedback_handler: 一个异步函数，用于发送进度更新，接收一个字符串参数。
+    [重构版 V2] 核心炼制逻辑，只发指令和反馈，不处理库存。
     """
     app = get_application()
     client = app.client
     
-    # [重构] 使用 game_adaptor 生成指令
     command = game_adaptor.craft_item(item_name, quantity)
     
     await feedback_handler(f"⏳ 正在执行指令: `{command}`\n正在等待游戏机器人返回最终结果...")
@@ -35,24 +31,9 @@ async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler
         
         raw_text = final_reply.text
         
+        # [重构] 只负责反馈结果，库存交由事件总线处理
         if "炼制结束" in raw_text and "最终获得" in raw_text:
-            await feedback_handler(f"✅ **炼制成功！** 正在解析产出与消耗...")
-            
-            gained_match = re.search(r"最终获得【(.+?)】x\*\*([\d,]+)\*\*", raw_text)
-            if gained_match:
-                gained_item, gained_quantity_str = gained_match.groups()
-                gained_quantity = int(gained_quantity_str.replace(',', ''))
-                await inventory_manager.add_item(gained_item, gained_quantity)
-                
-                final_message = (
-                    f"✅ **炼制成功！**\n\n"
-                    f"**产出**: `{gained_item} x{gained_quantity}`\n\n"
-                    f"ℹ️ 背包缓存已自动更新。"
-                )
-                await feedback_handler(final_message)
-            else:
-                await feedback_handler(f"⚠️ **炼制完成，但解析产出失败。**\n请手动检查背包。\n\n**游戏回复**:\n`{raw_text}`")
-
+            await feedback_handler(f"✅ **炼制指令已成功**!\n系统将通过事件监听器自动更新库存。")
         else:
             await feedback_handler(f"❌ **炼制失败或未收到预期回复。**\n\n**游戏回复**:\n`{raw_text}`")
 
@@ -66,9 +47,6 @@ async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler
 async def logic_check_local_materials(item_name: str, quantity: int = 1) -> dict | str:
     """
     仅检查本地库存是否足够炼制指定物品。
-    如果足够，返回空字典。
-    如果不足，返回缺失的材料字典。
-    如果配方不存在或无法炼制，返回错误字符串。
     """
     app = get_application()
     if not app.redis_db:
@@ -108,7 +86,6 @@ async def logic_plan_crafting_session(item_name: str, initiator_id: str, quantit
     if not app.redis_db:
         return "❌ 错误: Redis 未连接。"
 
-    # 1. 获取配方并计算总需求
     recipe_json = await app.redis_db.hget(CRAFTING_RECIPES_KEY, item_name)
     if not recipe_json:
         return f"❌ **规划失败**: 在配方数据库中未找到“{item_name}”的配方。"
@@ -125,7 +102,6 @@ async def logic_plan_crafting_session(item_name: str, initiator_id: str, quantit
     except json.JSONDecodeError:
         return "❌ **规划失败**: 解析配方数据时出错。"
 
-    # 2. 聚合所有其他助手的库存
     accounts_inventories = {}
     total_network_inventory = defaultdict(int)
     
@@ -145,23 +121,19 @@ async def logic_plan_crafting_session(item_name: str, initiator_id: str, quantit
             except json.JSONDecodeError:
                 continue
 
-    # 3. 全局可行性分析 (只考虑网络库存)
     missing_materials = {mat: req_count - total_network_inventory[mat] for mat, req_count in required_materials.items() if total_network_inventory[mat] < req_count}
     if missing_materials:
         errors = [f"- `{name}`: 缺少 {count}" for name, count in missing_materials.items()]
         return f"❌ **材料不足，无法炼制**:\n" + "\n".join(errors)
 
-    # 4. 分配策略
     contribution_plan = defaultdict(lambda: defaultdict(int))
     
-    # 优先从单个助手中凑齐
     for acc_id, inventory in accounts_inventories.items():
         if all(inventory.get(mat, 0) >= req_count for mat, req_count in required_materials.items()):
             for mat, req_count in required_materials.items():
                 contribution_plan[acc_id][mat] = req_count
             return dict(contribution_plan)
 
-    # 凑不齐时，启动贪心算法
     temp_inventories = {acc_id: inv.copy() for acc_id, inv in accounts_inventories.items()}
     
     for material, required_count in required_materials.items():

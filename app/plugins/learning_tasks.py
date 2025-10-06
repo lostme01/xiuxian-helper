@@ -49,17 +49,10 @@ async def trigger_learn_recipes(force_run=False):
             command = game_adaptor.learn_recipe(recipe)
             _sent_learn, reply_learn = await client.send_game_command_request_response(command, timeout=10)
             
+            # [重构] 只反馈结果，库存交由事件总线处理
             if "成功领悟了" in reply_learn.text:
-                match = re.search(r"消耗了【(.+?)】", reply_learn.text)
-                if match:
-                    consumed_item = match.group(1)
-                    await inventory_manager.remove_item(consumed_item, 1)
-                    format_and_log("TASK", "自动学习", {'阶段': '学习成功', '物品': consumed_item, '详情': '已从库存扣减'})
-                else:
-                    await inventory_manager.remove_item(recipe, 1)
-                    format_and_log("WARNING", "自动学习", {'阶段': '解析消耗品失败', '物品': recipe, '详情': '已按指令名称扣减库存'})
+                format_and_log("TASK", "自动学习", {'阶段': '学习成功', '物品': recipe, '详情': '事件将由事件总线处理'})
             
-            # [新功能] 增加库存自动校准逻辑
             elif "你的储物袋中没有此物可供学习" in reply_learn.text:
                 await inventory_manager.remove_item(recipe, 1)
                 format_and_log("WARNING", "自动学习-库存校准", {
