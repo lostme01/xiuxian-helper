@@ -30,7 +30,7 @@ timezone: 'Asia/Shanghai'
 
 # ----------------- AI 答题配置 -----------------
 exam_solver:
-  # [模型升级] 答题模型优先级列表。程序会优先使用第一个，如果因限额等问题失败，会自动尝试下一个。
+  # 答题模型优先级列表。程序会优先使用第一个，如果因限额等问题失败，会自动尝试下一个。
   gemini_model_names:
     - 'gemini-2.5-pro'
     - 'gemini-2.5-flash'
@@ -38,7 +38,6 @@ exam_solver:
   # Gemini API Key列表，可以填多个以轮询使用
   gemini_api_keys:
     - "AIzaSy...your...first...key"
-    - "AIzaSy...your...second...key"
   # 答题前的随机延迟（秒）
   reply_delay: { min: 5, max: 15 }
 
@@ -113,6 +112,24 @@ auto_knowledge_sharing:
   interval_minutes: 240
   blacklist: []
 
+# ----------------- [新] 广播配置 -----------------
+broadcast:
+  # 在群组中广播这些指令时，只有主控号会响应，以防刷屏
+  noisy_commands:
+    - "任务列表"
+    - "查看配置"
+    - "日志开关"
+    - "任务开关"
+    - "帮助"
+    - "菜单"
+    - "help"
+    - "menu"
+    - "状态"
+    - "查看背包"
+    - "查看宝库"
+    - "查看角色"
+    - "查看阵法"
+
 # ----------------- 宗门专属配置 -----------------
 huangfeng_valley:
   garden_sow_seed: '凝血草种子'
@@ -145,21 +162,3 @@ heartbeat:
   passive_threshold_minutes: 30
   sync_enabled: true
   sync_run_time: '04:30'
-
-# ----------------- [新] 广播配置 -----------------
-broadcast:
-  # 在群组中广播这些指令时，只有主控号会响应，以防刷屏
-  noisy_commands:
-    - "任务列表"
-    - "查看配置"
-    - "日志开关"
-    - "任务开关"
-    - "帮助"
-    - "菜单"
-    - "help"
-    - "menu"
-    - "状态"
-    - "查看背包"
-    - "查看宝库"
-    - "查看角色"
-    - "查看阵法"
