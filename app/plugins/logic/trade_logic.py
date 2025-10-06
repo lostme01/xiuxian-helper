@@ -95,14 +95,18 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
             item_id = match_id.group(1)
             format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id})
             
-            # [核心优化] V3.0 - 仅回报挂单ID，等待发起者触发下架
+            # [核心修复] 确保将 session_id 包含在回报任务的 payload 中
+            result_payload = {
+                "item_id": item_id,
+                "executor_id": str(app.client.me.id)
+            }
+            if 'session_id' in kwargs:
+                result_payload['session_id'] = kwargs['session_id']
+
             result_task = {
                 "task_type": "listing_successful", 
                 "target_account_id": requester_account_id, 
-                "payload": {
-                    "item_id": item_id,
-                    "executor_id": str(app.client.me.id)
-                }
+                "payload": result_payload
             }
             await publish_task(result_task)
         else:
