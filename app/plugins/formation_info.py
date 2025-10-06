@@ -12,7 +12,6 @@ from app.context import get_application
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
 from app import game_adaptor
-# [重构] 直接导入全局单例
 from app.data_manager import data_manager
 
 STATE_KEY_FORMATION = "formation_info"
@@ -97,7 +96,6 @@ async def _cmd_view_cached_formation(event, parts):
 async def check_formation_update_startup():
     if not settings.TASK_SWITCHES.get('formation_update', True) or not data_manager.db: return
     
-    # [修复] 增加对当天是否已运行的检查
     last_run_json = await data_manager.get_value("formation_last_run", is_json=True, default={})
     today_str = date.today().isoformat()
     if last_run_json.get("date") == today_str and last_run_json.get("count", 0) >= 2:
@@ -126,14 +124,14 @@ async def check_formation_update_startup():
 
         job_id = f"{TASK_ID_FORMATION_BASE}{i}"
         
-        # [修复] 任务成功后更新运行记录
         async def job_wrapper():
             await trigger_update_formation()
             current_run_info = await data_manager.get_value("formation_last_run", is_json=True, default={"date": "1970-01-01", "count": 0})
-            if current_run_info.get("date") != today_str:
-                current_run_info = {"date": today_str, "count": 1}
+            today_str_inner = date.today().isoformat()
+            if current_run_info.get("date") != today_str_inner:
+                current_run_info = {"date": today_str_inner, "count": 1}
             else:
-                current_run_info["count"] += 1
+                current_run_info["count"] = current_run_info.get("count", 0) + 1
             await data_manager.save_value("formation_last_run", current_run_info)
 
         scheduler.add_job(job_wrapper, 'date', run_date=run_time, id=job_id)
@@ -142,6 +140,6 @@ async def check_formation_update_startup():
 
 def initialize(app):
     app.register_command("我的阵法", _cmd_query_formation, help_text="查询并刷新当前角色的阵法信息。", category="查询")
-    app.register_command("查看阵法", _cmd_view_cached_formation, help_text="查看已缓存的最新阵法信息。", category="查询")
+    app.register_command("查看阵法", _cmd_view_cached_formation, help_text="查看已缓存的最新阵法信息。", category="数据查询")
     
     app.startup_checks.append(check_formation_update_startup)

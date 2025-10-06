@@ -11,7 +11,6 @@ from app.context import get_application
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
 from app import game_adaptor
-# [重构] 直接导入全局单例
 from app.data_manager import data_manager
 
 STATE_KEY_PROFILE = "character_profile"
@@ -84,7 +83,7 @@ async def trigger_update_profile(force_run=False):
             format_and_log("ERROR", "角色信息解析失败", {'原始文本': final_message.text})
             raise ValueError(f"无法从最终返回的信息中解析出角色数据: {getattr(final_message, 'text', '无最终消息')}")
 
-        await data_manager.save_value(STATE_KEY_PROFILE, profile_data) # 直接使用单例
+        await data_manager.save_value(STATE_KEY_PROFILE, profile_data)
         
         if force_run:
             return _format_profile_reply(profile_data, "✅ **角色信息已更新并缓存**:")
@@ -122,7 +121,7 @@ async def _cmd_query_profile(event, parts):
 
 
 async def _cmd_view_cached_profile(event, parts):
-    profile_data = await data_manager.get_value(STATE_KEY_PROFILE, is_json=True) # 直接使用单例
+    profile_data = await data_manager.get_value(STATE_KEY_PROFILE, is_json=True)
     if not profile_data:
         await get_application().client.reply_to_admin(event, "ℹ️ 尚未缓存任何角色信息，请先使用 `,我的灵根` 查询一次。")
         return
@@ -132,4 +131,4 @@ async def _cmd_view_cached_profile(event, parts):
 
 def initialize(app):
     app.register_command("我的灵根", _cmd_query_profile, help_text="查询并刷新当前角色的详细信息。", category="查询")
-    app.register_command("查看角色", _cmd_view_cached_profile, help_text="查看已缓存的最新角色信息。", category="查询")
+    app.register_command("查看角色", _cmd_view_cached_profile, help_text="查看已缓存的最新角色信息。", category="数据查询")

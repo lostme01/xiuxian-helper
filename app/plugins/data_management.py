@@ -69,7 +69,7 @@ async def _cmd_reset_db(event, parts):
 
 def initialize(app):
     app.register_command("查询redis", _cmd_redis_status, help_text="🗄️ 检查Redis状态", category="数据查询", aliases=['redis'])
-    app.register_command("查看背包", _cmd_view_inventory, help_text="🎒 查看缓存的背包", category="查询")
+    app.register_command("查看背包", _cmd_view_inventory, help_text="🎒 查看缓存的背包", category="数据查询")
     app.register_command("查询题库", _cmd_query_qa_db, help_text="📚 查询题库内容", category="知识", usage=HELP_TEXT_QUERY_QA)
     app.register_command("删除题库", _cmd_delete_qa, help_text="🗑️ 删除题库问答", category="知识", usage=HELP_TEXT_DELETE_QA)
     app.register_command("修改题库", _cmd_update_qa, help_text="✍️ 修改/添加题库问答", category="知识", usage=HELP_TEXT_UPDATE_QA)

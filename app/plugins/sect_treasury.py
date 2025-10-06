@@ -12,7 +12,6 @@ from app.telegram_client import CommandTimeoutError
 from app.utils import send_paginated_message, create_error_reply, get_display_width
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 from app import game_adaptor
-# [重构] 直接导入全局单例
 from app.data_manager import data_manager
 from app.character_stats_manager import stats_manager
 
@@ -49,7 +48,7 @@ async def trigger_update_treasury(force_run=False):
             raise ValueError("无法从返回的信息中解析出宝库物品。")
 
         await stats_manager.set_contribution(treasury_data["contribution"])
-        await data_manager.save_value(STATE_KEY_TREASURY, treasury_data) # 直接使用单例
+        await data_manager.save_value(STATE_KEY_TREASURY, treasury_data)
         
         format_and_log("TASK", "更新宗门宝库", {'阶段': '任务成功', '贡献': treasury_data["contribution"], '物品数量': len(treasury_data["items"])})
         if force_run:
@@ -85,7 +84,7 @@ async def _cmd_query_treasury(event, parts):
             await client.reply_to_admin(event, final_text)
 
 async def _cmd_view_cached_treasury(event, parts):
-    treasury_data = await data_manager.get_value(STATE_KEY_TREASURY, is_json=True) # 直接使用单例
+    treasury_data = await data_manager.get_value(STATE_KEY_TREASURY, is_json=True)
     contribution = await stats_manager.get_contribution()
 
     if not treasury_data or not treasury_data.get('items'):
@@ -117,5 +116,5 @@ async def check_treasury_startup():
 
 def initialize(app):
     app.register_command("宗门宝库", _cmd_query_treasury, help_text="主动查询并刷新宗门宝库的物品列表和贡献。", category="查询")
-    app.register_command("查看宝库", _cmd_view_cached_treasury, help_text="查看已缓存的宗门宝库信息。", category="查询")
+    app.register_command("查看宝库", _cmd_view_cached_treasury, help_text="查看已缓存的宗门宝库信息。", category="数据查询")
     app.startup_checks.append(check_treasury_startup)

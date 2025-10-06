@@ -3,10 +3,23 @@ from app.context import get_application
 from app.plugins.logic.trade_logic import publish_task
 from config import settings
 
+HELP_TEXT_BROADCAST = """📢 **广播游戏指令**
+**说明**: [Admin] 向所有（或指定宗门）的助手广播游戏指令。
+**用法 1 (对所有助手)**: 
+  `,广播 <.游戏指令>`
+  *示例: `,广播 .闭关修炼`*
+
+**用法 2 (对指定宗门)**:
+  `,广播 <宗门名称> <.游戏指令>`
+  *示例: `,广播 黄枫谷 .宗门点卯`*
+
+**别名**: `,b`
+"""
+
 async def _cmd_broadcast(event, parts):
     """
-    ,b <指令> - 向所有助手广播游戏指令 (. 开头)
-    ,b <宗门> <指令> - 向指定宗门广播
+    ,广播 <指令> - 向所有助手广播游戏指令 (. 开头)
+    ,广播 <宗门> <指令> - 向指定宗门广播
     """
     app = get_application()
     
@@ -41,4 +54,11 @@ async def _cmd_broadcast(event, parts):
         await app.client.reply_to_admin(event, "❌ **广播失败**\n无法将任务发布到 Redis。")
 
 def initialize(app):
-    app.register_command("b", _cmd_broadcast, help_text="📢 向所有 (或指定宗门) 的助手广播游戏指令。", category="协同")
+    app.register_command(
+        name="广播", 
+        handler=_cmd_broadcast, 
+        help_text="📢 向所有 (或指定宗门) 的助手广播游戏指令。", 
+        category="协同",
+        aliases=["b"],
+        usage=HELP_TEXT_BROADCAST
+    )
