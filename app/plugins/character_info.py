@@ -72,9 +72,11 @@ async def trigger_update_profile(force_run=False):
     command = game_adaptor.get_profile()
     
     try:
-        _sent, final_message = await client.send_and_wait_for_edit(
+        # [核心修复] V8.0 - 使用更严格的 final_pattern 来区分初始回复和最终结果
+        _sent, final_message = await client.send_and_wait_for_final_reply(
             command,
-            initial_reply_pattern=r"正在查询.*的天命玉牒"
+            final_pattern=r"\*\*境界\*\*", # 只有最终结果才会包含“**境界**”字段
+            initial_pattern=r"正在查询"    # 初始消息的关键词
         )
 
         profile_data = _parse_profile_text(final_message.text)

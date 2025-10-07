@@ -9,7 +9,7 @@ import shlex
 import re
 import time
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient as TelethonTgClient, events
 from telethon.tl.functions.channels import GetFullChannelRequest, GetParticipantRequest
 from telethon.tl.functions.account import UpdateStatusRequest
@@ -36,8 +36,8 @@ class TelegramClient:
         self.last_message_timestamps = {} 
         
         self.message_queue = asyncio.Queue()
-        self.pending_req_by_id = {}
-        self.pending_edit_waits = {}
+        # [核心重构] V7.0 - 统一的等待机制，兼容两种等待模式
+        self.pending_waits = {}
         self.deletion_tasks = {}
         self._pinned_messages = set()
 
@@ -63,10 +63,9 @@ class TelegramClient:
             format_and_log("SYSTEM", "状态加载", {'模块': '发言时间戳', '状态': '加载成功'})
         
     async def get_participant_info(self, chat_id, user_id):
-        """[新增] 查询指定用户在群组中的参与者信息，以获取 until_date。"""
         try:
             chat_entity = await self.client.get_entity(chat_id)
-            user_entity = await self.client.get_entity(user_id)
+            user_entity = await self.client.get_entity(int(user_id))
             participant = await self.client(GetParticipantRequest(chat_entity, user_entity))
             return getattr(participant.participant, 'until_date', None)
         except Exception as e:
@@ -140,36 +139,9 @@ class TelegramClient:
         return await future
 
     async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
-        from app.logger import format_and_log
-        strategy = settings.AUTO_DELETE_STRATEGIES['request_response']
-        if timeout is None: 
-            timeout = settings.COMMAND_TIMEOUT
-        
-        reply_future = asyncio.Future()
-        sent_message = None
-        try:
-            format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '开始发送指令', '指令': command})
-            sent_message = await self._send_command_and_get_message(command, reply_to=reply_to, target_chat_id=target_chat_id)
-            format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '指令已发送，开始等待回复', '消息ID': sent_message.id})
-            
-            self.pending_req_by_id[sent_message.id] = (reply_future, sent_message.chat_id)
-            
-            reply_message = await asyncio.wait_for(reply_future, timeout=timeout)
-            format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '已收到回复', '回复消息ID': reply_message.id})
-            
-            self._schedule_message_deletion(sent_message, strategy['delay_self_on_reply'], "游戏指令(问答-成功)")
-            
-            return sent_message, reply_message
-        except asyncio.TimeoutError:
-            format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '等待回复超时', '指令': command})
-            if sent_message:
-                self._schedule_message_deletion(sent_message, strategy['delay_self_on_timeout'], "游戏指令(问答-超时)")
-            raise CommandTimeoutError(f"等待指令 '{command}' 的回复超时 ({timeout}秒)。")
-        finally:
-            if sent_message:
-                self.pending_req_by_id.pop(sent_message.id, None)
-            format_and_log("DEBUG", "send_game_command_request_response", {'阶段': '清理请求监听器', '消息ID': getattr(sent_message, 'id', 'N/A')})
-
+        """标准问答模式，发送指令并等待一个直接回复。"""
+        # [重构] 底层统一使用新的混合模式等待函数，提供一个能匹配任何内容的 final_pattern
+        return await self.send_and_wait_for_final_reply(command, final_pattern=".*", reply_to=reply_to, timeout=timeout, target_chat_id=target_chat_id)
 
     async def send_game_command_fire_and_forget(self, command: str, reply_to: int = None, target_chat_id: int = None):
         strategy = settings.AUTO_DELETE_STRATEGIES['fire_and_forget']
@@ -183,37 +155,44 @@ class TelegramClient:
             await self._cancel_message_deletion(sent_message)
         return sent_message, reply_message
 
+    # [保留] 旧函数，以确保向后兼容性
     async def send_and_wait_for_edit(self, command: str, initial_reply_pattern: str, timeout: int = None) -> tuple[Message, Message]:
+        """兼容旧功能的等待编辑模式。"""
+        return await self.send_and_wait_for_final_reply(command, final_pattern=".*", initial_pattern=initial_reply_pattern, timeout=timeout)
+
+    # [新增] 强大的混合模式等待函数
+    async def send_and_wait_for_final_reply(self, command: str, final_pattern: str, initial_pattern: str = None, timeout: int = None, reply_to: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
         from app.logger import format_and_log
         if timeout is None:
             timeout = settings.COMMAND_TIMEOUT
         
         sent_message = None
         try:
-            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '开始', '指令': command})
-            sent_message = await self._send_command_and_get_message(command)
+            format_and_log("DEBUG", "混合模式等待", {'阶段': '开始', '指令': command})
+            sent_message = await self._send_command_and_get_message(command, reply_to, target_chat_id)
             
-            edit_future = asyncio.Future()
-            self.pending_edit_waits[sent_message.id] = {
-                "future": edit_future,
-                "pattern": initial_reply_pattern,
-                "initial_reply_id": None
+            future = asyncio.Future()
+            self.pending_waits[sent_message.id] = {
+                "future": future,
+                "final_pattern": final_pattern,
+                "initial_pattern": initial_pattern,
+                "initial_reply_id": None,
+                "mode": "hybrid" # 标记为新的等待模式
             }
 
-            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '进入等待状态', '总超时': f"{timeout}s"})
-            final_message = await asyncio.wait_for(edit_future, timeout=timeout)
-            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '成功捕获到最终事件', '消息ID': final_message.id})
+            format_and_log("DEBUG", "混合模式等待", {'阶段': '进入等待状态', '总超时': f"{timeout}s"})
+            final_message = await asyncio.wait_for(future, timeout=timeout)
+            format_and_log("DEBUG", "混合模式等待", {'阶段': '成功捕获到最终事件', '消息ID': final_message.id})
             
             return sent_message, final_message
 
         except asyncio.TimeoutError as e:
-            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '等待超时或失败', '错误': str(e)})
-            raise CommandTimeoutError(f"等待指令 '{command}' 的响应或编辑超时 (总时长 {timeout} 秒)。") from e
+            format_and_log("DEBUG", "混合模式等待", {'阶段': '等待超时或失败', '错误': str(e)})
+            raise CommandTimeoutError(f"等待指令 '{command}' 的最终回复超时 (总时长 {timeout} 秒)。") from e
         finally:
             if sent_message:
-                self.pending_edit_waits.pop(sent_message.id, None)
-            format_and_log("DEBUG", "send_and_wait_for_edit", {'阶段': '清理编辑监听器', '消息ID': getattr(sent_message, 'id', 'N/A')})
-
+                self.pending_waits.pop(sent_message.id, None)
+            format_and_log("DEBUG", "混合模式等待", {'阶段': '清理监听器', '消息ID': getattr(sent_message, 'id', 'N/A')})
 
     async def start(self):
         await self.client.start()
@@ -263,35 +242,26 @@ class TelegramClient:
     async def _sleep_and_delete(self, delay: int, message: Message):
         await asyncio.sleep(delay)
         task_key = (message.chat_id, message.id)
-        
         if task_key in self._pinned_messages:
             self.deletion_tasks.pop(task_key, None)
             return
-            
         try:
             await self.client.delete_messages(entity=message.chat_id, message_ids=[message.id])
-        except Exception:
-            pass
+        except Exception: pass
         finally:
             self.deletion_tasks.pop(task_key, None)
 
     def _schedule_message_deletion(self, message: Message, delay_seconds: int, reason: str = "未指定"):
         from app.logger import format_and_log
-        if not settings.AUTO_DELETE.get('enabled', False) or not message or not delay_seconds or delay_seconds <= 0: 
-            return
-        
+        if not settings.AUTO_DELETE.get('enabled', False) or not message or not delay_seconds or delay_seconds <= 0: return
         task_key = (message.chat_id, message.id)
-        
         if task_key in self._pinned_messages:
             format_and_log("DEBUG", "消息删除-跳过", {"原因": "消息已被钉住", "消息ID": message.id})
             return
-
         if task_key in self.deletion_tasks:
             self.deletion_tasks[task_key].cancel()
-
         task = asyncio.create_task(self._sleep_and_delete(delay_seconds, message))
         self.deletion_tasks[task_key] = task
-        
         format_and_log("DEBUG", "安排消息删除", {"消息ID": message.id, "延迟(秒)": delay_seconds, "场景": reason})
 
     async def _cancel_message_deletion(self, message: Message):
@@ -307,7 +277,6 @@ class TelegramClient:
         from app.logger import format_and_log
         task_key = (message.chat_id, message.id)
         self._pinned_messages.add(task_key)
-        
         task = self.deletion_tasks.pop(task_key, None)
         if task:
             task.cancel()
@@ -320,7 +289,6 @@ class TelegramClient:
         from app.logger import format_and_log
         task_key = (message.chat_id, message.id)
         self._pinned_messages.discard(task_key)
-        
         format_and_log("DEBUG", "消息保护", {"操作": "解钉", "消息ID": message.id})
         self._schedule_message_deletion(message, settings.AUTO_DELETE.get('delay_admin_command'), "解钉后自动清理")
 
@@ -330,33 +298,38 @@ class TelegramClient:
         await log_event(self, log_type, event)
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         
-        if not event.out:
-            if self.pending_req_by_id and event.is_reply and event.message.reply_to_msg_id in self.pending_req_by_id:
-                future, _ = self.pending_req_by_id.pop(event.message.reply_to_msg_id)
-                if future and not future.done():
-                    await log_event(self, LogType.REPLY_RECV, event)
+        if not event.out and event.is_reply:
+            sent_msg_id = event.message.reply_to_msg_id
+            if sent_msg_id in self.pending_waits:
+                wait_obj = self.pending_waits[sent_msg_id]
+                future = wait_obj.get("future")
+                if not (future and not future.done()):
+                    return
+                
+                # 兼容新旧两种模式
+                mode = wait_obj.get("mode")
+                if mode == "hybrid":
+                    # 情况1: 直接收到了最终回复 (快速编辑场景)
+                    if re.search(wait_obj["final_pattern"], event.text, re.DOTALL):
+                        future.set_result(event.message)
+                    # 情况2: 收到了初始回复，需要等待编辑
+                    elif wait_obj["initial_pattern"] and re.search(wait_obj["initial_pattern"], event.text, re.DOTALL):
+                        wait_obj['initial_reply_id'] = event.id
+                        format_and_log("DEBUG", "混合模式等待", {'状态': '已捕获初始回复', '消息ID': event.id})
+                else: # 默认为旧的 request-response 模式
                     future.set_result(event.message)
-                return
-
-            if self.pending_edit_waits and event.is_reply and event.message.reply_to_msg_id in self.pending_edit_waits:
-                wait_obj = self.pending_edit_waits[event.message.reply_to_msg_id]
-                if re.search(wait_obj['pattern'], event.text, re.DOTALL):
-                    wait_obj['initial_reply_id'] = event.id
-                    format_and_log("DEBUG", "智能等待", {'状态': '已捕获初始回复', '消息ID': event.id})
                 return
 
     async def _message_edited_handler(self, event: events.MessageEdited.Event):
         await log_event(self, LogType.MSG_EDIT, event)
         self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
         
-        if self.pending_edit_waits:
-            for sent_msg_id, wait_obj in list(self.pending_edit_waits.items()):
-                if wait_obj['initial_reply_id'] == event.id:
-                    future = wait_obj['future']
-                    if future and not future.done():
-                        future.set_result(event.message)
-                    self.pending_edit_waits.pop(sent_msg_id, None)
-                    return
+        for sent_msg_id, wait_obj in list(self.pending_waits.items()):
+            if wait_obj.get('initial_reply_id') == event.id:
+                future = wait_obj.get('future')
+                if future and not future.done() and re.search(wait_obj["final_pattern"], event.text, re.DOTALL):
+                    future.set_result(event.message)
+                return
     
     async def _deleted_message_handler(self, update):
         chat_id = None
@@ -364,11 +337,9 @@ class TelegramClient:
             chat_id = int(f"-100{update.channel_id}")
         elif isinstance(update, UpdateDeleteMessages):
             return
-
         all_groups = settings.GAME_GROUP_IDS + ([settings.CONTROL_GROUP_ID] if settings.CONTROL_GROUP_ID else [])
         if getattr(settings, 'TEST_GROUP_ID', None):
-            all_groups.append(settings.TEST_GROUP_ID)
-            
+            all_configured_groups.append(settings.TEST_GROUP_ID)
         if chat_id and chat_id in all_groups:
             self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
             fake_event = type('FakeEvent', (object,), {'chat_id': chat_id})
