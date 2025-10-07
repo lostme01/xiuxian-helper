@@ -33,6 +33,8 @@ class Application:
         self.startup_checks = []
         self.commands = {}
         self.task_functions = {}
+        # [NEW] 用于Redis断线通知冷却
+        self.last_redis_error_notice_time = 0
         
         set_application(self)
         set_scheduler(scheduler)
@@ -64,12 +66,26 @@ class Application:
                             asyncio.create_task(redis_message_handler(message))
 
             except (redis.exceptions.ConnectionError, asyncio.CancelledError) as e:
-                format_and_log("ERROR", "Redis 监听连接断开", {'错误': str(e)}, level=logging.ERROR)
+                log_msg = {'错误': str(e)}
+                format_and_log("ERROR", "Redis 监听连接断开", log_msg, level=logging.ERROR)
+                
+                # [NEW] 断线通知逻辑，带冷却时间 (10分钟)
+                cooldown_seconds = 600
+                current_time = time.time()
+                if (current_time - self.last_redis_error_notice_time) > cooldown_seconds:
+                    await self.client.send_admin_notification(
+                        f"⚠️ **严重警报：Redis 连接中断**\n\n"
+                        f"用于多账号协同的Redis消息监听器已断开连接，所有协同功能（如集火、智能炼制）将暂停。\n"
+                        f"系统正在后台尝试自动重连...\n\n"
+                        f"**错误**: `{str(e)}`"
+                    )
+                    self.last_redis_error_notice_time = current_time
+
             except Exception as e:
                 format_and_log("ERROR", "Redis 监听循环异常", {'错误': str(e)}, level=logging.CRITICAL)
             finally:
-                format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '将在5秒后尝试重连...'})
-                await asyncio.sleep(5)
+                format_and_log("SYSTEM", "核心服务", {'服务': 'Redis 任务监听器', '状态': '将在15秒后尝试重连...'})
+                await asyncio.sleep(15)
         
     def setup_logging(self):
         print("开始配置日志系统...")
@@ -81,15 +97,11 @@ class Application:
         
         app_logger.propagate = False
         
-        # [核心修复] 同时配置控制台输出和文件输出
-        
-        # 1. 控制台处理器 (用于 docker logs)
         console_formatter = logging.Formatter(fmt='%(message)s')
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setFormatter(console_formatter)
         app_logger.addHandler(stream_handler)
         
-        # 2. app.log 文件处理器 (用于持久化)
         os.makedirs('logs', exist_ok=True)
         file_formatter = TimezoneFormatter(
             fmt='%(asctime)s - %(levelname)s - %(message)s', 
@@ -103,30 +115,8 @@ class Application:
             encoding='utf-8'
         )
         file_handler.setFormatter(file_formatter)
-        # 重写 format_and_log 生成的 box 格式，使其在文件中更易读
-        original_emit = file_handler.emit
-        def plain_emit(record):
-            if '\n' in record.getMessage(): # 检查是否是我们的 box 格式
-                # 提取标题和数据
-                lines = record.getMessage().strip().split('\n')
-                title = lines[1].strip('│ []')
-                data_lines = lines[3:-1]
-                data_dict = {}
-                for line in data_lines:
-                    parts = line.split(':', 1)
-                    if len(parts) == 2:
-                        key = parts[0].strip('│ ').strip()
-                        value = parts[1].strip()
-                        data_dict[key] = value
-                record.msg = f"[{title.strip()}] - {json.dumps(data_dict, ensure_ascii=False)}"
-            original_emit(record)
-        
-        # (暂不启用 plain_emit, 以保留 box 格式)
-        # file_handler.emit = plain_emit
-
         app_logger.addHandler(file_handler)
         
-        # 3. raw_messages.log 文件处理器 (保持不变)
         raw_logger = logging.getLogger('raw_messages')
         if raw_logger.hasHandlers(): raw_logger.handlers.clear()
         raw_logger.propagate = False

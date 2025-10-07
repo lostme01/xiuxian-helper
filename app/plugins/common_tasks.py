@@ -77,9 +77,9 @@ async def trigger_chuang_ta(force_run=False):
     client = app.client
     format_and_log("TASK", "自动闯塔", {'阶段': '任务开始', '强制执行': force_run})
     try:
-        # [核心修复] V8.0 - 升级为混合模式等待
-        _sent, final_reply = await client.send_and_wait_for_final_reply(
-            game_adaptor.challenge_tower(), 
+        # [核心修复] V9.0 - 升级为新的、安全的高层函数
+        _sent, final_reply = await client.send_and_wait_for_edit(
+            command=game_adaptor.challenge_tower(), 
             final_pattern=r"【试炼古塔 - 战报】",
             initial_pattern=r"踏入了古塔的第"
         )

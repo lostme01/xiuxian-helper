@@ -39,6 +39,40 @@ def create_error_reply(command_name: str, reason: str, details: str = None, usag
         
     return "\n".join(lines)
 
+# [NEW] 通用参数解析器
+def parse_item_and_quantity(parts: list, default_quantity: int = 1) -> tuple[str | None, int | None, str | None]:
+    """
+    一个通用的基础函数，用于从指令参数中解析物品名称和数量。
+    
+    Args:
+        parts (list): shlex.split 分割后的指令部分。
+        default_quantity (int): 如果未提供数量，则使用的默认值。
+
+    Returns:
+        tuple[str, int, str]: (物品名称, 数量, 错误消息)。如果成功，错误消息为 None。
+    """
+    if len(parts) < 2:
+        return None, None, "参数不足"
+
+    item_name = ""
+    quantity = default_quantity
+
+    try:
+        if len(parts) > 2 and parts[-1].isdigit():
+            quantity = int(parts[-1])
+            if quantity <= 0:
+                raise ValueError("数量必须为正整数")
+            item_name = " ".join(parts[1:-1])
+        else:
+            item_name = " ".join(parts[1:])
+        
+        if not item_name:
+            return None, None, "物品名称不能为空"
+            
+        return item_name, quantity, None
+    except ValueError as e:
+        return None, None, str(e) or "数量参数无效"
+
 
 def require_args(count: int, usage: str):
     def decorator(func):
@@ -198,3 +232,4 @@ async def save_qa_answer_to_redis(redis_db, db_name: str, question: str, answer:
         await redis_db.hset(db_name, question, answer)
     except Exception as e:
         format_and_log("SYSTEM", "Redis写入失败", {'数据库': db_name, '键': question, '错误': str(e)}, level=logging.ERROR)
+

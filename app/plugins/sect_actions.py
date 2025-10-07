@@ -4,10 +4,8 @@ from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 
 from app.context import get_application
 from app.telegram_client import CommandTimeoutError
-from app.utils import create_error_reply
-# [重构] 不再需要直接操作库存和状态
-# from app.inventory_manager import inventory_manager
-# from app.character_stats_manager import stats_manager
+# [REFACTOR] 导入新的通用解析器
+from app.utils import create_error_reply, parse_item_and_quantity
 from app import game_adaptor
 
 HELP_TEXT_EXCHANGE_ITEM = """🔄 **宗门兑换 (事件驱动)**
@@ -25,25 +23,14 @@ HELP_TEXT_DONATE_ITEM = """💸 **宗门捐献 (事件驱动)**
 async def _cmd_exchange_item(event, parts):
     app = get_application()
     client = app.client
+    usage = app.commands.get('兑换', {}).get('usage')
 
-    if len(parts) < 2:
-        usage = app.commands.get('兑换', {}).get('usage')
-        error_msg = create_error_reply("兑换", "参数不足", usage_text=usage)
+    # [REFACTOR] 使用通用解析器
+    item_name, quantity, error = parse_item_and_quantity(parts)
+    if error:
+        error_msg = create_error_reply("兑换", error, usage_text=usage)
         await client.reply_to_admin(event, error_msg)
         return
-
-    item_name = parts[1]
-    quantity = 1
-    if len(parts) > 2:
-        try:
-            quantity = int(parts[2])
-            if quantity <= 0:
-                raise ValueError("数量必须为正整数")
-        except ValueError:
-            usage = app.commands.get('兑换', {}).get('usage')
-            error_msg = create_error_reply("兑换", "数量参数无效", details="数量必须是一个正整数。", usage_text=usage)
-            await client.reply_to_admin(event, error_msg)
-            return
 
     command = game_adaptor.sect_exchange(item_name, quantity)
         
@@ -55,7 +42,6 @@ async def _cmd_exchange_item(event, parts):
     try:
         _sent, reply = await client.send_game_command_request_response(command)
 
-        # [重构] 只判断是否成功，不进行状态更新
         if "**兑换成功！**" in reply.text:
             final_text = f"✅ **兑换指令已发送**!\n系统将通过事件监听器自动更新状态。"
         elif "贡献不足" in reply.text:
@@ -78,21 +64,26 @@ async def _cmd_exchange_item(event, parts):
 async def _cmd_donate_item(event, parts):
     app = get_application()
     client = app.client
+    usage = app.commands.get('捐献', {}).get('usage')
 
+    # [REFACTOR] 捐献指令需要强制数量，所以单独处理，但也可以简化
     if len(parts) < 3:
-        usage = app.commands.get('捐献', {}).get('usage')
         error_msg = create_error_reply("捐献", "参数不足", usage_text=usage)
         await client.reply_to_admin(event, error_msg)
         return
 
-    item_name = parts[1]
+    item_name = " ".join(parts[1:-1])
     try:
-        quantity = int(parts[2])
+        quantity = int(parts[-1])
         if quantity <= 0:
             raise ValueError("数量必须为正整数")
-    except ValueError:
-        usage = app.commands.get('捐献', {}).get('usage')
+    except (ValueError, IndexError):
         error_msg = create_error_reply("捐献", "数量参数无效", details="数量必须是一个正整数。", usage_text=usage)
+        await client.reply_to_admin(event, error_msg)
+        return
+        
+    if not item_name:
+        error_msg = create_error_reply("捐献", "物品名称不能为空", usage_text=usage)
         await client.reply_to_admin(event, error_msg)
         return
 
@@ -106,7 +97,6 @@ async def _cmd_donate_item(event, parts):
     try:
         _sent, reply = await client.send_game_command_request_response(command)
 
-        # [重构] 只判断是否成功，不进行状态更新
         if "你向宗门捐献了" in reply.text:
             final_text = f"✅ **捐献指令已发送**!\n系统将通过事件监听器自动更新状态。"
         elif "数量不足" in reply.text or "并无价值" in reply.text:

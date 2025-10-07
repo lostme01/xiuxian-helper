@@ -24,11 +24,11 @@ async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler
     await feedback_handler(f"⏳ 正在执行指令: `{command}`\n正在等待游戏机器人返回最终结果...")
     
     try:
-        # [核心修复] V8.0 - 直接、正确地调用混合模式等待函数
-        _sent, final_reply = await client.send_and_wait_for_final_reply(
-            command,
-            final_pattern=r"炼制结束",          # 最终结果必须包含 "炼制结束"
-            initial_pattern=r"你凝神静气"      # 初始消息的关键词
+        # [FIX] 修正错误的函数调用，应使用公开的 send_and_wait_for_edit 方法
+        _sent, final_reply = await client.send_and_wait_for_edit(
+            command=command,
+            final_pattern=r"炼制结束",
+            initial_pattern=r"你凝神静气"
         )
         
         raw_text = final_reply.text

@@ -72,11 +72,11 @@ async def trigger_update_profile(force_run=False):
     command = game_adaptor.get_profile()
     
     try:
-        # [核心修复] V8.0 - 使用更严格的 final_pattern 来区分初始回复和最终结果
-        _sent, final_message = await client.send_and_wait_for_final_reply(
-            command,
-            final_pattern=r"\*\*境界\*\*", # 只有最终结果才会包含“**境界**”字段
-            initial_pattern=r"正在查询"    # 初始消息的关键词
+        # [REVERT] 恢复使用 send_and_wait_for_edit 以匹配事件处理器的逻辑
+        _sent, final_message = await client.send_and_wait_for_edit(
+            command=command,
+            final_pattern=r"\*\*境界\*\*",
+            initial_pattern=r"正在查询"
         )
 
         profile_data = _parse_profile_text(final_message.text)
@@ -134,3 +134,4 @@ async def _cmd_view_cached_profile(event, parts):
 def initialize(app):
     app.register_command("我的灵根", _cmd_query_profile, help_text="查询并刷新当前角色的详细信息。", category="查询")
     app.register_command("查看角色", _cmd_view_cached_profile, help_text="查看已缓存的最新角色信息。", category="数据查询")
+

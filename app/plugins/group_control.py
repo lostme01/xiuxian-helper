@@ -129,11 +129,14 @@ async def execute_command(event):
         can_execute = True
 
     if can_execute:
-        if is_admin_sender and is_main_bot:
+        # [FIX] 优化指令删除逻辑
+        # 无论是管理员发的指令，还是助手自己给自己发的指令（如在收藏夹中），都安排删除
+        is_self_command = str(event.sender_id) == my_id
+        if is_admin_sender or is_self_command:
             client._schedule_message_deletion(
-                event.message, 
-                settings.AUTO_DELETE.get('delay_admin_command'), 
-                "管理员指令原文"
+                event.message,
+                settings.AUTO_DELETE.get('delay_admin_command'),
+                "管理员或自身指令原文"
             )
 
         # [重构] 从配置中读取防刷屏指令列表
@@ -167,3 +170,4 @@ def initialize(app):
     @client.client.on(events.NewMessage(chats=listen_chats))
     async def unified_command_handler(event):
         await execute_command(event)
+

@@ -5,7 +5,8 @@ import time
 import re
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 from app.context import get_application
-from app.utils import create_error_reply
+# [REFACTOR] 导入新的通用解析器
+from app.utils import create_error_reply, parse_item_and_quantity
 from app.plugins.logic import crafting_logic, trade_logic
 from app.plugins.crafting_actions import _cmd_craft_item as execute_craft_item
 from app import game_adaptor
@@ -21,22 +22,12 @@ async def _cmd_smart_craft(event, parts):
     client = app.client
     my_id = str(client.me.id)
     
-    if len(parts) < 2:
-        await client.reply_to_admin(event, create_error_reply("智能炼制", "参数不足", usage_text=HELP_TEXT_SMART_CRAFT))
+    # [REFACTOR] 使用通用解析器
+    item_to_craft, quantity, error = parse_item_and_quantity(parts)
+    if error:
+        await client.reply_to_admin(event, create_error_reply("智能炼制", error, usage_text=HELP_TEXT_SMART_CRAFT))
         return
 
-    item_to_craft = ""
-    quantity = 1
-    if len(parts) > 2 and parts[-1].isdigit():
-        try:
-            quantity = int(parts[-1])
-            item_to_craft = " ".join(parts[1:-1])
-        except (ValueError, IndexError):
-            item_to_craft = " ".join(parts[1:])
-    else:
-        item_to_craft = " ".join(parts[1:])
-
-    
     progress_message = await client.reply_to_admin(event, f"🧠 **智能炼制任务启动: {item_to_craft} x{quantity}**\n正在检查本地库存...")
     if not progress_message: return
     client.pin_message(progress_message)
@@ -77,7 +68,7 @@ async def _cmd_smart_craft(event, parts):
             try:
                 await progress_message.edit("\n".join(report_lines) + f"\n- 正在上架交易...")
                 
-                list_command = game_adaptor.list_item("灵石", 1, materials_str, 1) # 这里materials_str本身就是"A*1 B*2"的格式，所以数量填1
+                list_command = game_adaptor.list_item("灵石", 1, materials_str, 1)
                 _sent, reply = await client.send_game_command_request_response(list_command)
                 
                 match = re.search(r"挂单ID\D+(\d+)", reply.text)
