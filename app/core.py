@@ -14,14 +14,12 @@ from config import settings
 from app.task_scheduler import scheduler, shutdown
 from app.telegram_client import TelegramClient, CommandTimeoutError
 from app.redis_client import initialize_redis
-# [重构] 导入全局实例
 from app.data_manager import data_manager
 from app import gemini_client
 from app.plugins import load_all_plugins
 from app.logger import format_and_log, TimezoneFormatter
 from app.context import set_application, set_scheduler, get_application
 from app.utils import create_error_reply
-# [重构] 导入全局实例
 from app.inventory_manager import inventory_manager
 from app.character_stats_manager import stats_manager
 
@@ -29,7 +27,6 @@ class Application:
     def __init__(self):
         self.client: TelegramClient = None
         self.redis_db = None
-        # [重构] 直接引用全局实例
         self.data_manager = data_manager
         self.inventory_manager = inventory_manager
         self.stats_manager = stats_manager
@@ -84,11 +81,52 @@ class Application:
         
         app_logger.propagate = False
         
+        # [核心修复] 同时配置控制台输出和文件输出
+        
+        # 1. 控制台处理器 (用于 docker logs)
         console_formatter = logging.Formatter(fmt='%(message)s')
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setFormatter(console_formatter)
         app_logger.addHandler(stream_handler)
         
+        # 2. app.log 文件处理器 (用于持久化)
+        os.makedirs('logs', exist_ok=True)
+        file_formatter = TimezoneFormatter(
+            fmt='%(asctime)s - %(levelname)s - %(message)s', 
+            datefmt='%Y-%m-%d %H:%M:%S %Z', 
+            tz_name=settings.TZ
+        )
+        file_handler = logging.handlers.RotatingFileHandler(
+            settings.LOG_FILE, 
+            maxBytes=settings.LOG_ROTATION_CONFIG['max_bytes'], 
+            backupCount=settings.LOG_ROTATION_CONFIG['backup_count'], 
+            encoding='utf-8'
+        )
+        file_handler.setFormatter(file_formatter)
+        # 重写 format_and_log 生成的 box 格式，使其在文件中更易读
+        original_emit = file_handler.emit
+        def plain_emit(record):
+            if '\n' in record.getMessage(): # 检查是否是我们的 box 格式
+                # 提取标题和数据
+                lines = record.getMessage().strip().split('\n')
+                title = lines[1].strip('│ []')
+                data_lines = lines[3:-1]
+                data_dict = {}
+                for line in data_lines:
+                    parts = line.split(':', 1)
+                    if len(parts) == 2:
+                        key = parts[0].strip('│ ').strip()
+                        value = parts[1].strip()
+                        data_dict[key] = value
+                record.msg = f"[{title.strip()}] - {json.dumps(data_dict, ensure_ascii=False)}"
+            original_emit(record)
+        
+        # (暂不启用 plain_emit, 以保留 box 格式)
+        # file_handler.emit = plain_emit
+
+        app_logger.addHandler(file_handler)
+        
+        # 3. raw_messages.log 文件处理器 (保持不变)
         raw_logger = logging.getLogger('raw_messages')
         if raw_logger.hasHandlers(): raw_logger.handlers.clear()
         raw_logger.propagate = False
@@ -110,7 +148,7 @@ class Application:
         logging.getLogger('telethon').setLevel(logging.WARNING)
         logging.getLogger('asyncio').setLevel(logging.WARNING)
 
-        print(f"日志系统配置完成。")
+        print(f"日志系统配置完成。现在将同时输出到控制台和 app.log 文件。")
 
     def load_plugins_and_commands(self, is_reload=False):
         if is_reload:
@@ -133,7 +171,6 @@ class Application:
         try:
             self.redis_db = await initialize_redis()
             
-            # [重构] 依赖注入
             self.data_manager.initialize(self.redis_db)
             self.inventory_manager.initialize(self.data_manager)
             self.stats_manager.initialize(self.data_manager)
@@ -148,7 +185,7 @@ class Application:
             settings.ACCOUNT_ID = str(self.client.me.id)
             format_and_log("SYSTEM", "账户初始化", {'账户ID': settings.ACCOUNT_ID, '状态': '已设置为全局标识'})
 
-            if self.data_manager.db: # 检查DB是否成功注入
+            if self.data_manager.db:
                 try:
                     profile = await self.data_manager.get_value("character_profile", is_json=True, default={})
                     profile.update({ "用户": self.client.me.username, "ID": self.client.me.id })

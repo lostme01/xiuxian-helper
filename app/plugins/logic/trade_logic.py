@@ -95,7 +95,6 @@ async def execute_listing_task(requester_account_id: str, **kwargs):
             item_id = match_id.group(1)
             format_and_log("TASK", "集火-上架", {'阶段': '成功', '物品ID': item_id})
             
-            # [核心修复] 确保将 session_id 包含在回报任务的 payload 中
             result_payload = {
                 "item_id": item_id,
                 "executor_id": str(app.client.me.id)
@@ -123,8 +122,13 @@ async def execute_unlisting_task(item_id: str, is_auto: bool = False):
     try:
         await app.client.send_game_command_fire_and_forget(command)
     except Exception as e:
-        if not is_auto:
-            await app.client.send_admin_notification(f"❌ **下架失败** (挂单ID: `{item_id}`)\n发生异常: `{e}`")
+        # [核心修复] 无论是否为自动任务，失败时都向管理员发送通知
+        my_username = app.client.me.username if app.client.me else "未知助手"
+        await app.client.send_admin_notification(
+            f"❌ **下架失败 (`@{my_username}`)**\n\n"
+            f"助手在尝试下架挂单ID `{item_id}` 时发生异常。\n"
+            f"**错误**: `{e}`"
+        )
 
 async def execute_purchase_task(payload: dict):
     app = get_application()
