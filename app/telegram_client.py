@@ -36,7 +36,6 @@ class TelegramClient:
         self.last_message_timestamps = {} 
         
         self.message_queue = asyncio.Queue()
-        # [核心重构] V7.0 - 统一的等待机制，兼容两种等待模式
         self.pending_waits = {}
         self.deletion_tasks = {}
         self._pinned_messages = set()
@@ -139,9 +138,25 @@ class TelegramClient:
         return await future
 
     async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
-        """标准问答模式，发送指令并等待一个直接回复。"""
-        # [重构] 底层统一使用新的混合模式等待函数，提供一个能匹配任何内容的 final_pattern
-        return await self.send_and_wait_for_final_reply(command, final_pattern=".*", reply_to=reply_to, timeout=timeout, target_chat_id=target_chat_id)
+        """[最终修复] 标准问答模式，恢复了自动删除逻辑。"""
+        strategy = settings.AUTO_DELETE_STRATEGIES['request_response']
+        sent_message = None
+        try:
+            sent_message, reply_message = await self.send_and_wait_for_final_reply(
+                command, 
+                final_pattern=".*", # 匹配任何回复作为最终结果
+                reply_to=reply_to, 
+                timeout=timeout, 
+                target_chat_id=target_chat_id
+            )
+            # 成功收到回复后，安排删除原始指令
+            self._schedule_message_deletion(sent_message, strategy['delay_self_on_reply'], "游戏指令(问答-成功)")
+            return sent_message, reply_message
+        except CommandTimeoutError:
+            # 超时后，安排删除原始指令
+            if sent_message:
+                self._schedule_message_deletion(sent_message, strategy['delay_self_on_timeout'], "游戏指令(问答-超时)")
+            raise # 重新抛出异常，让上层逻辑知道已超时
 
     async def send_game_command_fire_and_forget(self, command: str, reply_to: int = None, target_chat_id: int = None):
         strategy = settings.AUTO_DELETE_STRATEGIES['fire_and_forget']
@@ -155,12 +170,6 @@ class TelegramClient:
             await self._cancel_message_deletion(sent_message)
         return sent_message, reply_message
 
-    # [保留] 旧函数，以确保向后兼容性
-    async def send_and_wait_for_edit(self, command: str, initial_reply_pattern: str, timeout: int = None) -> tuple[Message, Message]:
-        """兼容旧功能的等待编辑模式。"""
-        return await self.send_and_wait_for_final_reply(command, final_pattern=".*", initial_pattern=initial_reply_pattern, timeout=timeout)
-
-    # [新增] 强大的混合模式等待函数
     async def send_and_wait_for_final_reply(self, command: str, final_pattern: str, initial_pattern: str = None, timeout: int = None, reply_to: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
         from app.logger import format_and_log
         if timeout is None:
@@ -176,8 +185,7 @@ class TelegramClient:
                 "future": future,
                 "final_pattern": final_pattern,
                 "initial_pattern": initial_pattern,
-                "initial_reply_id": None,
-                "mode": "hybrid" # 标记为新的等待模式
+                "initial_reply_id": None
             }
 
             format_and_log("DEBUG", "混合模式等待", {'阶段': '进入等待状态', '总超时': f"{timeout}s"})
@@ -306,18 +314,12 @@ class TelegramClient:
                 if not (future and not future.done()):
                     return
                 
-                # 兼容新旧两种模式
-                mode = wait_obj.get("mode")
-                if mode == "hybrid":
-                    # 情况1: 直接收到了最终回复 (快速编辑场景)
-                    if re.search(wait_obj["final_pattern"], event.text, re.DOTALL):
-                        future.set_result(event.message)
-                    # 情况2: 收到了初始回复，需要等待编辑
-                    elif wait_obj["initial_pattern"] and re.search(wait_obj["initial_pattern"], event.text, re.DOTALL):
-                        wait_obj['initial_reply_id'] = event.id
-                        format_and_log("DEBUG", "混合模式等待", {'状态': '已捕获初始回复', '消息ID': event.id})
-                else: # 默认为旧的 request-response 模式
+                if re.search(wait_obj["final_pattern"], event.text, re.DOTALL):
                     future.set_result(event.message)
+                
+                elif wait_obj["initial_pattern"] and re.search(wait_obj["initial_pattern"], event.text, re.DOTALL):
+                    wait_obj['initial_reply_id'] = event.id
+                    format_and_log("DEBUG", "混合模式等待", {'状态': '已捕获初始回复', '消息ID': event.id})
                 return
 
     async def _message_edited_handler(self, event: events.MessageEdited.Event):

@@ -14,7 +14,6 @@ from telethon.tl.functions.account import UpdateStatusRequest
 from app.telegram_client import CommandTimeoutError
 from app.context import get_application
 from app import game_adaptor
-# [重构] 直接导入全局单例
 from app.data_manager import data_manager
 from app.inventory_manager import inventory_manager
 
@@ -59,7 +58,7 @@ async def update_inventory_cache(force_run=False):
         _sent, reply = await client.send_game_command_request_response(game_adaptor.get_inventory())
         inventory = parse_inventory_text(reply)
         if inventory:
-            await inventory_manager.set_inventory(inventory) # 直接使用单例
+            await inventory_manager.set_inventory(inventory)
             format_and_log("TASK", "刷新背包", {'阶段': '任务成功', '详情': f'解析并校准了 {len(inventory)} 种物品。'})
             if force_run:
                 return f"✅ **[立即刷新背包]** 任务完成，已校准 {len(inventory)} 种物品。"
@@ -78,13 +77,18 @@ async def trigger_chuang_ta(force_run=False):
     client = app.client
     format_and_log("TASK", "自动闯塔", {'阶段': '任务开始', '强制执行': force_run})
     try:
-        _sent, final_reply = await client.send_and_wait_for_edit(game_adaptor.challenge_tower(), initial_reply_pattern=r"踏入了古塔的第")
+        # [核心修复] V8.0 - 升级为混合模式等待
+        _sent, final_reply = await client.send_and_wait_for_final_reply(
+            game_adaptor.challenge_tower(), 
+            final_pattern=r"【试炼古塔 - 战报】",
+            initial_pattern=r"踏入了古塔的第"
+        )
         if "【试炼古塔 - 战报】" in final_reply.text and "总收获" in final_reply.text:
             format_and_log("TASK", "自动闯塔", {'阶段': '成功', '详情': '事件将由事件总线处理'})
         else:
             format_and_log("WARNING", "自动闯塔", {'阶段': '解析失败', '原因': '未收到预期的战报格式', '返回': final_reply.text})
     finally:
-        if not force_run and data_manager.db: # 检查DB是否成功注入
+        if not force_run and data_manager.db:
             today_str = date.today().isoformat()
             state = await data_manager.get_value(STATE_KEY_CHUANG_TA, is_json=True, default={"date": today_str, "completed_count": 0})
             if state.get("date") != today_str: state = {"date": today_str, "completed_count": 1}

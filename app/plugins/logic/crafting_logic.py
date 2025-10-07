@@ -8,14 +8,13 @@ from app.inventory_manager import inventory_manager
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
 from app import game_adaptor
-# [重构] 直接导入全局单例
 from app.data_manager import data_manager
 
 CRAFTING_RECIPES_KEY = "crafting_recipes"
 
 async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler):
     """
-    [重构版 V2] 核心炼制逻辑，只发指令和反馈，不处理库存。
+    核心炼制逻辑，使用混合模式等待最终结果。
     """
     app = get_application()
     client = app.client
@@ -25,9 +24,11 @@ async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler
     await feedback_handler(f"⏳ 正在执行指令: `{command}`\n正在等待游戏机器人返回最终结果...")
     
     try:
-        _sent, final_reply = await client.send_and_wait_for_edit(
+        # [核心修复] V8.0 - 直接、正确地调用混合模式等待函数
+        _sent, final_reply = await client.send_and_wait_for_final_reply(
             command,
-            initial_reply_pattern=r"你凝神静气.*最终成功率"
+            final_pattern=r"炼制结束",          # 最终结果必须包含 "炼制结束"
+            initial_pattern=r"你凝神静气"      # 初始消息的关键词
         )
         
         raw_text = final_reply.text
@@ -45,9 +46,6 @@ async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler
         await feedback_handler(error_text)
 
 async def logic_check_local_materials(item_name: str, quantity: int = 1) -> dict | str:
-    """
-    仅检查本地库存是否足够炼制指定物品。
-    """
     if not data_manager.db:
         return "❌ 错误: Redis 未连接。"
     
@@ -78,9 +76,6 @@ async def logic_check_local_materials(item_name: str, quantity: int = 1) -> dict
 
 
 async def logic_plan_crafting_session(item_name: str, initiator_id: str, quantity: int = 1) -> dict | str:
-    """
-    规划一次多账号协同炼制任务，寻找材料供应方。
-    """
     if not data_manager.db:
         return "❌ 错误: Redis 未连接。"
 
