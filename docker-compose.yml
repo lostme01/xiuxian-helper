@@ -13,6 +13,9 @@ services:
       - ./config/prod.yaml:/app/config/prod.yaml
       - ./data:/app/data
       - ./logs:/app/logs
+      # [新增] 将主机时间同步到容器
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
 networks:
   default:
     name: tg-helper-network

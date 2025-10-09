@@ -106,7 +106,12 @@ TAIYI_SECT_CONFIG = config.get('taiyi_sect', {})
 XUANGU_EXAM_CONFIG = config.get('xuangu_exam_solver', {'enabled': False})
 TIANJI_EXAM_CONFIG = config.get('tianji_exam_solver', {'enabled': False})
 LOG_ROTATION_CONFIG = config.get('log_rotation', {'max_bytes': 1048576, 'backup_count': 9})
-TRADE_COORDINATION_CONFIG = _merge_config('trade_coordination', {'focus_fire_auto_delist': True, 'crafting_session_timeout_seconds': 300})
+# [修改] 读取新的配置项
+TRADE_COORDINATION_CONFIG = _merge_config('trade_coordination', {
+    'focus_fire_auto_delist': True,
+    'crafting_session_timeout_seconds': 300,
+    'focus_fire_sync_buffer_seconds': 5  # 新增配置项
+})
 HEARTBEAT_CONFIG = _merge_config('heartbeat', {
     'active_enabled': True, 'active_interval_minutes': 10,
     'passive_enabled': True, 'passive_check_interval_minutes': 5,
@@ -121,7 +126,7 @@ AUTO_KNOWLEDGE_SHARING = config.get('auto_knowledge_sharing', {'enabled': False}
 SESSION_FILE_PATH = f'{DATA_DIR}/user.session'
 SCHEDULER_DB = f'sqlite:///{DATA_DIR}/jobs.sqlite'
 
-# --- [重构] 启动检查 ---
+# --- 启动检查 ---
 def check_startup_settings():
     """
     一个更全面的启动配置检查器。
@@ -129,7 +134,6 @@ def check_startup_settings():
     """
     errors = []
 
-    # 规则: (配置项, 期望类型, 是否必须, "结构检查函数(可选)")
     validation_rules = {
         'api_id': (API_ID, int, True, None),
         'api_hash': (API_HASH, str, True, None),
@@ -139,12 +143,10 @@ def check_startup_settings():
         'send_delay': (SEND_DELAY, dict, True, lambda d: 'min' in d and 'max' in d),
     }
 
-    # 检查 AI 配置
     if XUANGU_EXAM_CONFIG.get('enabled') or TIANJI_EXAM_CONFIG.get('enabled'):
         if not EXAM_SOLVER_CONFIG.get('gemini_api_keys'):
             errors.append("- 'exam_solver.gemini_api_keys' 未在 .env 文件 (GEMINI_API_KEYS) 或 prod.yaml 中配置，但AI答题功能已开启。")
 
-    # 执行规则检查
     for key, (value, expected_type, is_required, struct_check) in validation_rules.items():
         if is_required and not value:
             errors.append(f"- 必填项 '{key}' 未配置。")
@@ -165,5 +167,4 @@ def check_startup_settings():
         print(error_message)
         sys.exit(1)
 
-# 在模块加载时执行检查
 check_startup_settings()

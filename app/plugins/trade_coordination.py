@@ -99,12 +99,13 @@ async def _cmd_focus_fire(event, parts):
 
         await progress_msg.edit(f"✅ `已收到挂单ID`: `{listing_id}`\n⏳ 正在计算并分发同步时间点 (阶段3)...")
 
+        buffer_seconds = settings.TRADE_COORDINATION_CONFIG.get('focus_fire_sync_buffer_seconds', 5)
         now_utc = datetime.now(timezone.utc)
-        go_time = now_utc + timedelta(seconds=5)
+        go_time = now_utc + timedelta(seconds=buffer_seconds)
         wait_duration = (go_time - now_utc).total_seconds()
         
         await progress_msg.edit(f"✅ `同步点已设定`\n将在 **{wait_duration:.1f}** 秒后同步执行...")
-
+        
         async def buyer_action():
             await asyncio.sleep(wait_duration)
             purchase_command = game_adaptor.buy_item(listing_id)
@@ -199,8 +200,13 @@ async def _cmd_receive_goods(event, parts):
 # --- Redis Task Handlers ---
 
 async def _handle_game_event(app, event_data):
+    """
+    [完整实现]
+    处理来自 Redis 的游戏事件，并更新相应的状态管理器。
+    """
     client = app.client
     my_id = str(client.me.id)
+    # 确保事件是针对当前账户的
     if my_id != event_data.get("account_id"):
         return
 
@@ -208,7 +214,42 @@ async def _handle_game_event(app, event_data):
     update_details = []
     event_type = event_data.get("event_type")
 
-    # ... (event handling logic remains the same)
+    # 根据事件类型，调用不同的状态管理器
+    if event_type == "TRADE_COMPLETED":
+        for item, qty in event_data.get("gained", {}).items():
+            await inventory_manager.add_item(item, qty)
+            update_details.append(f"获得`{item}`x{qty}")
+        for item, qty in event_data.get("sold", {}).items():
+            await inventory_manager.remove_item(item, qty)
+            update_details.append(f"售出`{item}`x{qty}")
+    
+    elif event_type == "DONATION_COMPLETED":
+        for item, qty in event_data.get("consumed_item", {}).items():
+            await inventory_manager.remove_item(item, qty)
+            update_details.append(f"捐献`{item}`x{qty}")
+        await stats_manager.add_contribution(event_data.get("gained_contribution", 0))
+        update_details.append(f"贡献增加`{event_data.get('gained_contribution', 0)}`")
+
+    elif event_type == "EXCHANGE_COMPLETED":
+        for item, qty in event_data.get("gained_item", {}).items():
+            await inventory_manager.add_item(item, qty)
+            update_details.append(f"兑换获得`{item}`x{qty}")
+        await stats_manager.remove_contribution(event_data.get("consumed_contribution", 0))
+        update_details.append(f"贡献减少`{event_data.get('consumed_contribution', 0)}`")
+        
+    elif event_type == "CONTRIBUTION_GAINED":
+        await stats_manager.add_contribution(event_data.get("gained_contribution", 0))
+        update_details.append(f"贡献增加`{event_data.get('gained_contribution', 0)}`")
+
+    elif event_type in ["TOWER_CHALLENGE_COMPLETED", "CRAFTING_COMPLETED", "HARVEST_COMPLETED"]:
+        for item, qty in event_data.get("gained_items", {}).items():
+            await inventory_manager.add_item(item, qty)
+            update_details.append(f"获得`{item}`x{qty}")
+            
+    elif event_type in ["LEARNING_COMPLETED", "SOWING_COMPLETED"]:
+         for item, qty in event_data.get("consumed_item", {}).items():
+            await inventory_manager.remove_item(item, qty)
+            update_details.append(f"消耗`{item}`x{qty}")
 
     if update_details:
         await client.send_admin_notification(f"📦 **状态更新通知 (`@{my_username}`)**\n{', '.join(update_details)}")
@@ -300,11 +341,11 @@ async def _check_crafting_session_timeouts():
                     format_and_log(LogType.TASK, "智能炼制-超时检查", {'状态': '发现超时任务', '会话ID': session_id})
                     
                     owner_id = session_id.split('_')[1]
-                    # 向发起者发送失败通知 (需要一个方法来通过ID发送消息，此处简化)
-                    # 假设 send_admin_notification 可以接受 target_id
-                    # await app.client.send_admin_notification(
-                    #     f"⚠️ **智能炼制任务超时**\n\n任务 (ID: `...{session_id[-6:]}`) 已超时，任务已取消。",
-                    # )
+                    # 向发起者发送失败通知
+                    await app.client.send_admin_notification(
+                        f"⚠️ **智能炼制任务超时**\n\n"
+                        f"为炼制 `{session_data.get('item', '未知物品')}` 发起的任务 (ID: `...{session_id[-6:]}`) 已超时并取消。"
+                    )
                     
                     await db.hdel(CRAFTING_SESSIONS_KEY, session_id)
 
