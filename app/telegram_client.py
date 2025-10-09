@@ -59,7 +59,7 @@ class TelegramClient:
                                       events.Raw(types=[UpdateDeleteChannelMessages, UpdateDeleteMessages]))
 
     async def _persist_timestamps(self):
-        if data_manager and data_manager.db:
+        if data_manager and data_manager.db and data_manager.db.is_connected:
             await data_manager.save_value(STATE_KEY_LAST_TIMESTAMPS, self.last_message_timestamps)
 
     async def _load_timestamps(self):
@@ -73,7 +73,6 @@ class TelegramClient:
             chat_entity = await self.client.get_entity(chat_id)
             user_entity = await self.client.get_entity(int(user_id))
             participant = await self.client(GetParticipantRequest(chat_entity, user_entity))
-            # participant.participant can be None if user is not in channel
             if participant and hasattr(participant, 'participant'):
                  return getattr(participant.participant, 'until_date', None)
             return None
@@ -81,36 +80,22 @@ class TelegramClient:
             format_and_log(LogType.ERROR, "查询参与者信息失败", {'Chat': chat_id, 'User': user_id, '错误': str(e)})
             return None
 
-    # [新增] 核心方法：计算最早可发送时间
     async def get_next_sendable_time(self, chat_id: int) -> datetime:
-        """
-        计算并返回在指定聊天中，当前客户端最早可以发送消息的UTC时间。
-        会综合考虑慢速模式和内部发送延迟。
-        """
         now_utc = datetime.now(timezone.utc)
-        
-        # 1. 检查慢速模式 (来自Telethon的GetParticipant)
         my_id = self.me.id
         slow_mode_until = await self.get_participant_info(chat_id, my_id)
-        
-        # 2. 检查内部发送冷却 (send_delay)
         last_sent_timestamp = self.last_message_timestamps.get(chat_id, 0)
         send_delay = random.uniform(settings.SEND_DELAY['min'], settings.SEND_DELAY['max'])
         internal_cooldown_until = datetime.fromtimestamp(last_sent_timestamp + send_delay, tz=timezone.utc)
-
-        # 取两者中更晚的时间点
         earliest_time = max(now_utc, internal_cooldown_until)
         if slow_mode_until and slow_mode_until > earliest_time:
             earliest_time = slow_mode_until
-
         return earliest_time
-
 
     async def reply_to_admin(self, event, text: str, **kwargs):
         try:
             reply_message = await event.reply(text, **kwargs)
-            self._schedule_message_deletion(reply_message, settings.AUTO_DELETE.get('delay_admin_command'),
-                                            "助手对管理员的回复")
+            self._schedule_message_deletion(reply_message, settings.AUTO_DELETE.get('delay_admin_command'), "助手对管理员的回复")
             return reply_message
         except Exception as e:
             format_and_log(LogType.ERROR, "回复管理员失败", {'错误': str(e)}, level=logging.ERROR)
@@ -124,20 +109,14 @@ class TelegramClient:
                 if not target_group:
                     if future and not future.done(): future.set_exception(Exception("No target group specified."))
                     continue
-
-                # 在发送前再次计算实际需要等待的时间
                 earliest_send_time = await self.get_next_sendable_time(target_group)
                 now_utc = datetime.now(timezone.utc)
                 wait_seconds = (earliest_send_time - now_utc).total_seconds()
-                if wait_seconds > 0:
-                    await asyncio.sleep(wait_seconds)
-
+                if wait_seconds > 0: await asyncio.sleep(wait_seconds)
                 final_reply_to = reply_to
                 if target_group in settings.GAME_GROUP_IDS and settings.GAME_TOPIC_ID and not reply_to:
                     final_reply_to = settings.GAME_TOPIC_ID
-
                 sent_message = await self.client.send_message(target_group, command, reply_to=final_reply_to)
-                
                 if sent_message:
                     self.last_message_timestamps[target_group] = time.time()
                     await self._persist_timestamps()
@@ -145,29 +124,22 @@ class TelegramClient:
                     if future and not future.done(): future.set_result(sent_message)
                 else:
                     raise Exception("Failed to send message.")
-
             except Exception as e:
                 if future and not future.done(): future.set_exception(e)
 
-    async def _send_command_and_get_message(self, command: str, reply_to: int = None,
-                                           target_chat_id: int = None) -> Message:
+    async def _send_command_and_get_message(self, command: str, reply_to: int = None, target_chat_id: int = None) -> Message:
         future = asyncio.Future()
         await self.message_queue.put((command, reply_to, future, target_chat_id))
         return await future
 
-    async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None,
-                                                 target_chat_id: int = None) -> tuple[Message, Message]:
-        strategy = settings.AUTO_DELETE_STRATEGIES['request_response']
-        sent_message = None
+    async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
+        strategy = settings.AUTO_DELETE_STRATEGIES['request_response']; sent_message = None
         try:
-            sent_message, reply_message = await self._send_and_wait_for_response(
-                command, reply_to=reply_to, timeout=timeout, target_chat_id=target_chat_id
-            )
+            sent_message, reply_message = await self._send_and_wait_for_response(command, reply_to=reply_to, timeout=timeout, target_chat_id=target_chat_id)
             self._schedule_message_deletion(sent_message, strategy['delay_self_on_reply'], "游戏指令(问答-成功)")
             return sent_message, reply_message
         except CommandTimeoutError as e:
-            if e.sent_message:
-                self._schedule_message_deletion(e.sent_message, strategy['delay_self_on_timeout'], "游戏指令(问答-超时)")
+            if e.sent_message: self._schedule_message_deletion(e.sent_message, strategy['delay_self_on_timeout'], "游戏指令(问答-超时)")
             raise e
 
     async def send_game_command_fire_and_forget(self, command: str, reply_to: int = None, target_chat_id: int = None):
@@ -175,14 +147,10 @@ class TelegramClient:
         sent_message = await self._send_command_and_get_message(command, reply_to, target_chat_id)
         self._schedule_message_deletion(sent_message, strategy['delay_self'], "游戏指令(发后不理)")
 
-    async def send_and_wait_for_edit(self, command: str, initial_pattern: str, final_pattern: str,
-                                     timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
-        strategy = settings.AUTO_DELETE_STRATEGIES['request_response']
-        sent_message = None; initial_reply_id = None
+    async def send_and_wait_for_edit(self, command: str, initial_pattern: str, final_pattern: str, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
+        strategy = settings.AUTO_DELETE_STRATEGIES['request_response']; sent_message = None; initial_reply_id = None
         try:
-            sent_message, initial_reply = await self._send_and_wait_for_response(
-                command, final_pattern=initial_pattern, target_chat_id=target_chat_id
-            )
+            sent_message, initial_reply = await self._send_and_wait_for_response(command, final_pattern=initial_pattern, target_chat_id=target_chat_id)
             initial_reply_id = initial_reply.id
             future = asyncio.Future()
             self.pending_edits[initial_reply_id] = {'future': future, 'pattern': final_pattern}
@@ -190,14 +158,12 @@ class TelegramClient:
             self._schedule_message_deletion(sent_message, strategy['delay_self_on_reply'], "游戏指令(编辑-成功)")
             return sent_message, final_message
         except (asyncio.TimeoutError, CommandTimeoutError) as e:
-            if sent_message:
-                self._schedule_message_deletion(sent_message, strategy['delay_self_on_timeout'], "游戏指令(编辑-超时)")
+            if sent_message: self._schedule_message_deletion(sent_message, strategy['delay_self_on_timeout'], "游戏指令(编辑-超时)")
             raise CommandTimeoutError(f"等待指令 '{command}' 的编辑回复超时。", sent_message) from e
         finally:
             if initial_reply_id: self.pending_edits.pop(initial_reply_id, None)
 
-    async def _send_and_wait_for_response(self, command: str, final_pattern: str = ".*", timeout: int = None,
-                                          reply_to: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
+    async def _send_and_wait_for_response(self, command: str, final_pattern: str = ".*", timeout: int = None, reply_to: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
         timeout = timeout or settings.COMMAND_TIMEOUT; sent_message = None
         try:
             future = asyncio.Future()
@@ -215,8 +181,7 @@ class TelegramClient:
         self.me = await self.client.get_me()
         my_name = get_display_name(self.me)
         identity = "主控账号 (Admin)" if str(self.me.id) == str(self.admin_id) else "辅助账号 (Helper)"
-        format_and_log(LogType.SYSTEM, "客户端状态",
-                       {'状态': '已成功连接', '当前用户': f"{my_name} (ID: {self.me.id})", '识别身份': identity})
+        format_and_log(LogType.SYSTEM, "客户端状态", {'状态': '已成功连接', '当前用户': f"{my_name} (ID: {self.me.id})", '识别身份': identity})
         await self._load_timestamps()
         asyncio.create_task(self._message_sender_loop())
 
@@ -230,14 +195,11 @@ class TelegramClient:
                 if isinstance(entity, Channel):
                     full_channel = await self.client(GetFullChannelRequest(channel=entity))
                     self.slowmode_cache[int(group_id)] = getattr(full_channel.full_chat, 'slowmode_seconds', 0) or 0
-                else:
-                    self.slowmode_cache[int(group_id)] = 0
+                else: self.slowmode_cache[int(group_id)] = 0
             except Exception as e:
-                self.group_name_cache[int(group_id)] = f"ID:{group_id} (获取名称失败)"
-                self.slowmode_cache[int(group_id)] = 0
+                self.group_name_cache[int(group_id)] = f"ID:{group_id} (获取名称失败)"; self.slowmode_cache[int(group_id)] = 0
                 logging.warning(f"获取群组 {group_id} 的完整信息失败: {e}")
-        format_and_log(LogType.SYSTEM, "缓存初始化",
-                       {'模块': '群组信息', '缓存数量': len(self.group_name_cache), '慢速模式': self.slowmode_cache})
+        format_and_log(LogType.SYSTEM, "缓存初始化", {'模块': '群组信息', '缓存数量': len(self.group_name_cache), '慢速模式': self.slowmode_cache})
 
     def is_connected(self): return self.client.is_connected()
     async def disconnect(self): await self.client.disconnect()
@@ -246,11 +208,18 @@ class TelegramClient:
             async for _ in self.client.iter_dialogs(limit=20): pass
         except Exception: pass
 
+    # [修复] 增加详细的错误日志
     async def send_admin_notification(self, message: str, target_id: int = None):
+        target = target_id or settings.CONTROL_GROUP_ID or self.admin_id
         try:
-            target = target_id or settings.CONTROL_GROUP_ID or self.admin_id
             await self.client.send_message(target, message, parse_mode='md')
-        except Exception: pass
+        except Exception as e:
+            format_and_log(
+                LogType.ERROR,
+                "发送管理员通知失败",
+                {'目标ID': target, '错误': str(e)},
+                level=logging.ERROR
+            )
 
     async def _sleep_and_delete(self, delay: int, message: Message):
         await asyncio.sleep(delay)
