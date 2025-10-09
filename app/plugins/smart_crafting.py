@@ -2,6 +2,7 @@
 import json
 import re
 import time
+import asyncio
 
 from app import game_adaptor
 from app.constants import CRAFTING_SESSIONS_KEY
@@ -9,15 +10,16 @@ from app.context import get_application
 from app.logging_service import LogType, format_and_log
 from app.plugins.logic import crafting_logic, trade_logic
 from app.utils import create_error_reply, parse_item_and_quantity
+from app.plugins.common_tasks import update_inventory_cache
 
-HELP_TEXT_SMART_CRAFT = """✨ **智能炼制 (全自动)**
-**说明**: 终极一键指令。自动检查材料，如果不足则自动向网络收集，材料收齐后**自动执行最终炼制**。
+HELP_TEXT_SMART_CRAFT = """✨ **智能炼制 (v3.0 - 发起者优先版)**
+**说明**: 采用“发起者优先”策略。优先计算本机所需材料，只为真正缺失的部分向网络求助。
 **用法**: `,智能炼制 <物品名称> [数量]`
 **示例**: `,智能炼制 增元丹 2`
 """
 
-HELP_TEXT_GATHER_MATERIALS = """📦 **凑材料 (只收集)**
-**说明**: 与智能炼制类似，但**只负责收集材料**。材料集齐后任务即结束，**不会自动合成**。
+HELP_TEXT_GATHER_MATERIALS = """📦 **凑材料 (v3.0 - 发起者优先版)**
+**说明**: 与智能炼制类似，优先计算本机所需，只为缺失部分向网络求助，且只收集不合成。
 **用法**: `,凑材料 <物品名称> [数量]`
 **示例**: `,凑材料 增元丹 2`
 """
@@ -40,13 +42,14 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
     client.pin_message(progress_message)
 
     try:
-        # 1. 检查本地材料
-        required_materials = await crafting_logic.logic_check_local_materials(item_to_craft, quantity)
-        if isinstance(required_materials, str):  # 检查是否返回了错误信息
-            raise ValueError(required_materials)
+        # [核心修正] 不再强制刷新，信任事件驱动的缓存
+        # 1. 检查本地材料，获取“缺失清单”
+        missing_locally = await crafting_logic.logic_check_local_materials(item_to_craft, quantity)
+        if isinstance(missing_locally, str):  # 检查是否返回了错误信息
+            raise ValueError(missing_locally)
 
         # 2. 本地材料充足
-        if not required_materials:
+        if not missing_locally:
             if synthesize_after:
                 await progress_message.edit(f"✅ **本地材料充足**\n正在为您执行炼制操作...")
                 # 复用 crafting_actions 的逻辑
@@ -57,23 +60,21 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
                 await progress_message.edit(f"✅ **本地材料充足**\n无需从网络收集材料。")
             return
 
-        # 3. 本地材料不足，开始规划网络收集
-        await progress_message.edit(f"⚠️ **本地材料不足**\n正在启动P2P协同，规划材料收集...")
-        plan = await crafting_logic.logic_plan_crafting_session(item_to_craft, my_id, quantity)
+        # 3. 本地材料不足，拿着“缺失清单”去网络规划
+        await progress_message.edit(f"⚠️ **本地材料不足**\n- 缺失: `{json.dumps(missing_locally, ensure_ascii=False)}`\n正在启动P2P协同，规划材料收集...")
+        # [核心修正] 将“缺失清单”传递给规划函数
+        plan = await crafting_logic.logic_plan_crafting_session(missing_locally, my_id)
         if isinstance(plan, str): raise RuntimeError(plan)
 
         if not plan:
-            await progress_message.edit(f"ℹ️ **无需收集**: 网络中没有其他助手需要为此任务贡献材料。")
+            await progress_message.edit(f"ℹ️ **网络中亦无足够材料**\n无法完成材料收集。")
             return
 
         # 4. 创建并发布收集任务
         session_id = f"craft_{my_id}_{int(time.time())}"
         session_data = {
-            "item": item_to_craft,
-            "quantity": quantity,
-            "status": "gathering",
-            "synthesize": synthesize_after,  # 核心区别点
-            "needed_from": {executor_id: False for executor_id in plan.keys()},
+            "item": item_to_craft, "quantity": quantity, "status": "gathering",
+            "synthesize": synthesize_after, "needed_from": {executor_id: False for executor_id in plan.keys()},
             "timestamp": time.time()
         }
         await app.redis_db.hset(CRAFTING_SESSIONS_KEY, session_id, json.dumps(session_data))
@@ -93,13 +94,8 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
                     listing_id = match.group(1)
                     report_lines[-1] += f" -> 挂单ID: `{listing_id}` (已通知)"
                     task = {
-                        "task_type": "purchase_item",
-                        "target_account_id": executor_id,
-                        "payload": {
-                            "item_id": listing_id,
-                            "cost": {"name": "灵石", "quantity": 1},
-                            "crafting_session_id": session_id
-                        }
+                        "task_type": "purchase_item", "target_account_id": executor_id,
+                        "payload": {"item_id": listing_id, "cost": {"name": "灵石", "quantity": 1}, "crafting_session_id": session_id}
                     }
                     await trade_logic.publish_task(task)
                 else:
@@ -120,7 +116,7 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
         error_text = create_error_reply(cmd_name, "任务失败", details=str(e))
         await progress_message.edit(error_text)
     finally:
-        client.unpin_message(progress_message)
+        client.unpin_message(progress_msg)
 
 async def _cmd_smart_craft(event, parts):
     await _execute_coordinated_crafting(event, parts, synthesize_after=True)
