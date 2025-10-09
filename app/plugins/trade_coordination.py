@@ -114,34 +114,28 @@ async def _cmd_focus_fire(event, parts):
         if executor_until_date and executor_until_date > latest_time:
             latest_time = executor_until_date
 
-        # [重构] 计算权威时间点，并增加一个小的网络延迟缓冲
         go_time = latest_time + timedelta(seconds=0.5)
         wait_duration = (go_time - now_utc).total_seconds()
         
         await progress_msg.edit(f"✅ `同步点已计算`\n根据服务器权威时间，将在 **{wait_duration:.1f}** 秒后同步执行...")
-
-        # --- [重构] 购买方和出售方任务并行启动 ---
         
-        # 购买方任务 (本地执行)
         async def buyer_action():
             if wait_duration > 0:
                 await asyncio.sleep(wait_duration)
             purchase_command = game_adaptor.buy_item(listing_id)
             await client.send_game_command_fire_and_forget(purchase_command)
 
-        # 出售方任务 (通过 Redis 分发)
         async def seller_action():
             delist_task_payload = {
                 "task_type": "execute_synced_delist",
                 "target_account_id": executor_id,
                 "payload": {
                     "item_id": listing_id,
-                    "go_time_iso": go_time.isoformat() # 传递权威时间戳
+                    "go_time_iso": go_time.isoformat()
                 }
             }
             await trade_logic.publish_task(delist_task_payload)
 
-        # 并发启动
         await asyncio.gather(buyer_action(), seller_action())
         
         await progress_msg.edit(f"✅ **集火任务完成** (挂单ID: `{listing_id}`)\n- `购买`指令已在同步点发送\n- `同步下架`指令已通知出售方在同步点发送")
@@ -251,15 +245,24 @@ async def _handle_broadcast_command(app, data):
 async def redis_message_handler(message):
     app = get_application()
     
-    # [重构] 简化处理器映射
     task_handlers = {
         "listing_successful": _handle_listing_successful,
         "broadcast_command": _handle_broadcast_command,
     }
     
     try:
-        channel = message['channel'].decode('utf-8')
-        data = json.loads(message['data'])
+        # [修复] 移除 .decode()，因为 decode_responses=True 已经处理
+        channel = message['channel']
+        data_str = message['data']
+        
+        # 确保 data 是字符串类型再加载
+        if isinstance(data_str, bytes):
+            data = json.loads(data_str.decode('utf-8'))
+        elif isinstance(data_str, str):
+            data = json.loads(data_str)
+        else:
+             format_and_log(LogType.WARNING, "Redis 任务处理器", {'状态': '跳过', '原因': '消息数据格式未知', '类型': type(data_str)})
+             return
 
         if channel == GAME_EVENTS_CHANNEL:
             await _handle_game_event(app, data)
@@ -275,14 +278,12 @@ async def redis_message_handler(message):
         if handler := task_handlers.get(task_type):
             await handler(app, data)
 
-        # [重构] 将目标账户的任务处理逻辑统一
         elif str(app.client.me.id) == data.get("target_account_id"):
             format_and_log(LogType.TASK, "Redis 任务匹配成功", {'任务类型': task_type, '详情': str(data)})
             if task_type == "list_item_for_ff":
                 await trade_logic.execute_listing_task(app, data['requester_account_id'], **data.get("payload", {}))
             elif task_type == "purchase_item":
                 await trade_logic.execute_purchase_task(app, data.get("payload", {}))
-            # [新增] 处理新的同步下架任务
             elif task_type == "execute_synced_delist":
                 await trade_logic.execute_synced_unlisting_task(app, data.get("payload", {}))
 

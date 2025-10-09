@@ -13,7 +13,7 @@ from app.context import get_application
 
 
 async def publish_task(task: dict, channel: str = TASK_CHANNEL) -> bool:
-    if not redis_client.db:
+    if not redis_client.db or not redis_client.db.is_connected:
         format_and_log(LogType.ERROR, "任务/事件发布失败", {'原因': 'Redis未连接'}, level=logging.ERROR)
         return False
     try:
@@ -21,9 +21,11 @@ async def publish_task(task: dict, channel: str = TASK_CHANNEL) -> bool:
         receiver_count = await redis_client.db.publish(channel, payload)
         log_data = {'频道': channel, '任务/事件': task.get('task_type') or task.get('event_type'), '接收者数量': receiver_count}
 
-        log_level = logging.INFO if receiver_count > 0 else logging.DEBUG
+        # [修复] 使用正确的 LogType 枚举，而不是 logging 模块的整数级别
+        log_type = LogType.DEBUG if receiver_count > 0 else LogType.SYSTEM
+        log_level = logging.DEBUG if receiver_count > 0 else logging.INFO
 
-        format_and_log(log_level, f"Redis-发布", log_data)
+        format_and_log(log_type, "Redis-发布", log_data, level=log_level)
         return True
     except Exception as e:
         format_and_log(LogType.ERROR, "任务/事件发布异常", {'错误': str(e)}, level=logging.ERROR)
@@ -31,7 +33,7 @@ async def publish_task(task: dict, channel: str = TASK_CHANNEL) -> bool:
 
 
 async def find_best_executor(item_name: str, required_quantity: int, exclude_id: str) -> (str, int):
-    if not data_manager.db: return None, 0
+    if not data_manager.db or not data_manager.db.is_connected: return None, 0
     best_account_id = None
     min_sufficient_quantity = float('inf')
     try:
@@ -117,7 +119,6 @@ async def execute_unlisting_task(app, item_id: str, is_auto: bool = False):
             f"**错误**: `{e}`"
         )
 
-# [新增] 处理同步下架任务的逻辑
 async def execute_synced_unlisting_task(app, payload: dict):
     """
     根据给定的权威时间戳，计算等待时间并执行下架指令。

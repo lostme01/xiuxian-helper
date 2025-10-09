@@ -14,8 +14,9 @@ from app import gemini_client
 from app.character_stats_manager import stats_manager
 from app.constants import GAME_EVENTS_CHANNEL, TASK_CHANNEL, STATE_KEY_PROFILE
 from app.context import get_application, set_application, set_scheduler
-from app.data_manager import data_manager
-from app.inventory_manager import inventory_manager
+# [Fix] Defer singleton imports to __init__ to prevent circular dependencies
+# from app.data_manager import data_manager
+# from app.inventory_manager import inventory_manager
 from app.logging_service import LogType, TimezoneFormatter, format_and_log
 from app.plugins import load_all_plugins
 from app.redis_client import initialize_redis
@@ -27,8 +28,12 @@ from config import settings
 
 class Application:
     def __init__(self):
+        # [Fix] Import singletons here, after all modules are loaded
+        from app.data_manager import data_manager
+        from app.inventory_manager import inventory_manager
+        
         self.client: TelegramClient = None
-        self.redis_db = None # 这将被赋予 RedisWrapper 实例
+        self.redis_db = None
         self.data_manager = data_manager
         self.inventory_manager = inventory_manager
         self.stats_manager = stats_manager
@@ -50,18 +55,14 @@ class Application:
         from app.plugins.trade_coordination import redis_message_handler
 
         while True:
-            # [重构] 循环的开始就检查连接状态
             if not self.redis_db or not self.redis_db.is_connected:
-                # 只有在 Redis 被配置为启用时才记录日志和等待
                 if settings.REDIS_CONFIG.get('enabled'):
                     format_and_log(LogType.WARNING, "Redis 监听器", {'状态': '暂停', '原因': 'Redis 未连接'})
-                    await asyncio.sleep(15) # 等待一段时间后重试
+                    await asyncio.sleep(15)
                 else:
-                    # 如果 Redis 被禁用，则直接退出循环
                     return
 
             try:
-                # 使用包装器提供的 pubsub() 方法
                 async with self.redis_db.pubsub() as pubsub:
                     await pubsub.subscribe(TASK_CHANNEL, GAME_EVENTS_CHANNEL)
                     format_and_log(LogType.SYSTEM, "核心服务",
@@ -69,7 +70,6 @@ class Application:
 
                     async for message in pubsub.listen():
                         if not self.redis_db.is_connected:
-                            # 在监听过程中检测到连接断开，立即中断并进入外层重试循环
                             format_and_log(LogType.WARNING, "Redis 监听器", {'状态': '中断', '原因': '连接在监听时丢失'})
                             break
                         
@@ -78,7 +78,6 @@ class Application:
                             asyncio.create_task(redis_message_handler(message))
 
             except Exception as e:
-                # 这里的异常更多是逻辑错误，而不是连接错误（连接错误已被包装器处理）
                 format_and_log(LogType.ERROR, "Redis 监听循环异常", {'错误': str(e)}, level=logging.CRITICAL)
                 await asyncio.sleep(15)
 
