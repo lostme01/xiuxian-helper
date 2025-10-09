@@ -21,7 +21,6 @@ async def publish_task(task: dict, channel: str = TASK_CHANNEL) -> bool:
         receiver_count = await redis_client.db.publish(channel, payload)
         log_data = {'频道': channel, '任务/事件': task.get('task_type') or task.get('event_type'), '接收者数量': receiver_count}
 
-        # [修复] 使用正确的 LogType 枚举，而不是 logging 模块的整数级别
         log_type = LogType.DEBUG if receiver_count > 0 else LogType.SYSTEM
         log_level = logging.DEBUG if receiver_count > 0 else logging.INFO
 
@@ -119,6 +118,7 @@ async def execute_unlisting_task(app, item_id: str, is_auto: bool = False):
             f"**错误**: `{e}`"
         )
 
+
 async def execute_synced_unlisting_task(app, payload: dict):
     """
     根据给定的权威时间戳，计算等待时间并执行下架指令。
@@ -147,7 +147,7 @@ async def execute_synced_unlisting_task(app, payload: dict):
 
         command = game_adaptor.unlist_item(item_id)
         await app.client.send_game_command_fire_and_forget(command)
-        format_and_log(LogType.TASK, "同步下架", {'阶段': '指令已发送', '挂单ID': item_id})
+        format_and_log(LogType.TASK, "同步下架", {'阶段': '指令已在同步点发送', '挂单ID': item_id})
 
     except Exception as e:
         my_username = app.client.me.username if app.client.me else "未知助手"

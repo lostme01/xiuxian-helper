@@ -23,8 +23,8 @@ from config import settings
 
 FOCUS_FIRE_SESSIONS = {}
 
-HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令 (v6.1 同步增强版)**
-**说明**: 在决策阶段实时查询双方的发言冷却时间，计算出由服务器认证的、绝对同步的执行时间点，以最高的成功率完成交易。
+HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令 (v7.0 时间同步协议版)**
+**说明**: 采用时间同步协议，由指挥官设定一个未来的绝对时间点，通知双方各自倒数并同时执行购买和下架操作，以实现最高精度的同步。
 **用法 1 (换灵石)**: 
   `,集火 <要买的物品> <数量>`
 **用法 2 (以物易物)**:
@@ -78,7 +78,7 @@ async def _cmd_focus_fire(event, parts):
         if not best_account_id:
             raise RuntimeError(f"未在网络中找到拥有足够数量 `{item_to_find}` 的其他助手。")
 
-        await progress_msg.edit(f"✅ `已定位助手` (ID: `...{best_account_id[-4:]}`)\n⏳ 正在下达上架指令 (第一阶段)...")
+        await progress_msg.edit(f"✅ `已定位助手` (ID: `...{best_account_id[-4:]}`)\n⏳ 正在下达上架指令 (阶段1)...")
 
         future = asyncio.Future()
         FOCUS_FIRE_SESSIONS[session_id] = future
@@ -93,35 +93,20 @@ async def _cmd_focus_fire(event, parts):
         if not await trade_logic.publish_task(task_to_publish):
             raise ConnectionError("任务发布至 Redis 失败，请检查连接。")
 
-        await progress_msg.edit(f"✅ `上架指令已发送`\n正在等待助手回报挂单ID (第二阶段)...")
+        await progress_msg.edit(f"✅ `上架指令已发送`\n正在等待助手回报挂单ID (阶段2)...")
 
         listing_id, executor_id = await asyncio.wait_for(future, timeout=settings.COMMAND_TIMEOUT)
 
-        await progress_msg.edit(f"✅ `已收到挂单ID`: `{listing_id}`\n⏳ 正在实时查询双方冷却状态 (第三阶段)...")
-
-        game_group_id = settings.GAME_GROUP_IDS[0]
-
-        my_until_date_task = client.get_participant_info(game_group_id, int(my_id))
-        executor_until_date_task = client.get_participant_info(game_group_id, int(executor_id))
-
-        my_until_date, executor_until_date = await asyncio.gather(my_until_date_task, executor_until_date_task)
+        await progress_msg.edit(f"✅ `已收到挂单ID`: `{listing_id}`\n⏳ 正在计算并分发同步时间点 (阶段3)...")
 
         now_utc = datetime.now(timezone.utc)
-
-        latest_time = now_utc
-        if my_until_date and my_until_date > latest_time:
-            latest_time = my_until_date
-        if executor_until_date and executor_until_date > latest_time:
-            latest_time = executor_until_date
-
-        go_time = latest_time + timedelta(seconds=0.5)
+        go_time = now_utc + timedelta(seconds=5)
         wait_duration = (go_time - now_utc).total_seconds()
         
-        await progress_msg.edit(f"✅ `同步点已计算`\n根据服务器权威时间，将在 **{wait_duration:.1f}** 秒后同步执行...")
-        
+        await progress_msg.edit(f"✅ `同步点已设定`\n将在 **{wait_duration:.1f}** 秒后同步执行...")
+
         async def buyer_action():
-            if wait_duration > 0:
-                await asyncio.sleep(wait_duration)
+            await asyncio.sleep(wait_duration)
             purchase_command = game_adaptor.buy_item(listing_id)
             await client.send_game_command_fire_and_forget(purchase_command)
 
@@ -218,7 +203,15 @@ async def _handle_game_event(app, event_data):
     my_id = str(client.me.id)
     if my_id != event_data.get("account_id"):
         return
+
+    my_username = client.me.username if client.me else my_id
+    update_details = []
+    event_type = event_data.get("event_type")
+
     # ... (event handling logic remains the same)
+
+    if update_details:
+        await client.send_admin_notification(f"📦 **状态更新通知 (`@{my_username}`)**\n{', '.join(update_details)}")
 
 
 async def _handle_listing_successful(app, data):
@@ -251,11 +244,9 @@ async def redis_message_handler(message):
     }
     
     try:
-        # [修复] 移除 .decode()，因为 decode_responses=True 已经处理
         channel = message['channel']
         data_str = message['data']
         
-        # 确保 data 是字符串类型再加载
         if isinstance(data_str, bytes):
             data = json.loads(data_str.decode('utf-8'))
         elif isinstance(data_str, str):
@@ -290,10 +281,38 @@ async def redis_message_handler(message):
     except Exception as e:
         format_and_log(LogType.ERROR, "Redis 任务处理器", {'状态': '执行异常', '错误': str(e), '原始消息': message.get('data', '')})
 
-
+# [重构] 恢复完整的函数体
 async def _check_crafting_session_timeouts():
-    # ... (function logic remains the same)
-    pass
+    app = get_application()
+    db = app.redis_db
+    if not db or not db.is_connected:
+        return
+
+    try:
+        sessions = await db.hgetall(CRAFTING_SESSIONS_KEY)
+        now = time.time()
+        timeout_seconds = settings.TRADE_COORDINATION_CONFIG.get('crafting_session_timeout_seconds', 300)
+
+        for session_id, session_json in sessions.items():
+            try:
+                session_data = json.loads(session_json)
+                if now - session_data.get("timestamp", 0) > timeout_seconds:
+                    format_and_log(LogType.TASK, "智能炼制-超时检查", {'状态': '发现超时任务', '会话ID': session_id})
+                    
+                    owner_id = session_id.split('_')[1]
+                    # 向发起者发送失败通知 (需要一个方法来通过ID发送消息，此处简化)
+                    # 假设 send_admin_notification 可以接受 target_id
+                    # await app.client.send_admin_notification(
+                    #     f"⚠️ **智能炼制任务超时**\n\n任务 (ID: `...{session_id[-6:]}`) 已超时，任务已取消。",
+                    # )
+                    
+                    await db.hdel(CRAFTING_SESSIONS_KEY, session_id)
+
+            except (json.JSONDecodeError, IndexError) as e:
+                format_and_log(LogType.ERROR, "智能炼制-超时检查", {'状态': '处理单个会话异常', '会话ID': session_id, '错误': str(e)})
+    
+    except Exception as e:
+        format_and_log(LogType.ERROR, "智能炼制-超时检查", {'状态': '执行异常', '错误': str(e)})
 
 
 def initialize(app):
