@@ -4,9 +4,10 @@ import logging
 import re
 
 from telethon import events
+from telethon.utils import get_display_name
 
 from app import game_adaptor
-from app.constants import CRAFTING_RECIPES_KEY, GAME_EVENTS_CHANNEL
+from app.constants import GAME_EVENTS_CHANNEL
 from app.context import get_application
 from app.logging_service import LogType, format_and_log
 from app.plugins.logic.trade_logic import publish_task
@@ -15,34 +16,29 @@ from config import settings
 
 async def _handle_parsing_error(client, event_name: str, error: Exception, raw_text: str):
     """
-    [NEW] 统一的解析失败处理器。
-    负责记录详细日志并向管理员发送警报。
+    统一的解析失败处理器。
     """
-    log_data = {
-        '事件': event_name,
-        '错误': str(error),
-        '原始文本': raw_text
-    }
+    log_data = {'事件': event_name, '错误': str(error), '原始文本': raw_text}
     format_and_log(LogType.ERROR, "游戏事件解析失败", log_data, level=logging.ERROR)
-
     await client.send_admin_notification(
         f"⚠️ **严重警报：游戏事件解析失败**\n\n"
         f"**事件类型**: `{event_name}`\n"
         f"**失败原因**: `{str(error)}`\n\n"
-        f"这很可能是因为游戏机器人更新了消息格式。请根据以下原文修正解析逻辑：\n"
-        f"-----------------\n"
-        f"`{raw_text}`"
+        f"请根据以下原文修正解析逻辑：\n`{raw_text}`"
     )
-
 
 async def handle_game_report(event):
     app = get_application()
     client = app.client
     my_id = str(client.me.id)
     my_username = client.me.username if client.me else None
-
-    if not (my_username and hasattr(event, 'text') and event.text):
+    
+    if not hasattr(event, 'text') or not event.text:
         return
+
+    my_display_name = get_display_name(client.me)
+    is_mentioning_me = (my_username and f"@{my_username}" in event.text) or \
+                       (my_display_name and my_display_name in event.text)
 
     is_reply_to_me = False
     original_message = None
@@ -53,14 +49,10 @@ async def handle_game_report(event):
             if reply_to_msg and reply_to_msg.sender_id == client.me.id:
                 is_reply_to_me = True
                 original_message = reply_to_msg
-        except Exception: # Can fail if reply_to_msg is deleted
+        except Exception:
             pass
-
-    # A simple check for edits, a more robust system might use a global pending message dict
     elif hasattr(event, 'message') and event.message.edit_date:
         is_reply_to_me = True
-
-    is_mentioning_me = f"@{my_username}" in event.text
 
     if not is_reply_to_me and not is_mentioning_me:
         return
@@ -70,12 +62,24 @@ async def handle_game_report(event):
     event_name_for_error = "未知"
 
     try:
-        if "【万宝楼快报】" in text:
+        # [核心修复] 采用“指令-回复”匹配模式来精确识别下架事件
+        if original_message and ".下架" in original_message.text and "从万宝楼下架" in text:
+            event_name_for_error = "下架成功"
+            match = re.search(r"你已成功将 \*\*【(.+?)】\*\*x([\d,]+)", text)
+            if match:
+                item_name = match.group(1)
+                quantity = int(match.group(2).replace(',', ''))
+                event_payload = {
+                    "event_type": "DELIST_COMPLETED",
+                    "gained_items": {item_name: quantity}
+                }
+        
+        elif "【万宝楼快报】" in text:
             event_name_for_error = "万宝楼快报"
             gained_items, sold_items = {}, {}
-            gain_match = re.search(r"你获得了：(.*?)(?:你成功出售了|$)", text, re.DOTALL)
-            if gain_match:
-                for item, quantity in re.findall(r"【(.+?)】x([\d,]+)", gain_match.group(1)):
+            gained_match = re.search(r"你获得了：\s*(.*)", text, re.DOTALL)
+            if gained_match:
+                for item, quantity in re.findall(r"【(.+?)】x([\d,]+)", gained_match.group(1)):
                     gained_items[item] = int(quantity.replace(',', ''))
             sold_match = re.search(r"你成功出售了【(.+?)】x([\d,]+)", text)
             if sold_match:
@@ -162,6 +166,5 @@ async def handle_game_report(event):
 
 
 def initialize(app):
-    # This handler will now catch both new messages and edits, reducing redundancy
     app.client.client.on(events.NewMessage(incoming=True, chats=settings.GAME_GROUP_IDS))(handle_game_report)
     app.client.client.on(events.MessageEdited(incoming=True, chats=settings.GAME_GROUP_IDS))(handle_game_report)

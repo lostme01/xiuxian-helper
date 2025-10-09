@@ -12,14 +12,14 @@ from app.plugins.logic import crafting_logic, trade_logic
 from app.utils import create_error_reply, parse_item_and_quantity
 from app.plugins.common_tasks import update_inventory_cache
 
-HELP_TEXT_SMART_CRAFT = """✨ **智能炼制 (v3.1 - 熔断机制版)**
-**说明**: 采用“发起者优先”策略，并在材料收集中加入熔断机制。任何一个上架环节失败，整个任务将立即中止并清理，防止后续错误。
+HELP_TEXT_SMART_CRAFT = """✨ **智能炼制 (v3.2 - 指令修正版)**
+**说明**: 修复了当需要向其他助手收集材料时，生成的`.上架`指令格式错误的BUG。
 **用法**: `,智能炼制 <物品名称> [数量]`
 **示例**: `,智能炼制 增元丹 2`
 """
 
-HELP_TEXT_GATHER_MATERIALS = """📦 **凑材料 (v3.1 - 熔断机制版)**
-**说明**: 与智能炼制类似，任何一个上架环节失败都会立即中止任务。
+HELP_TEXT_GATHER_MATERIALS = """📦 **凑材料 (v3.2 - 指令修正版)**
+**说明**: 修复了当需要向其他助手收集材料时，生成的`.上架`指令格式错误的BUG。
 **用法**: `,凑材料 <物品名称> [数量]`
 **示例**: `,凑材料 增元丹 2`
 """
@@ -41,6 +41,7 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
     if not progress_message: return
     client.pin_message(progress_message)
 
+    session_id = f"craft_{my_id}_{int(time.time())}" # 在 try 块外部定义
     try:
         missing_locally = await crafting_logic.logic_check_local_materials(item_to_craft, quantity)
         if isinstance(missing_locally, str):
@@ -64,7 +65,6 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
             await progress_message.edit(f"ℹ️ **网络中亦无足够材料**\n无法完成材料收集。")
             return
 
-        session_id = f"craft_{my_id}_{int(time.time())}"
         session_data = {
             "item": item_to_craft, "quantity": quantity, "status": "gathering",
             "synthesize": synthesize_after, "needed_from": {executor_id: False for executor_id in plan.keys()},
@@ -74,7 +74,6 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
 
         report_lines = [f"✅ **规划完成 (会话ID: `{session_id[-6:]}`)**:"]
         
-        # [核心修复] 引入熔断机制
         plan_failed = False
         failure_reason = ""
 
@@ -84,7 +83,12 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
 
             try:
                 await progress_message.edit("\n".join(report_lines) + f"\n- 正在上架交易...")
-                list_command = game_adaptor.list_item("灵石", 1, materials_str, 1)
+                
+                # [核心修复] 直接、精确地拼接指令字符串，不再使用 game_adaptor.list_item
+                sell_item_name = "灵石"
+                sell_item_quantity = 1
+                list_command = f".上架 {sell_item_name}*{sell_item_quantity} 换 {materials_str}"
+                
                 _sent, reply = await client.send_game_command_request_response(list_command)
 
                 match = re.search(r"挂单ID\D+(\d+)", reply.text)
@@ -98,20 +102,19 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
                     session_data["needed_from"][executor_id] = "failed"
                     plan_failed = True
                     failure_reason = f"为 `{materials_str}` 上架失败。"
-                    break  # 立即中断循环
+                    break
             except Exception as e:
                 report_lines[-1] += f" -> ❌ **上架异常**: `{e}`"
                 session_data["needed_from"][executor_id] = "failed"
                 plan_failed = True
                 failure_reason = f"为 `{materials_str}` 上架时发生异常: {e}"
-                break  # 立即中断循环
+                break
             finally:
                  await progress_message.edit("\n".join(report_lines))
                  await app.redis_db.hset(CRAFTING_SESSIONS_KEY, session_id, json.dumps(session_data))
 
-
         if plan_failed:
-            await app.redis_db.hdel(CRAFTING_SESSIONS_KEY, session_id) # 清理失败的会话
+            await app.redis_db.hdel(CRAFTING_SESSIONS_KEY, session_id)
             final_text = "\n".join(report_lines) + f"\n\n❌ **任务中止**: {failure_reason}"
             await progress_message.edit(final_text)
             return
@@ -121,6 +124,8 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
         await progress_message.edit(final_text)
 
     except Exception as e:
+        if 'session_id' in locals() and app.redis_db and await app.redis_db.exists(CRAFTING_SESSIONS_KEY):
+            await app.redis_db.hdel(CRAFTING_SESSIONS_KEY, session_id)
         error_text = create_error_reply(cmd_name, "任务失败", details=str(e))
         await progress_message.edit(error_text)
     finally:

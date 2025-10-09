@@ -21,15 +21,16 @@ from config import settings
 
 FOCUS_FIRE_SESSIONS = {}
 
-# Help texts remain the same
 HELP_TEXT_FOCUS_FIRE = """🔥 **集火指令 (v9.0 状态质询同步版)**
 **说明**: 采用“状态质询”协议。指挥官（购买方）在行动前会主动查询双方的“最早可发言时间”，并以此为依据计算出一个对双方都安全的、动态的同步时间点，从根本上解决慢速模式和消息队列的干扰。
 **用法**: `,集火 <物品名称> <数量>`
 """
+
 HELP_TEXT_RECEIVE_GOODS = """📦 **收货指令**
 **说明**: 在控制群或私聊中，使用想发起任务的账号发送此指令。该账号将上架物品，并通知网络中拥有足够物品的另一个助手购买。
 **用法**: `,收货 <物品名称> <数量>`
 """
+
 
 async def _cmd_focus_fire(event, parts):
     app = get_application(); client = app.client; my_id = str(client.me.id); my_username = client.me.username or my_id
@@ -105,7 +106,6 @@ async def _cmd_receive_goods(event, parts):
     except Exception as e: await progress_msg.edit(create_error_reply("收货", "任务失败", details=str(e)))
     finally: client.unpin_message(progress_msg)
 
-# [重构] 为事件处理增加来源标注
 async def _handle_game_event(app, event_data):
     client = app.client
     my_id = str(client.me.id)
@@ -120,48 +120,37 @@ async def _handle_game_event(app, event_data):
         "TRADE_COMPLETED": "交易", "DONATION_COMPLETED": "宗门捐献",
         "EXCHANGE_COMPLETED": "宗门兑换", "CONTRIBUTION_GAINED": "宗门任务",
         "TOWER_CHALLENGE_COMPLETED": "闯塔", "CRAFTING_COMPLETED": "炼制",
-        "HARVEST_COMPLETED": "药园采药", "LEARNING_COMPLETED": "学习", "SOWING_COMPLETED": "药园播种"
+        "HARVEST_COMPLETED": "药园采药", "LEARNING_COMPLETED": "学习", "SOWING_COMPLETED": "药园播种",
+        "DELIST_COMPLETED": "下架"  # [新增] 为下架事件添加来源
     }
     source = source_map.get(event_type, "未知来源")
 
     if event_type == "TRADE_COMPLETED":
         for item, qty in event_data.get("gained", {}).items():
-            await inventory_manager.add_item(item, qty)
-            update_details.append(f"获得`{item}`x{qty} ({source})")
+            await inventory_manager.add_item(item, qty); update_details.append(f"获得`{item}`x{qty} ({source})")
         for item, qty in event_data.get("sold", {}).items():
-            await inventory_manager.remove_item(item, qty)
-            update_details.append(f"售出`{item}`x{qty} ({source})")
-    
+            await inventory_manager.remove_item(item, qty); update_details.append(f"售出`{item}`x{qty} ({source})")
     elif event_type == "DONATION_COMPLETED":
         for item, qty in event_data.get("consumed_item", {}).items():
-            await inventory_manager.remove_item(item, qty)
-            update_details.append(f"消耗`{item}`x{qty} ({source})")
+            await inventory_manager.remove_item(item, qty); update_details.append(f"消耗`{item}`x{qty} ({source})")
         if gained_contrib := event_data.get("gained_contribution"):
-            await stats_manager.add_contribution(gained_contrib)
-            update_details.append(f"贡献+`{gained_contrib}` ({source})")
-
+            await stats_manager.add_contribution(gained_contrib); update_details.append(f"贡献+`{gained_contrib}` ({source})")
     elif event_type == "EXCHANGE_COMPLETED":
         for item, qty in event_data.get("gained_item", {}).items():
-            await inventory_manager.add_item(item, qty)
-            update_details.append(f"获得`{item}`x{qty} ({source})")
+            await inventory_manager.add_item(item, qty); update_details.append(f"获得`{item}`x{qty} ({source})")
         if consumed_contrib := event_data.get("consumed_contribution"):
-            await stats_manager.remove_contribution(consumed_contrib)
-            update_details.append(f"贡献-`{consumed_contrib}` ({source})")
-        
+            await stats_manager.remove_contribution(consumed_contrib); update_details.append(f"贡献-`{consumed_contrib}` ({source})")
     elif event_type == "CONTRIBUTION_GAINED":
         if gained_contrib := event_data.get("gained_contribution"):
-            await stats_manager.add_contribution(gained_contrib)
-            update_details.append(f"贡献+`{gained_contrib}` ({source})")
-
-    elif event_type in ["TOWER_CHALLENGE_COMPLETED", "CRAFTING_COMPLETED", "HARVEST_COMPLETED"]:
+            await stats_manager.add_contribution(gained_contrib); update_details.append(f"贡献+`{gained_contrib}` ({source})")
+    # [新增] 将 DELIST_COMPLETED 添加到处理逻辑中
+    elif event_type in ["TOWER_CHALLENGE_COMPLETED", "CRAFTING_COMPLETED", "HARVEST_COMPLETED", "DELIST_COMPLETED"]:
         for item, qty in event_data.get("gained_items", {}).items():
             await inventory_manager.add_item(item, qty)
             update_details.append(f"获得`{item}`x{qty} ({source})")
-            
     elif event_type in ["LEARNING_COMPLETED", "SOWING_COMPLETED"]:
          for item, qty in event_data.get("consumed_item", {}).items():
-            await inventory_manager.remove_item(item, qty)
-            update_details.append(f"消耗`{item}`x{qty} ({source})")
+            await inventory_manager.remove_item(item, qty); update_details.append(f"消耗`{item}`x{qty} ({source})")
 
     if update_details:
         await client.send_admin_notification(f"📦 **状态更新 (`@{my_username}`)**\n- {', '.join(update_details)}")
@@ -171,24 +160,20 @@ async def _handle_listing_successful(app, data):
         payload = data.get("payload", {})
         session_id = payload.get("session_id")
         if future := FOCUS_FIRE_SESSIONS.pop(session_id + "_list", None):
-            if not future.done():
-                future.set_result((payload["item_id"], payload["executor_id"]))
+            if not future.done(): future.set_result((payload["item_id"], payload["executor_id"]))
 
 async def _handle_report_state(app, data):
     if str(app.client.me.id) == data.get("target_account_id"):
         payload = data.get("payload", {})
         session_id = payload.get("session_id")
         if future := FOCUS_FIRE_SESSIONS.get(session_id + "_state"):
-            if not future.done():
-                future.set_result(payload["ready_time_iso"])
+            if not future.done(): future.set_result(payload["ready_time_iso"])
 
 async def _handle_broadcast_command(app, data):
     my_id = str(app.client.me.id)
-    if my_id == str(settings.ADMIN_USER_ID):
-        return
+    if my_id == str(settings.ADMIN_USER_ID): return
     target_sect = data.get("target_sect")
-    if target_sect and target_sect != settings.SECT_NAME:
-        return
+    if target_sect and target_sect != settings.SECT_NAME: return
     command_to_run = data.get("command_to_run")
     if command_to_run:
         format_and_log(LogType.TASK, "广播指令-执行", {'指令': command_to_run, '宗门匹配': bool(target_sect)})
@@ -196,90 +181,54 @@ async def _handle_broadcast_command(app, data):
 
 async def redis_message_handler(message):
     app = get_application()
-    task_handlers = {
-        "listing_successful": _handle_listing_successful,
-        "broadcast_command": _handle_broadcast_command,
-        "report_state": _handle_report_state
-    }
+    task_handlers = {"listing_successful": _handle_listing_successful, "broadcast_command": _handle_broadcast_command, "report_state": _handle_report_state}
     try:
-        channel = message['channel']
-        data_str = message['data']
+        channel, data_str = message['channel'], message['data']
         data = json.loads(data_str) if isinstance(data_str, (str, bytes)) else {}
-        if channel == GAME_EVENTS_CHANNEL:
-            await _handle_game_event(app, data)
-            return
+        if channel == GAME_EVENTS_CHANNEL: await _handle_game_event(app, data); return
         task_type = data.get("task_type")
-
         if task_type == "propose_knowledge_share" and str(app.client.me.id) == data.get("target_account_id"):
-            await handle_propose_knowledge_share(app, data)
-            return
-
+            await handle_propose_knowledge_share(app, data); return
         if hasattr(app, 'extra_redis_handlers'):
             for handler in app.extra_redis_handlers:
-                if await handler(data):
-                    return
-        if handler := task_handlers.get(task_type):
-            await handler(app, data)
+                if await handler(data): return
+        if handler := task_handlers.get(task_type): await handler(app, data)
         elif str(app.client.me.id) == data.get("target_account_id"):
             format_and_log(LogType.TASK, "Redis 任务匹配成功", {'任务类型': task_type})
-            if task_type == "list_item_for_ff":
-                await trade_logic.execute_listing_task(app, data.get("requester_account_id"), **data.get("payload", {}))
-            elif task_type == "purchase_item":
-                await trade_logic.execute_purchase_task(app, data.get("payload", {}))
-            elif task_type == "execute_synced_delist":
-                await trade_logic.execute_synced_unlisting_task(app, data.get("payload", {}))
-            elif task_type == "query_state":
-                await handle_query_state(app, data)
+            if task_type == "list_item_for_ff": await trade_logic.execute_listing_task(app, data.get("requester_account_id"), **data.get("payload", {}))
+            elif task_type == "purchase_item": await trade_logic.execute_purchase_task(app, data.get("payload", {}))
+            elif task_type == "execute_synced_delist": await trade_logic.execute_synced_unlisting_task(app, data.get("payload", {}))
+            elif task_type == "query_state": await handle_query_state(app, data)
     except Exception as e:
         format_and_log(LogType.ERROR, "Redis 任务处理器", {'状态': '执行异常', '错误': str(e), '原始消息': message.get('data', '')})
 
 async def handle_query_state(app, data):
     payload = data.get("payload", {})
     chat_id = payload.get("chat_id")
-    if not chat_id:
-        return
+    if not chat_id: return
     ready_time = await app.client.get_next_sendable_time(chat_id)
-    await trade_logic.publish_task({
-        "task_type": "report_state",
-        "target_account_id": data.get("requester_account_id"),
-        "payload": {"session_id": payload.get("session_id"), "ready_time_iso": ready_time.isoformat()}
-    })
+    await trade_logic.publish_task({"task_type": "report_state", "target_account_id": data.get("requester_account_id"), "payload": {"session_id": payload.get("session_id"), "ready_time_iso": ready_time.isoformat()}})
 
 async def handle_propose_knowledge_share(app, data):
-    payload = data.get("payload", {})
-    recipe_name = payload.get("recipe_name")
-    if not recipe_name:
-        return
-
+    payload = data.get("payload", {}); recipe_name = payload.get("recipe_name")
+    if not recipe_name: return
     learned_recipes = await data_manager.get_value("learned_recipes", is_json=True, default=[])
     if recipe_name in learned_recipes:
-        format_and_log(LogType.TASK, "知识共享", {'状态': '提议已拒绝', '原因': '该知识已掌握', '知识': recipe_name})
-        return
-    
+        format_and_log(LogType.TASK, "知识共享", {'状态': '提议已拒绝', '原因': '该知识已掌握', '知识': recipe_name}); return
     format_and_log(LogType.TASK, "知识共享", {'状态': '提议已接受', '知识': recipe_name, '来源': f"...{payload.get('teacher_id', '')[-4:]}"})
-    
     class FakeEvent:
         class FakeMessage:
-            def __init__(self, text, sender_id):
-                self.text = text
-                self.sender_id = sender_id
-            async def reply(self, text):
-                await app.client.send_admin_notification(f"【知识共享】: {text}")
-    
-        def __init__(self, text, sender_id):
-            self.message = self.FakeMessage(text, sender_id)
-    
+            def __init__(self, text, sender_id): self.text = text; self.sender_id = sender_id
+            async def reply(self, text): await app.client.send_admin_notification(f"【知识共享】: {text}")
+        def __init__(self, text, sender_id): self.message = self.FakeMessage(text, sender_id)
     fake_event = FakeEvent(f",收货 {recipe_name} 1", app.client.me.id)
     await _cmd_receive_goods(fake_event, [",收货", recipe_name, "1"])
 
 async def _check_crafting_session_timeouts():
-    app = get_application()
-    db = app.redis_db
-    if not db or not db.is_connected:
-        return
+    app = get_application(); db = app.redis_db
+    if not db or not db.is_connected: return
     try:
-        sessions = await db.hgetall(CRAFTING_SESSIONS_KEY)
-        now = time.time()
+        sessions = await db.hgetall(CRAFTING_SESSIONS_KEY); now = time.time()
         timeout_seconds = settings.TRADE_COORDINATION_CONFIG.get('crafting_session_timeout_seconds', 300)
         for session_id, session_json in sessions.items():
             try:
