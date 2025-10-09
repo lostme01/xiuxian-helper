@@ -101,36 +101,67 @@ class TelegramClient:
             format_and_log(LogType.ERROR, "回复管理员失败", {'错误': str(e)}, level=logging.ERROR)
             return None
 
+    # [重构] 调整消息发送循环，使其能回传更多信息
     async def _message_sender_loop(self):
         while True:
-            command, reply_to, future, target_chat_id = await self.message_queue.get()
+            # 队列现在包含一个回调函数，用于发送后处理
+            command, reply_to, future, target_chat_id, post_send_callback = await self.message_queue.get()
+            sent_message = None
             try:
                 target_group = target_chat_id or (settings.GAME_GROUP_IDS[0] if settings.GAME_GROUP_IDS else 0)
                 if not target_group:
-                    if future and not future.done(): future.set_exception(Exception("No target group specified."))
-                    continue
+                    raise Exception("No target group specified.")
+
                 earliest_send_time = await self.get_next_sendable_time(target_group)
                 now_utc = datetime.now(timezone.utc)
                 wait_seconds = (earliest_send_time - now_utc).total_seconds()
-                if wait_seconds > 0: await asyncio.sleep(wait_seconds)
+                if wait_seconds > 0:
+                    await asyncio.sleep(wait_seconds)
+
                 final_reply_to = reply_to
                 if target_group in settings.GAME_GROUP_IDS and settings.GAME_TOPIC_ID and not reply_to:
                     final_reply_to = settings.GAME_TOPIC_ID
+
                 sent_message = await self.client.send_message(target_group, command, reply_to=final_reply_to)
+                
                 if sent_message:
                     self.last_message_timestamps[target_group] = time.time()
                     await self._persist_timestamps()
                     await log_telegram_event(self, LogType.CMD_SENT, sent_message, command=command, reply_to=final_reply_to)
-                    if future and not future.done(): future.set_result(sent_message)
+                    if future: future.set_result(sent_message)
                 else:
                     raise Exception("Failed to send message.")
-            except Exception as e:
-                if future and not future.done(): future.set_exception(e)
 
-    async def _send_command_and_get_message(self, command: str, reply_to: int = None, target_chat_id: int = None) -> Message:
-        future = asyncio.Future()
-        await self.message_queue.put((command, reply_to, future, target_chat_id))
-        return await future
+            except Exception as e:
+                if future: future.set_exception(e)
+            
+            finally:
+                # 无论成功失败，都尝试执行发送后回调
+                if post_send_callback and sent_message:
+                    try:
+                        post_send_callback(sent_message)
+                    except Exception as cb_e:
+                        format_and_log(LogType.ERROR, "发送后回调执行失败", {'错误': str(cb_e)}, level=logging.ERROR)
+
+    async def _send_command_and_get_message(self, command: str, reply_to: int = None,
+                                           target_chat_id: int = None, post_send_callback=None) -> Message:
+        future = asyncio.Future() if post_send_callback is None else None
+        await self.message_queue.put((command, reply_to, future, target_chat_id, post_send_callback))
+        if future:
+            return await future
+
+    # [核心修复] 重构发后不理的实现方式
+    async def send_game_command_fire_and_forget(self, command: str, reply_to: int = None, target_chat_id: int = None):
+        strategy = settings.AUTO_DELETE_STRATEGIES['fire_and_forget']
+        
+        # 定义一个回调函数，它将在消息被发送后由 _message_sender_loop 调用
+        def schedule_deletion_callback(message: Message):
+            self._schedule_message_deletion(message, strategy['delay_self'], "游戏指令(发后不理)")
+
+        # 将指令和回调函数一起放入队列，不再等待 future
+        await self._send_command_and_get_message(
+            command, reply_to, target_chat_id, post_send_callback=schedule_deletion_callback
+        )
 
     async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
         strategy = settings.AUTO_DELETE_STRATEGIES['request_response']; sent_message = None
@@ -141,11 +172,6 @@ class TelegramClient:
         except CommandTimeoutError as e:
             if e.sent_message: self._schedule_message_deletion(e.sent_message, strategy['delay_self_on_timeout'], "游戏指令(问答-超时)")
             raise e
-
-    async def send_game_command_fire_and_forget(self, command: str, reply_to: int = None, target_chat_id: int = None):
-        strategy = settings.AUTO_DELETE_STRATEGIES['fire_and_forget']
-        sent_message = await self._send_command_and_get_message(command, reply_to, target_chat_id)
-        self._schedule_message_deletion(sent_message, strategy['delay_self'], "游戏指令(发后不理)")
 
     async def send_and_wait_for_edit(self, command: str, initial_pattern: str, final_pattern: str, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
         strategy = settings.AUTO_DELETE_STRATEGIES['request_response']; sent_message = None; initial_reply_id = None
@@ -167,7 +193,8 @@ class TelegramClient:
         timeout = timeout or settings.COMMAND_TIMEOUT; sent_message = None
         try:
             future = asyncio.Future()
-            sent_message = await self._send_command_and_get_message(command, reply_to, target_chat_id)
+            # 对于需要等待回复的指令，我们仍然使用 future，但不传递回调
+            sent_message = await self._send_command_and_get_message(command, reply_to, target_chat_id, post_send_callback=None)
             self.pending_replies[sent_message.id] = {'future': future, 'pattern': final_pattern}
             reply_message = await asyncio.wait_for(future, timeout=timeout)
             return sent_message, reply_message
@@ -208,18 +235,12 @@ class TelegramClient:
             async for _ in self.client.iter_dialogs(limit=20): pass
         except Exception: pass
 
-    # [修复] 增加详细的错误日志
     async def send_admin_notification(self, message: str, target_id: int = None):
         target = target_id or settings.CONTROL_GROUP_ID or self.admin_id
         try:
             await self.client.send_message(target, message, parse_mode='md')
         except Exception as e:
-            format_and_log(
-                LogType.ERROR,
-                "发送管理员通知失败",
-                {'目标ID': target, '错误': str(e)},
-                level=logging.ERROR
-            )
+            format_and_log(LogType.ERROR, "发送管理员通知失败", {'目标ID': target, '错误': str(e)}, level=logging.ERROR)
 
     async def _sleep_and_delete(self, delay: int, message: Message):
         await asyncio.sleep(delay)
