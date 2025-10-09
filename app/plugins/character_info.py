@@ -6,7 +6,7 @@ import pytz
 from datetime import datetime
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 from config import settings
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 from app.context import get_application
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
@@ -14,37 +14,6 @@ from app import game_adaptor
 from app.data_manager import data_manager
 
 STATE_KEY_PROFILE = "character_profile"
-
-PROFILE_PATTERN = re.compile(
-    r"\*\*@([^\*]+)\*\*.*?天命玉牒.*?"
-    r"(?:\*\*称号\*\*[:：]?\s*【?([^】\n]+)】?.*?)?"
-    r"\*\*宗门\*\*[:：]?\s*[【]?([^】\n]+)[】]?\s*"
-    r"\*\*道号\*\*[:：]?\s*([^\n]+)\s*"
-    r"\*\*灵根\*\*[:：]?\s*([^\n]+)\s*"
-    r"\*\*境界\*\*[:：]?\s*([^\n]+)\s*"
-    r"\*\*修为\*\*[:：]?\s*(-?\d+)\s*/\s*(\d+)\s*"
-    r"\*\*丹毒\*\*[:：]?\s*(-?\d+)\s*点.*?"
-    r"(?:\*\*杀戮\*\*[:：]?\s*(\d+)\s*人.*?)?"
-    , re.S | re.I
-)
-
-def _parse_profile_text(text: str) -> dict:
-    match = PROFILE_PATTERN.search(text)
-    format_and_log("DEBUG", "角色信息解析", {'正则表达式匹配成功': bool(match)})
-    
-    if not match:
-        return {}
-    
-    groups = match.groups()
-    
-    profile_data = {
-        "用户": groups[0], "称号": groups[1], "宗门": groups[2], "道号": groups[3],
-        "灵根": groups[4], "境界": groups[5], "修为": int(groups[6]), "修为上限": int(groups[7]),
-        "丹毒": int(groups[8]), "杀戮": int(groups[9]) if groups[9] else 0,
-    }
-
-    return {k: v.strip() if isinstance(v, str) else v for k, v in profile_data.items() if v is not None}
-
 
 def _format_profile_reply(profile_data: dict, title: str) -> str:
     display_map = [
@@ -79,10 +48,10 @@ async def trigger_update_profile(force_run=False):
             initial_pattern=r"正在查询"
         )
 
-        profile_data = _parse_profile_text(final_message.text)
+        profile_data = game_adaptor.parse_profile(final_message.text)
 
-        if not profile_data.get("境界"):
-            format_and_log("ERROR", "角色信息解析失败", {'原始文本': final_message.text})
+        if not profile_data or not profile_data.get("境界"):
+            format_and_log(LogType.ERROR, "角色信息解析失败", {'原始文本': final_message.text})
             raise ValueError(f"无法从最终返回的信息中解析出角色数据: {getattr(final_message, 'text', '无最终消息')}")
 
         await data_manager.save_value(STATE_KEY_PROFILE, profile_data)
@@ -134,4 +103,3 @@ async def _cmd_view_cached_profile(event, parts):
 def initialize(app):
     app.register_command("我的灵根", _cmd_query_profile, help_text="查询并刷新当前角色的详细信息。", category="查询")
     app.register_command("查看角色", _cmd_view_cached_profile, help_text="查看已缓存的最新角色信息。", category="数据查询")
-

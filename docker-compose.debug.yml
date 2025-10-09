@@ -6,15 +6,16 @@ services:
     image: tg-game-helper:local
     container_name: tg-game-helper-debug
     tty: true
+    env_file: ./.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - GRPC_VERBOOSITY=ERROR
+      - GRPC_VERBOSITY=ERROR
       - PYTHONDONTWRITEBYTECODE=1
-      # --- 核心修复：添加此环境变量以禁用Python输出缓冲 ---
       - PYTHONUNBUFFERED=1
     volumes:
-      - ./config/prod.yaml:/app/config/prod.yaml
+      - ./config:/app/config
+      - ./app:/app/app
       - ./data:/app/data
       - ./logs:/app/logs
 networks:

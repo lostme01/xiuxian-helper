@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 from app.context import get_application
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 
 CRAFTING_RECIPES_KEY = "crafting_recipes"
 

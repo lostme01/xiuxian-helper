@@ -5,7 +5,7 @@ import pytz
 from datetime import datetime, timedelta
 from telethon.tl.functions.account import UpdateStatusRequest
 from app.context import get_application
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 from config import settings
 from app.task_scheduler import scheduler
 
@@ -19,9 +19,9 @@ async def active_heartbeat():
     app = get_application()
     try:
         await app.client.client(UpdateStatusRequest(offline=False))
-        format_and_log("DEBUG", "心跳服务", {'类型': '主动心跳', '状态': '成功'})
+        format_and_log(LogType.DEBUG, "心跳服务", {'类型': '主动心跳', '状态': '成功'})
     except Exception as e:
-        format_and_log("WARNING", "心跳服务", {'类型': '主动心跳', '状态': '失败', '错误': str(e)})
+        format_and_log(LogType.WARNING, "心跳服务", {'类型': '主动心跳', '状态': '失败', '错误': str(e)})
 
 async def passive_heartbeat():
     """被动心跳：检查与Telegram的最后通信时间，如果过长则发出警报"""
@@ -35,7 +35,7 @@ async def passive_heartbeat():
     threshold = HEARTBEAT_CONFIG.get('passive_threshold_minutes', 30) * 60
     
     if time_since_last_update > threshold:
-        format_and_log("WARNING", "心跳服务-警报", {
+        format_and_log(LogType.WARNING, "心跳服务-警报", {
             '类型': '被动心跳',
             '问题': '可能已与Telegram失联',
             '最后通信距今': f"{time_since_last_update:.0f} 秒 (阈值: {threshold} 秒)"
@@ -54,14 +54,14 @@ async def daily_dialog_sync():
         return
         
     app = get_application()
-    format_and_log("TASK", "每日同步", {'阶段': '开始'})
+    format_and_log(LogType.TASK, "每日同步", {'阶段': '开始'})
     try:
         # 迭代少量对话即可触发 Telethon 的内部更新机制
         async for _ in app.client.client.iter_dialogs(limit=20):
             pass
-        format_and_log("TASK", "每日同步", {'阶段': '成功'})
+        format_and_log(LogType.TASK, "每日同步", {'阶段': '成功'})
     except Exception as e:
-        format_and_log("ERROR", "每日同步", {'阶段': '失败', '错误': str(e)})
+        format_and_log(LogType.ERROR, "每日同步", {'阶段': '失败', '错误': str(e)})
 
 
 def initialize(app):
@@ -72,7 +72,7 @@ def initialize(app):
             active_heartbeat, 'interval', minutes=interval, 
             id='active_heartbeat_task', replace_existing=True
         )
-        format_and_log("SYSTEM", "任务调度", {'任务': '主动心跳', '频率': f'每 {interval} 分钟'})
+        format_and_log(LogType.SYSTEM, "任务调度", {'任务': '主动心跳', '频率': f'每 {interval} 分钟'})
 
     if HEARTBEAT_CONFIG.get('passive_enabled'):
         interval = HEARTBEAT_CONFIG.get('passive_check_interval_minutes', 5)
@@ -80,7 +80,7 @@ def initialize(app):
             passive_heartbeat, 'interval', minutes=interval,
             id='passive_heartbeat_task', replace_existing=True
         )
-        format_and_log("SYSTEM", "任务调度", {'任务': '被动心跳监测', '频率': f'每 {interval} 分钟'})
+        format_and_log(LogType.SYSTEM, "任务调度", {'任务': '被动心跳监测', '频率': f'每 {interval} 分钟'})
         
     if HEARTBEAT_CONFIG.get('sync_enabled'):
         run_time_str = HEARTBEAT_CONFIG.get('sync_run_time', '04:30')
@@ -89,4 +89,4 @@ def initialize(app):
             daily_dialog_sync, 'cron', hour=hour, minute=minute, 
             jitter=300, id='daily_dialog_sync_task', replace_existing=True
         )
-        format_and_log("SYSTEM", "任务调度", {'任务': '每日全量同步', '计划时间': f'每日 {run_time_str} 左右'})
+        format_and_log(LogType.SYSTEM, "任务调度", {'任务': '每日全量同步', '计划时间': f'每日 {run_time_str} 左右'})

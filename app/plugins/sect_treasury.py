@@ -19,8 +19,8 @@ STATE_KEY_TREASURY = "sect_treasury"
 TASK_ID_TREASURY = "sect_treasury_daily_task"
 
 def _parse_treasury_text(text: str) -> dict:
-    from app.logger import format_and_log
-    format_and_log("DEBUG", "宝库解析流程 -> _parse_treasury_text", {'阶段': '开始解析', '原始文本': text})
+    from app.logging_service import LogType, format_and_log
+    format_and_log(LogType.DEBUG, "宝库解析流程 -> _parse_treasury_text", {'阶段': '开始解析', '原始文本': text})
     data = {"contribution": 0, "items": []}
     if not text: return data
     contribution_match = re.search(r"你的贡献\s*:\s*(\d+)\s*点", text)
@@ -31,15 +31,15 @@ def _parse_treasury_text(text: str) -> dict:
         item_data = match.groupdict()
         items.append({"name": item_data["name"].strip(), "description": item_data["desc"].strip(), "price": int(item_data["price"])})
     data["items"] = items
-    format_and_log("DEBUG", "宝库解析流程 -> _parse_treasury_text", {'阶段': '解析完成', '贡献': data["contribution"], '物品数量': len(items)})
+    format_and_log(LogType.DEBUG, "宝库解析流程 -> _parse_treasury_text", {'阶段': '解析完成', '贡献': data["contribution"], '物品数量': len(items)})
     return data
 
 async def trigger_update_treasury(force_run=False):
-    from app.logger import format_and_log
+    from app.logging_service import LogType, format_and_log
     app = get_application()
     client = app.client
     command = game_adaptor.get_sect_treasury()
-    format_and_log("TASK", "更新宗门宝库", {'阶段': '任务开始', '强制执行': force_run})
+    format_and_log(LogType.TASK, "更新宗门宝库", {'阶段': '任务开始', '强制执行': force_run})
     try:
         _sent_message, reply_message = await client.send_game_command_request_response(command)
 
@@ -50,14 +50,14 @@ async def trigger_update_treasury(force_run=False):
         await stats_manager.set_contribution(treasury_data["contribution"])
         await data_manager.save_value(STATE_KEY_TREASURY, treasury_data)
         
-        format_and_log("TASK", "更新宗门宝库", {'阶段': '任务成功', '贡献': treasury_data["contribution"], '物品数量': len(treasury_data["items"])})
+        format_and_log(LogType.TASK, "更新宗门宝库", {'阶段': '任务成功', '贡献': treasury_data["contribution"], '物品数量': len(treasury_data["items"])})
         if force_run:
             return f"✅ **宗门宝库信息已更新**：\n- **当前贡献**: `{treasury_data['contribution']}` (已校准)\n- **宝库物品**: 共 `{len(treasury_data['items'])}` 件"
     except Exception as e:
         if force_run:
             raise e
         else:
-             format_and_log("TASK", "更新宗门宝库", {'阶段': '任务异常', '错误': str(e)}, level=logging.CRITICAL)
+             format_and_log(LogType.TASK, "更新宗门宝库", {'阶段': '任务异常', '错误': str(e)}, level=logging.CRITICAL)
 
 async def _cmd_query_treasury(event, parts):
     app = get_application()
@@ -108,11 +108,11 @@ async def _cmd_view_cached_treasury(event, parts):
     await send_paginated_message(event, reply_text)
 
 async def check_treasury_startup():
-    from app.logger import format_and_log
+    from app.logging_service import LogType, format_and_log
     if settings.TASK_SWITCHES.get('sect_treasury') and not scheduler.get_job(TASK_ID_TREASURY):
         run_time = time(hour=random.randint(2, 5), minute=random.randint(0, 59))
         scheduler.add_job(trigger_update_treasury, 'cron', hour=run_time.hour, minute=run_time.minute, id=TASK_ID_TREASURY, jitter=600)
-        format_and_log("SYSTEM", "任务调度", {'任务': '每日自动更新宗门宝库', '状态': '已计划', '预计时间': run_time.strftime('%H:%M')})
+        format_and_log(LogType.SYSTEM, "任务调度", {'任务': '每日自动更新宗门宝库', '状态': '已计划', '预计时间': run_time.strftime('%H:%M')})
 
 def initialize(app):
     app.register_command("宗门宝库", _cmd_query_treasury, help_text="主动查询并刷新宗门宝库的物品列表和贡献。", category="查询")

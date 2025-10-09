@@ -1,85 +1,103 @@
 # -*- coding: utf-8 -*-
 import json
-import asyncio
-import time
 import re
-from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
-from app.context import get_application
-# [REFACTOR] 导入新的通用解析器
-from app.utils import create_error_reply, parse_item_and_quantity
-from app.plugins.logic import crafting_logic, trade_logic
-from app.plugins.crafting_actions import _cmd_craft_item as execute_craft_item
-from app import game_adaptor
+import time
 
-HELP_TEXT_SMART_CRAFT = """✨ **智能炼制 (全自动版)**
-**说明**: 终极一键指令。自动检查材料，如果不足，则自动向其他助手收集，材料收齐后将自动执行最终的炼制操作。
+from app import game_adaptor
+from app.constants import CRAFTING_SESSIONS_KEY
+from app.context import get_application
+from app.logging_service import LogType, format_and_log
+from app.plugins.logic import crafting_logic, trade_logic
+from app.utils import create_error_reply, parse_item_and_quantity
+
+HELP_TEXT_SMART_CRAFT = """✨ **智能炼制 (全自动)**
+**说明**: 终极一键指令。自动检查材料，如果不足则自动向网络收集，材料收齐后**自动执行最终炼制**。
 **用法**: `,智能炼制 <物品名称> [数量]`
 **示例**: `,智能炼制 增元丹 2`
 """
 
-async def _cmd_smart_craft(event, parts):
+HELP_TEXT_GATHER_MATERIALS = """📦 **凑材料 (只收集)**
+**说明**: 与智能炼制类似，但**只负责收集材料**。材料集齐后任务即结束，**不会自动合成**。
+**用法**: `,凑材料 <物品名称> [数量]`
+**示例**: `,凑材料 增元丹 2`
+"""
+
+async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
+    """核心逻辑，处理智能炼制和凑材料两个指令。"""
     app = get_application()
     client = app.client
     my_id = str(client.me.id)
-    
-    # [REFACTOR] 使用通用解析器
+    cmd_name = "智能炼制" if synthesize_after else "凑材料"
+    usage_text = HELP_TEXT_SMART_CRAFT if synthesize_after else HELP_TEXT_GATHER_MATERIALS
+
     item_to_craft, quantity, error = parse_item_and_quantity(parts)
     if error:
-        await client.reply_to_admin(event, create_error_reply("智能炼制", error, usage_text=HELP_TEXT_SMART_CRAFT))
+        await client.reply_to_admin(event, create_error_reply(cmd_name, error, usage_text=usage_text))
         return
 
-    progress_message = await client.reply_to_admin(event, f"🧠 **智能炼制任务启动: {item_to_craft} x{quantity}**\n正在检查本地库存...")
+    progress_message = await client.reply_to_admin(event, f"🧠 **{cmd_name}任务: {item_to_craft} x{quantity}**\n正在检查本地库存...")
     if not progress_message: return
     client.pin_message(progress_message)
 
     try:
+        # 1. 检查本地材料
         required_materials = await crafting_logic.logic_check_local_materials(item_to_craft, quantity)
-        if isinstance(required_materials, str):
+        if isinstance(required_materials, str):  # 检查是否返回了错误信息
             raise ValueError(required_materials)
 
+        # 2. 本地材料充足
         if not required_materials:
-            await progress_message.edit(f"✅ **本地材料充足**\n正在为您执行炼制操作...")
-            craft_parts = ["炼制物品", item_to_craft, str(quantity)]
-            await execute_craft_item(event, craft_parts)
-            return 
-
-        await progress_message.edit(f"⚠️ **本地材料不足**\n正在启动P2P协同，规划材料收集...")
-        
-        plan = await crafting_logic.logic_plan_crafting_session(item_to_craft, my_id, quantity)
-        if isinstance(plan, str): raise RuntimeError(plan)
-        if not plan:
-            await progress_message.edit(f"ℹ️ **无需收集**: 网络中没有其他助手需要为此任务贡献材料。")
-            client.unpin_message(progress_message)
+            if synthesize_after:
+                await progress_message.edit(f"✅ **本地材料充足**\n正在为您执行炼制操作...")
+                # 复用 crafting_actions 的逻辑
+                from .crafting_actions import _cmd_craft_item as execute_craft_item
+                craft_parts = ["炼制物品", item_to_craft, str(quantity)]
+                await execute_craft_item(event, craft_parts)
+            else:
+                await progress_message.edit(f"✅ **本地材料充足**\n无需从网络收集材料。")
             return
 
+        # 3. 本地材料不足，开始规划网络收集
+        await progress_message.edit(f"⚠️ **本地材料不足**\n正在启动P2P协同，规划材料收集...")
+        plan = await crafting_logic.logic_plan_crafting_session(item_to_craft, my_id, quantity)
+        if isinstance(plan, str): raise RuntimeError(plan)
+
+        if not plan:
+            await progress_message.edit(f"ℹ️ **无需收集**: 网络中没有其他助手需要为此任务贡献材料。")
+            return
+
+        # 4. 创建并发布收集任务
         session_id = f"craft_{my_id}_{int(time.time())}"
         session_data = {
-            "item": item_to_craft, "quantity": quantity, "status": "gathering",
+            "item": item_to_craft,
+            "quantity": quantity,
+            "status": "gathering",
+            "synthesize": synthesize_after,  # 核心区别点
             "needed_from": {executor_id: False for executor_id in plan.keys()},
             "timestamp": time.time()
         }
-        await app.redis_db.hset("crafting_sessions", session_id, json.dumps(session_data))
-        
+        await app.redis_db.hset(CRAFTING_SESSIONS_KEY, session_id, json.dumps(session_data))
+
         report_lines = [f"✅ **规划完成 (会话ID: `{session_id[-6:]}`)**:"]
         for executor_id, materials in plan.items():
             materials_str = " ".join([f"{name}*{count}" for name, count in materials.items()])
             report_lines.append(f"\n向 `...{executor_id[-4:]}` 收取: `{materials_str}`")
-            
+
             try:
                 await progress_message.edit("\n".join(report_lines) + f"\n- 正在上架交易...")
-                
                 list_command = game_adaptor.list_item("灵石", 1, materials_str, 1)
                 _sent, reply = await client.send_game_command_request_response(list_command)
-                
+
                 match = re.search(r"挂单ID\D+(\d+)", reply.text)
                 if "上架成功" in reply.text and match:
                     listing_id = match.group(1)
                     report_lines[-1] += f" -> 挂单ID: `{listing_id}` (已通知)"
-                    
                     task = {
-                        "task_type": "purchase_item", "target_account_id": executor_id,
-                        "payload": { 
-                            "item_id": listing_id, "cost": { "name": "灵石", "quantity": 1 },
+                        "task_type": "purchase_item",
+                        "target_account_id": executor_id,
+                        "payload": {
+                            "item_id": listing_id,
+                            "cost": {"name": "灵石", "quantity": 1},
                             "crafting_session_id": session_id
                         }
                     }
@@ -90,19 +108,38 @@ async def _cmd_smart_craft(event, parts):
             except Exception as e:
                 report_lines[-1] += f" -> ❌ **上架异常**: `{e}`"
                 session_data["needed_from"][executor_id] = "failed"
-            
-            await progress_message.edit("\n".join(report_lines))
-            await app.redis_db.hset("crafting_sessions", session_id, json.dumps(session_data))
 
-        final_text = "\n".join(report_lines) + "\n\n⏳ **所有收集任务已分派，等待材料全部送达后将自动炼制...**"
+            await progress_message.edit("\n".join(report_lines))
+            await app.redis_db.hset(CRAFTING_SESSIONS_KEY, session_id, json.dumps(session_data))
+
+        final_action = "将自动炼制" if synthesize_after else "任务将结束"
+        final_text = "\n".join(report_lines) + f"\n\n⏳ **所有收集任务已分派，等待材料全部送达后{final_action}...**"
         await progress_message.edit(final_text)
 
     except Exception as e:
-        error_text = create_error_reply("智能炼制", "任务失败", details=str(e))
+        error_text = create_error_reply(cmd_name, "任务失败", details=str(e))
         await progress_message.edit(error_text)
+    finally:
         client.unpin_message(progress_message)
+
+async def _cmd_smart_craft(event, parts):
+    await _execute_coordinated_crafting(event, parts, synthesize_after=True)
+
+async def _cmd_gather_materials(event, parts):
+    await _execute_coordinated_crafting(event, parts, synthesize_after=False)
 
 def initialize(app):
     app.register_command(
-        name="智能炼制", handler=_cmd_smart_craft, help_text="✨ 自动检查、收集并炼制物品。", category="协同", usage=HELP_TEXT_SMART_CRAFT
+        name="智能炼制",
+        handler=_cmd_smart_craft,
+        help_text="✨ 自动检查、收集并炼制物品。",
+        category="协同",
+        usage=HELP_TEXT_SMART_CRAFT
+    )
+    app.register_command(
+        name="凑材料",
+        handler=_cmd_gather_materials,
+        help_text="📦 自动检查并收集材料，但不执行最终炼制。",
+        category="协同",
+        usage=HELP_TEXT_GATHER_MATERIALS
     )

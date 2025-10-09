@@ -5,8 +5,42 @@
 该模块的目标是将游戏相关的具体指令与插件的核心逻辑解耦。
 所有插件都应调用此模块中的函数来执行游戏操作，而不是手动拼接指令字符串。
 """
-
+import re
 from config import settings
+
+# --- 新增：角色信息解析 ---
+PROFILE_PATTERN = re.compile(
+    r"\*\*@([^\*]+)\*\*.*?天命玉牒.*?"
+    r"(?:\*\*称号\*\*[:：]?\s*【?([^】\n]+)】?.*?)?"
+    r"\*\*宗门\*\*[:：]?\s*[【]?([^】\n]+)[】]?\s*"
+    r"\*\*道号\*\*[:：]?\s*([^\n]+)\s*"
+    r"\*\*灵根\*\*[:：]?\s*([^\n]+)\s*"
+    r"\*\*境界\*\*[:：]?\s*([^\n]+)\s*"
+    r"\*\*修为\*\*[:：]?\s*(-?\d+)\s*/\s*(\d+)\s*"
+    r"\*\*丹毒\*\*[:：]?\s*(-?\d+)\s*点.*?"
+    r"(?:\*\*杀戮\*\*[:：]?\s*(\d+)\s*人.*?)?"
+    , re.S | re.I
+)
+
+def parse_profile(text: str) -> dict | None:
+    """
+    从文本中解析角色信息。
+    如果解析失败，返回 None。
+    """
+    match = PROFILE_PATTERN.search(text)
+    if not match:
+        return None
+    
+    groups = match.groups()
+    
+    profile_data = {
+        "用户": groups[0], "称号": groups[1], "宗门": groups[2], "道号": groups[3],
+        "灵根": groups[4], "境界": groups[5], "修为": int(groups[6]), "修为上限": int(groups[7]),
+        "丹毒": int(groups[8]), "杀戮": int(groups[9]) if groups[9] else 0,
+    }
+
+    return {k: v.strip() if isinstance(v, str) else v for k, v in profile_data.items() if v is not None}
+
 
 # --- 交易行为 ---
 

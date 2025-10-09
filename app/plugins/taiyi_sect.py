@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta
 from app.utils import parse_cooldown_time
 from config import settings
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
 from app.context import get_application
@@ -19,7 +19,7 @@ STATE_KEY_YINDAO = "taiyi_yindao"
 async def trigger_yindao(force_run=False):
     app = get_application()
     client = app.client
-    format_and_log("TASK", "太一门引道", {'阶段': '任务开始', '强制执行': force_run})
+    format_and_log(LogType.TASK, "太一门引道", {'阶段': '任务开始', '强制执行': force_run})
     beijing_tz = pytz.timezone(settings.TZ)
     next_run_time = datetime.now(beijing_tz) + timedelta(minutes=15) 
     
@@ -27,27 +27,27 @@ async def trigger_yindao(force_run=False):
     
     try:
         _sent, reply = await client.send_game_command_request_response(yindao_command)
-        format_and_log("TASK", "太一门引道", {'阶段': '获取状态成功', '原始返回': reply.text.replace('\n', ' ')})
+        format_and_log(LogType.TASK, "太一门引道", {'阶段': '获取状态成功', '原始返回': reply.text.replace('\n', ' ')})
         
         cooldown = parse_cooldown_time(reply)
         if not cooldown and "获得" in reply.text and "神识" in reply.text:
             cooldown = timedelta(hours=settings.TAIYI_SECT_CONFIG.get('yindao_success_cooldown_hours', 12))
-            format_and_log("TASK", "太一门引道", {'阶段': '解析成功', '详情': '检测到成功信息，使用默认冷却时间。', '冷却时间': str(cooldown)})
+            format_and_log(LogType.TASK, "太一门引道", {'阶段': '解析成功', '详情': '检测到成功信息，使用默认冷却时间。', '冷却时间': str(cooldown)})
         
         if cooldown:
             jitter_config = settings.TASK_JITTER['taiyi_yindao']
             jitter = random.uniform(jitter_config['min'], jitter_config['max'])
             next_run_time = datetime.now(beijing_tz) + cooldown + timedelta(seconds=jitter)
-            format_and_log("TASK", "太一门引道", {'阶段': '解析成功', '冷却时间': str(cooldown), '下次运行': next_run_time.strftime('%Y-%m-%d %H:%M:%S')})
+            format_and_log(LogType.TASK, "太一门引道", {'阶段': '解析成功', '冷却时间': str(cooldown), '下次运行': next_run_time.strftime('%Y-%m-%d %H:%M:%S')})
         else:
             next_run_time = datetime.now(beijing_tz) + timedelta(hours=1)
-            format_and_log("TASK", "太一门引道", {'阶段': '解析失败', '详情': '未找到冷却时间，将在1小时后重试。'})
+            format_and_log(LogType.TASK, "太一门引道", {'阶段': '解析失败', '详情': '未找到冷却时间，将在1小时后重试。'})
     except (CommandTimeoutError, Exception) as e:
-        format_and_log("TASK", "太一门引道", {'阶段': '任务异常', '错误': str(e)}, level=logging.ERROR)
+        format_and_log(LogType.TASK, "太一门引道", {'阶段': '任务异常', '错误': str(e)}, level=logging.ERROR)
     finally:
         scheduler.add_job(trigger_yindao, 'date', run_date=next_run_time, id=TASK_ID_YINDAO, replace_existing=True)
         await app.data_manager.save_value(STATE_KEY_YINDAO, next_run_time.isoformat())
-        format_and_log("TASK", "太一门引道", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
+        format_and_log(LogType.TASK, "太一门引道", {'阶段': '任务完成', '详情': f'已计划下次运行时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
 
 async def check_yindao_startup():
     app = get_application()

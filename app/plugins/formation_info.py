@@ -7,7 +7,7 @@ import random
 from datetime import datetime, time, timedelta, date
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 from config import settings
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 from app.context import get_application
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
@@ -56,7 +56,7 @@ async def trigger_update_formation(force_run=False):
     client = app.client
     command = game_adaptor.get_formation_info()
     
-    format_and_log("TASK", "查询阵法", {'阶段': '任务开始', '强制执行': force_run})
+    format_and_log(LogType.TASK, "查询阵法", {'阶段': '任务开始', '强制执行': force_run})
 
     try:
         _sent, reply = await client.send_game_command_request_response(command)
@@ -69,7 +69,7 @@ async def trigger_update_formation(force_run=False):
             return
 
         await data_manager.save_value(STATE_KEY_FORMATION, formation_data)
-        format_and_log("TASK", "查询阵法", {'阶段': '成功', '数据': formation_data})
+        format_and_log(LogType.TASK, "查询阵法", {'阶段': '成功', '数据': formation_data})
         
         if force_run:
             return _format_formation_reply(formation_data, "✅ **[查询阵法]** 任务完成，数据已缓存:")
@@ -99,7 +99,7 @@ async def check_formation_update_startup():
     last_run_json = await data_manager.get_value("formation_last_run", is_json=True, default={})
     today_str = date.today().isoformat()
     if last_run_json.get("date") == today_str and last_run_json.get("count", 0) >= 2:
-        format_and_log("TASK", "查询阵法", {'阶段': '调度跳过', '原因': '今日任务已完成'})
+        format_and_log(LogType.TASK, "查询阵法", {'阶段': '调度跳过', '原因': '今日任务已完成'})
         return
 
     for job in scheduler.get_jobs():
@@ -135,7 +135,7 @@ async def check_formation_update_startup():
             await data_manager.save_value("formation_last_run", current_run_info)
 
         scheduler.add_job(job_wrapper, 'date', run_date=run_time, id=job_id)
-        format_and_log("TASK", "查询阵法", {'阶段': '调度计划', '任务': f'每日第{i+1}次', '运行时间': run_time.strftime('%Y-%m-%d %H:%M:%S')})
+        format_and_log(LogType.TASK, "查询阵法", {'阶段': '调度计划', '任务': f'每日第{i+1}次', '运行时间': run_time.strftime('%Y-%m-%d %H:%M:%S')})
 
 
 def initialize(app):

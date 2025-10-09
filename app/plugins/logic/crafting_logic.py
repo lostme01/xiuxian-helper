@@ -3,7 +3,7 @@ import json
 import re
 from collections import defaultdict
 from app.context import get_application
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 from app.inventory_manager import inventory_manager
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
@@ -148,5 +148,5 @@ async def logic_plan_crafting_session(item_name: str, initiator_id: str, quantit
                 temp_inventories[acc_id][material] -= contribution
                 needed -= contribution
 
-    format_and_log("TASK", "炼制规划", {'物品': item_name, '数量': quantity, '总需求': required_materials, '最终分配方案': json.dumps(contribution_plan, indent=2)})
+    format_and_log(LogType.TASK, "炼制规划", {'物品': item_name, '数量': quantity, '总需求': required_materials, '最终分配方案': json.dumps(contribution_plan, indent=2)})
     return dict(contribution_plan)

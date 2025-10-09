@@ -3,7 +3,7 @@ import json
 from config import settings
 from app.context import get_application
 from app import redis_client
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 # [重构] 直接导入全局单例
 from app.data_manager import data_manager
 

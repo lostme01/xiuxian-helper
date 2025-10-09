@@ -5,7 +5,7 @@ from telethon import events
 
 from config import settings
 from app.context import get_application
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 from app.utils import get_display_width
 
 async def _handle_help_command(event, parts):
@@ -143,10 +143,10 @@ async def execute_command(event):
         noisy_commands = settings.BROADCAST_CONFIG.get('noisy_commands', [])
         is_broadcast_in_group = is_admin_sender and event.is_group and not event.is_reply
         if is_broadcast_in_group and cmd_name in noisy_commands and not is_main_bot:
-            format_and_log("INFO", "指令忽略", {'指令': cmd_name, '执行者': my_id, '原因': '非主控号，避免群内刷屏'})
+            format_and_log(LogType.TASK, "指令忽略", {'指令': cmd_name, '执行者': my_id, '原因': '非主控号，避免群内刷屏'})
             return
 
-        format_and_log("INFO", "指令执行", {'指令': cmd_name, '执行者': my_id, '来源': 'Admin' if is_admin_sender else 'Self'})
+        format_and_log(LogType.TASK, "指令执行", {'指令': cmd_name, '执行者': my_id, '来源': 'Admin' if is_admin_sender else 'Self'})
         handler = command_info.get("handler")
         await handler(event, parts)
 

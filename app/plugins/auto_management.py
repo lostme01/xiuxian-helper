@@ -6,7 +6,7 @@ import time
 import random
 from asteval import Interpreter
 from app.context import get_application
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 from config import settings
 from app.task_scheduler import scheduler
 from app.plugins.logic import trade_logic
@@ -25,7 +25,7 @@ async def _execute_resource_management():
     if my_id != str(settings.ADMIN_USER_ID):
         return
 
-    format_and_log("TASK", "智能资源管理", {'阶段': '开始检查规则'})
+    format_and_log(LogType.TASK, "智能资源管理", {'阶段': '开始检查规则'})
     rules = settings.AUTO_RESOURCE_MANAGEMENT.get('rules', [])
     if not rules:
         return
@@ -58,7 +58,7 @@ async def _execute_resource_management():
                     amount = rule.get("amount")
                     
                     if not action_item_name:
-                        format_and_log("ERROR", "智能资源管理", {'阶段': '规则跳过', '原因': '规则缺少 "item" 字段来指定操作目标'})
+                        format_and_log(LogType.ERROR, "智能资源管理", {'阶段': '规则跳过', '原因': '规则缺少 "item" 字段来指定操作目标'})
                         continue
 
                     command = None
@@ -70,11 +70,11 @@ async def _execute_resource_management():
                     if command:
                         task = {"task_type": "execute_game_command", "target_account_id": account_id, "command": command}
                         await trade_logic.publish_task(task)
-                        format_and_log("TASK", "智能资源管理", {'决策': f'执行{action}', '账户': f'...{account_id[-4:]}', '指令': command})
+                        format_and_log(LogType.TASK, "智能资源管理", {'决策': f'执行{action}', '账户': f'...{account_id[-4:]}', '指令': command})
                         await asyncio.sleep(random.uniform(5, 10)) # 增加一个短暂延迟，避免连续触发
                         break 
             except Exception as e:
-                format_and_log("ERROR", "智能资源管理", {'阶段': '规则执行异常', '规则': str(rule), '错误': str(e)})
+                format_and_log(LogType.ERROR, "智能资源管理", {'阶段': '规则执行异常', '规则': str(rule), '错误': str(e)})
 
 
 async def _execute_knowledge_sharing():
@@ -87,10 +87,10 @@ async def _execute_knowledge_sharing():
         return
 
     if await data_manager.db.hlen(KNOWLEDGE_SESSIONS_KEY) > 0:
-        format_and_log("TASK", "知识共享", {'阶段': '跳过', '原因': '已有正在进行的任务'})
+        format_and_log(LogType.TASK, "知识共享", {'阶段': '跳过', '原因': '已有正在进行的任务'})
         return
 
-    format_and_log("TASK", "知识共享", {'阶段': '开始扫描'})
+    format_and_log(LogType.TASK, "知识共享", {'阶段': '开始扫描'})
 
     all_bots_data = {}
     all_known_recipes = set()
@@ -120,12 +120,12 @@ async def _execute_knowledge_sharing():
                     break
             
             if teacher_id:
-                format_and_log("TASK", "知识共享", { '决策': '发起知识转移', '学生': f'...{student_id[-4:]}', '老师': f'...{teacher_id[-4:]}', '知识': recipe })
+                format_and_log(LogType.TASK, "知识共享", { '决策': '发起知识转移', '学生': f'...{student_id[-4:]}', '老师': f'...{teacher_id[-4:]}', '知识': recipe })
                 task = { "task_type": "initiate_knowledge_request", "target_account_id": student_id, "payload": { "item_name": recipe, "quantity": 1 } }
                 await trade_logic.publish_task(task)
                 
                 delay = random.uniform(30, 60)
-                format_and_log("TASK", "知识共享", {'阶段': '任务分派延迟', '秒数': f'{delay:.1f}'})
+                format_and_log(LogType.TASK, "知识共享", {'阶段': '任务分派延迟', '秒数': f'{delay:.1f}'})
                 await asyncio.sleep(delay)
 
 
@@ -138,12 +138,12 @@ async def _check_knowledge_session_timeouts():
         try:
             session_data = json.loads(session_json)
             if now - session_data.get("timestamp", 0) > 300:
-                format_and_log("TASK", "知识共享-超时检查", {'状态': '发现超时任务', '会话ID': session_id})
+                format_and_log(LogType.TASK, "知识共享-超时检查", {'状态': '发现超时任务', '会话ID': session_id})
                 cancel_task = { "task_type": "cancel_knowledge_request", "target_account_id": session_data["student_id"], "payload": session_data }
                 await trade_logic.publish_task(cancel_task)
                 await data_manager.db.hdel(KNOWLEDGE_SESSIONS_KEY, session_id)
         except Exception as e:
-            format_and_log("ERROR", "知识共享-超时检查", {'状态': '处理异常', '会话ID': session_id, '错误': str(e)})
+            format_and_log(LogType.ERROR, "知识共享-超时检查", {'状态': '处理异常', '会话ID': session_id, '错误': str(e)})
 
 
 async def handle_auto_management_tasks(data):

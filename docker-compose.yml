@@ -4,9 +4,9 @@ services:
     container_name: tg-game-helper-prod
     restart: unless-stopped
     tty: true
+    env_file: ./.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # --- 核心新增：设置环境变量以减少底层库的日志输出 ---
     environment:
       - GRPC_VERBOSITY=ERROR
     volumes:

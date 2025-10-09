@@ -1,0 +1,137 @@
+# ----------------- 核心配置 -----------------
+api_id: 23750422
+api_hash: "your_api_hash_in_env_file" # 已迁移至 .env 文件
+admin_user_id: 5504380726
+game_bot_ids:
+  - -1002517347269
+  - -1002225246894
+game_group_ids:
+  - -1001680975844
+control_group_id: -1002324795299
+sect_name: '黄枫谷'
+command_prefixes: [',', '，']
+timezone: 'Asia/Shanghai'
+command_timeout: 60
+send_delay: { min: 12, max: 16 }
+
+# ----------------- AI 答题配置 -----------------
+exam_solver:
+  gemini_model_names:
+    - 'gemini-2.5-pro'
+    - 'gemini-2.5-flash'
+    - 'gemini-2.5-flash-lite'
+  gemini_api_keys: ["your_gemini_keys_in_env_file"] # 已迁移至 .env 文件
+  reply_delay: { min: 5, max: 15 }
+
+xuangu_exam_solver:
+  enabled: true
+tianji_exam_solver:
+  enabled: true
+
+# ----------------- 周期任务开关 -----------------
+task_switches:
+  biguan: true
+  dianmao: true
+  learn_recipes: true
+  inventory_refresh: true
+  chuang_ta: true
+  garden_check: true
+  sect_treasury: true
+  mojun_arrival: false
+  formation_update: true
+
+# ----------------- 周期任务微调 -----------------
+task_jitter:
+  biguan: { min: 30, max: 90 }
+  taiyi_yindao: { min: 300, max: 1200 }
+  huangfeng_garden: { min: 5, max: 15 }
+  learn_recipes: { min: 3, max: 7 }
+
+task_schedules:
+  dianmao: [ '08:15', '20:15' ]
+
+# ----------------- 游戏指令配置 -----------------
+game_commands:
+  taiyi_yindao: '.引道 水'
+
+# ----------------- 协同与自动化 -----------------
+trade_coordination:
+  focus_fire_auto_delist: true
+  crafting_session_timeout_seconds: 300
+
+auto_resource_management:
+  enabled: true
+  interval_minutes: 120
+  rules: []
+
+auto_knowledge_sharing:
+  enabled: true
+  interval_minutes: 240
+  blacklist: []
+  
+# ----------------- 广播配置 -----------------
+broadcast:
+  noisy_commands:
+    - "任务列表"
+    - "查看配置"
+    - "日志开关"
+    - "任务开关"
+    - "帮助"
+    - "菜单"
+    - "help"
+    - "menu"
+    - "状态"
+    - "查看背包"
+    - "查看宝库"
+    - "查看角色"
+    - "查看阵法"
+
+# ----------------- 宗门专属配置 -----------------
+huangfeng_valley:
+  garden_sow_seed: '凝血草种子'
+
+taiyi_sect:
+  yindao_success_cooldown_hours: 12
+
+# ----------------- 后端与维护 -----------------
+redis:
+  enabled: true
+  host: 'host.docker.internal'
+  port: 6379
+  password: "your_redis_password_in_env_file" # 已迁移至 .env 文件
+  db: 0
+  xuangu_db_name: 'xuangu_qa'
+  tianji_db_name: 'tianji_qa'
+
+auto_delete:
+  enabled: true
+  delay_admin_command: 30
+
+auto_delete_strategies:
+  fire_and_forget: { delay_self: 5 }
+  request_response: { delay_self_on_reply: 5, delay_self_on_timeout: 60 }
+  long_task: { delay_self: 0, delay_anchor: 30 }
+
+log_rotation:
+  max_bytes: 5242880
+  backup_count: 9
+
+logging_switches:
+  system_activity: true
+  task_activity: true
+  cmd_sent: true
+  msg_recv: true
+  reply_recv: true
+  debug_log: true
+  log_edits: true
+  log_deletes: false
+  original_log_enabled: true
+
+heartbeat:
+  active_enabled: true
+  active_interval_minutes: 10
+  passive_enabled: true
+  passive_check_interval_minutes: 5
+  passive_threshold_minutes: 30
+  sync_enabled: true
+  sync_run_time: '04:30'

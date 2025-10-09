@@ -4,7 +4,7 @@ import random
 from telethon import events
 from telethon.utils import get_display_name
 from config import settings
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 from app import game_adaptor
 
 def initialize(app):

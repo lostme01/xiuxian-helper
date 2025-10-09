@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timedelta
 from telethon.tl.types import Message
 from config import settings
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
 from app.context import get_application
@@ -21,23 +21,23 @@ TASK_ID_GARDEN = 'huangfeng_garden_task'
 @resilient_task()
 async def trigger_garden_check(force_run=False):
     if settings.SECT_NAME != __plugin_sect__:
-        format_and_log("TASK", "小药园", {'阶段': '任务中止', '原因': f'宗门不匹配 (当前: {settings.SECT_NAME}, 需要: {__plugin_sect__})'})
+        format_and_log(LogType.TASK, "小药园", {'阶段': '任务中止', '原因': f'宗门不匹配 (当前: {settings.SECT_NAME}, 需要: {__plugin_sect__})'})
         if scheduler.get_job(TASK_ID_GARDEN):
             scheduler.remove_job(TASK_ID_GARDEN)
         return
 
     client = get_application().client
-    format_and_log("TASK", "小药园", {'阶段': '任务开始', '强制执行': force_run})
+    format_and_log(LogType.TASK, "小药园", {'阶段': '任务开始', '强制执行': force_run})
 
     _sent, initial_reply = await client.send_game_command_request_response(game_adaptor.huangfeng_garden())
-    format_and_log("TASK", "小药园", {'阶段': '获取初始状态成功', '原始返回': initial_reply.text.replace('\n', ' ')})
+    format_and_log(LogType.TASK, "小药园", {'阶段': '获取初始状态成功', '原始返回': initial_reply.text.replace('\n', ' ')})
 
     initial_status = _parse_garden_status(initial_reply)
     if not initial_status:
-        format_and_log("TASK", "小药园", {'阶段': '任务失败', '原因': '未能解析出任何地块信息'}, level=logging.WARNING)
+        format_and_log(LogType.TASK, "小药园", {'阶段': '任务失败', '原因': '未能解析出任何地块信息'}, level=logging.WARNING)
         return
 
-    format_and_log("TASK", "小药园", {'阶段': '解析初始状态', '解析结果': str(initial_status)})
+    format_and_log(LogType.TASK, "小药园", {'阶段': '解析初始状态', '解析结果': str(initial_status)})
 
     matured_plots = {pid for pid, s in initial_status.items() if s == '已成熟'}
     empty_plots = {pid for pid, s in initial_status.items() if s == '空闲'}
@@ -52,26 +52,26 @@ async def trigger_garden_check(force_run=False):
     jitter_config = settings.TASK_JITTER['huangfeng_garden']
     for status, command in problems_to_handle.items():
         if status in initial_status.values():
-            format_and_log("TASK", "小药园", {'阶段': '处理非阻塞问题', '指令': command})
+            format_and_log(LogType.TASK, "小药园", {'阶段': '处理非阻塞问题', '指令': command})
             await client.send_game_command_fire_and_forget(command)
             await asyncio.sleep(random.uniform(jitter_config['min'], jitter_config['max']))
 
     if matured_plots:
-        format_and_log("TASK", "小药园", {'阶段': '执行采药', '目标地块': str(matured_plots)})
+        format_and_log(LogType.TASK, "小药园", {'阶段': '执行采药', '目标地块': str(matured_plots)})
         _sent_harvest, reply_harvest = await client.send_game_command_request_response(game_adaptor.huangfeng_harvest())
         
         if "一键采药完成" in reply_harvest.text:
-            format_and_log("TASK", "小药园", {'阶段': '采药成功', '详情': '已成熟地块将加入待播种列表。事件将由事件总线处理。'})
+            format_and_log(LogType.TASK, "小药园", {'阶段': '采药成功', '详情': '已成熟地块将加入待播种列表。事件将由事件总线处理。'})
             plots_to_sow.update(matured_plots)
         else:
-            format_and_log("TASK", "小药园", {'阶段': '采药失败', '原因': '未收到成功确认', '返回': reply_harvest.text}, level=logging.WARNING)
+            format_and_log(LogType.TASK, "小药园", {'阶段': '采药失败', '原因': '未收到成功确认', '返回': reply_harvest.text}, level=logging.WARNING)
 
     if plots_to_sow:
         await _sow_seeds(client, list(plots_to_sow))
     else:
-        format_and_log("TASK", "小药园", {'阶段': '播种跳过', '原因': '没有需要播种的地块。'})
+        format_and_log(LogType.TASK, "小药园", {'阶段': '播种跳过', '原因': '没有需要播种的地块。'})
         
-    format_and_log("TASK", "小药园", {'阶段': '任务完成'})
+    format_and_log(LogType.TASK, "小药园", {'阶段': '任务完成'})
 
 async def check_garden_startup():
     if settings.TASK_SWITCHES.get('garden_check'):
@@ -124,24 +124,24 @@ def _find_seed_to_sow(inventory):
 async def _sow_seeds(client, plots_to_sow: list):
     if not plots_to_sow: return
     
-    format_and_log("TASK", "小药园", {'阶段': '准备播种', '待播种地块': str(plots_to_sow)})
+    format_and_log(LogType.TASK, "小药园", {'阶段': '准备播种', '待播种地块': str(plots_to_sow)})
     inventory = await inventory_manager.get_inventory()
     if not inventory:
-        format_and_log("TASK", "小药园", {'阶段': '播种中止', '原因': '背包缓存为空'}, level=logging.WARNING)
+        format_and_log(LogType.TASK, "小药园", {'阶段': '播种中止', '原因': '背包缓存为空'}, level=logging.WARNING)
         return
         
     jitter_config = settings.TASK_JITTER['huangfeng_garden']
     for plot_id in sorted(plots_to_sow):
         seed = _find_seed_to_sow(inventory)
         if not seed:
-            format_and_log("TASK", "小药园", {'阶段': '播种中止', '原因': '在背包中找不到任何可用种子'})
+            format_and_log(LogType.TASK, "小药园", {'阶段': '播种中止', '原因': '在背包中找不到任何可用种子'})
             break
             
-        format_and_log("TASK", "小药园", {'阶段': '执行播种', '地块': plot_id, '种子': seed})
+        format_and_log(LogType.TASK, "小药园", {'阶段': '执行播种', '地块': plot_id, '种子': seed})
         command = game_adaptor.huangfeng_sow(plot_id, seed)
         _sent, reply = await client.send_game_command_request_response(command)
         if "成功" in reply.text:
-            format_and_log("TASK", "小药园", {'阶段': '播种成功', '地块': plot_id, '种子': seed})
+            format_and_log(LogType.TASK, "小药园", {'阶段': '播种成功', '地块': plot_id, '种子': seed})
         else:
-             format_and_log("TASK", "小药园", {'阶段': '播种失败', '地块': plot_id, '返回': reply.text}, level=logging.WARNING)
+             format_and_log(LogType.TASK, "小药园", {'阶段': '播种失败', '地块': plot_id, '返回': reply.text}, level=logging.WARNING)
         await asyncio.sleep(random.uniform(jitter_config['min'], jitter_config['max']))

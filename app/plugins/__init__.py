@@ -3,7 +3,7 @@ import os
 import importlib
 import logging
 from config import settings
-from app.logger import format_and_log
+from app.logging_service import LogType, format_and_log
 
 def load_all_plugins(app):
     """
@@ -21,15 +21,15 @@ def load_all_plugins(app):
                 
                 plugin_sect = getattr(module, '__plugin_sect__', None)
                 if plugin_sect and plugin_sect != settings.SECT_NAME:
-                    format_and_log("SYSTEM", "插件加载", {'模块': module_name, '状态': '已跳过', '原因': f'宗门不匹配 (需要 {plugin_sect}, 当前配置为 {settings.SECT_NAME})'})
+                    format_and_log(LogType.SYSTEM, "插件加载", {'模块': module_name, '状态': '已跳过', '原因': f'宗门不匹配 (需要 {plugin_sect}, 当前配置为 {settings.SECT_NAME})'})
                     continue
 
                 if hasattr(module, "initialize") and callable(getattr(module, "initialize")):
                     module.initialize(app)
-                    format_and_log("SYSTEM", "插件加载", {'模块': module_name, '状态': '成功'})
+                    format_and_log(LogType.SYSTEM, "插件加载", {'模块': module_name, '状态': '成功'})
             
             except Exception as e:
-                format_and_log("SYSTEM", "插件加载失败", {
+                format_and_log(LogType.SYSTEM, "插件加载失败", {
                     '模块': module_name, 
                     '错误': str(e)
                 }, level=logging.ERROR)

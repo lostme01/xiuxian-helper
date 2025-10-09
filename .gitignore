@@ -1,22 +1,44 @@
-# 配置文件 (保护私密信息)
-config/prod.yaml
-
-# Python 虚拟环境
+# Environments
+.env
 .venv/
-venv/
 env/
+venv/
 
-# 运行时数据和日志
-data/
-logs/
+# IDE / Editor specific files
+.idea/
+.vscode/
+*.swp
+*.swo
 
-# Python 缓存
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+instance/
 
-# IDE 和操作系统生成的文件
-.idea/
-.vscode/
-*.DS_Store
+# Data and Logs
+data/*.session
+data/*.session-journal
+data/jobs.sqlite
+logs/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/

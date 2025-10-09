@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
-import re
+import asyncio
+import functools
 import json
 import logging
-import os
-import shlex
-import functools
-import asyncio
-from datetime import datetime, timedelta
+import re
+from datetime import timedelta
+
 from telethon.tl.types import Message
+
 from app.context import get_application
+from app.logging_service import LogType, format_and_log
 from config import settings
+
 
 def get_display_width(text: str) -> int:
     """
@@ -39,17 +41,9 @@ def create_error_reply(command_name: str, reason: str, details: str = None, usag
         
     return "\n".join(lines)
 
-# [NEW] 通用参数解析器
 def parse_item_and_quantity(parts: list, default_quantity: int = 1) -> tuple[str | None, int | None, str | None]:
     """
     一个通用的基础函数，用于从指令参数中解析物品名称和数量。
-    
-    Args:
-        parts (list): shlex.split 分割后的指令部分。
-        default_quantity (int): 如果未提供数量，则使用的默认值。
-
-    Returns:
-        tuple[str, int, str]: (物品名称, 数量, 错误消息)。如果成功，错误消息为 None。
     """
     if len(parts) < 2:
         return None, None, "参数不足"
@@ -69,7 +63,7 @@ def parse_item_and_quantity(parts: list, default_quantity: int = 1) -> tuple[str
         if not item_name:
             return None, None, "物品名称不能为空"
             
-        return item_name, quantity, None
+        return item_name.strip(), quantity, None
     except ValueError as e:
         return None, None, str(e) or "数量参数无效"
 
@@ -108,7 +102,6 @@ def resilient_task(retry_delay_minutes: int = 15):
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            from app.logger import format_and_log
             from app.telegram_client import CommandTimeoutError
             is_forced = kwargs.get('force_run', False)
             task_name = func.__name__
@@ -119,7 +112,7 @@ def resilient_task(retry_delay_minutes: int = 15):
                     raise e
                 
                 log_level = logging.WARNING if isinstance(e, CommandTimeoutError) else logging.ERROR
-                format_and_log("TASK", f"后台任务异常: {task_name}", {'错误': str(e)}, level=log_level)
+                format_and_log(LogType.TASK, f"后台任务异常: {task_name}", {'错误': str(e)}, level=log_level)
 
         return wrapper
     return decorator
@@ -156,7 +149,6 @@ def mask_string(text: str, head: int = 4, tail: int = 4) -> str:
     return f"{text[:head]}...{text[-tail:]}"
 
 def parse_cooldown_time(message: Message) -> timedelta | None:
-    from app.logger import format_and_log
     try:
         text = message.text
         pattern = r'\**(\d+)\**\s*(小时|时|分钟|分|秒)'
@@ -171,65 +163,25 @@ def parse_cooldown_time(message: Message) -> timedelta | None:
             elif unit == '秒': total_seconds += value
         return timedelta(seconds=total_seconds)
     except Exception as e:
-        format_and_log("DEBUG", "时间解析", {'状态': '异常', '原始文本': getattr(message, 'text', ''), '错误': str(e)}, level=logging.ERROR)
+        format_and_log(LogType.DEBUG, "时间解析", {'状态': '异常', '原始文本': getattr(message, 'text', ''), '错误': str(e)}, level=logging.ERROR)
         return None
-
-def write_state(file_path: str, content: str):
-    from app.logger import format_and_log
-    try:
-        with open(file_path, 'w', encoding='utf-8') as f: f.write(content)
-    except Exception as e:
-        format_and_log("SYSTEM", "状态写入失败", {'文件': file_path, '错误': str(e)}, level=logging.ERROR)
-
-def read_state(file_path: str) -> str | None:
-    from app.logger import format_and_log
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f: return f.read().strip()
-    except FileNotFoundError: return None
-    except Exception as e:
-        format_and_log("SYSTEM", "状态读取失败", {'文件': file_path, '错误': str(e)}, level=logging.ERROR)
-        return None
-
-def write_json_state(file_path: str, data: dict):
-    from app.logger import format_and_log
-    temp_file_path = file_path + ".tmp"
-    try:
-        with open(temp_file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(temp_file_path, file_path)
-    except Exception as e:
-        format_and_log("SYSTEM", "JSON状态写入失败", {'文件': file_path, '错误': str(e)}, level=logging.ERROR)
-        if os.path.exists(temp_file_path):
-            try: os.remove(temp_file_path)
-            except OSError: pass
-
-def read_json_state(file_path: str) -> dict | None:
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f: return json.load(f)
-    except FileNotFoundError: return None
-    except json.JSONDecodeError: return None
-    except Exception as e: return None
 
 def parse_inventory_text(message: Message) -> dict:
     inventory = {}
     matches = re.findall(r'-\s*(.*?)\s*x\s*(\d+)', message.text)
-    for match in matches: inventory[match[0]] = int(match[1])
+    for match in matches: inventory[match[0].strip()] = int(match[1])
     return inventory
 
-# [BUG修复] 修复异步调用问题
 async def get_qa_answer_from_redis(redis_db, db_name: str, question: str) -> str | None:
     if not redis_db: return None
     try: 
         return await redis_db.hget(db_name, question)
-    except Exception as e: 
+    except Exception: 
         return None
 
-# [BUG修复] 修复异步调用问题
 async def save_qa_answer_to_redis(redis_db, db_name: str, question: str, answer: str):
-    from app.logger import format_and_log
     if not redis_db: return
     try:
         await redis_db.hset(db_name, question, answer)
     except Exception as e:
-        format_and_log("SYSTEM", "Redis写入失败", {'数据库': db_name, '键': question, '错误': str(e)}, level=logging.ERROR)
-
+        format_and_log(LogType.ERROR, "Redis写入失败", {'数据库': db_name, '键': question, '错误': str(e)}, level=logging.ERROR)

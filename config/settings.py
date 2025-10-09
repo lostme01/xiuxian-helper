@@ -3,8 +3,10 @@ import yaml
 import logging
 import os
 import json
+import sys
 from dotenv import load_dotenv
 
+# Load environment variables from .env file
 load_dotenv()
 
 CONFIG_FILE_PATH = 'config/prod.yaml'
@@ -25,7 +27,6 @@ except Exception as e:
 ACCOUNT_ID = None
 os.makedirs(DATA_DIR, exist_ok=True)
 
-
 def _merge_config(key: str, defaults: dict) -> dict:
     user_config = config.get(key, {})
     merged = defaults.copy()
@@ -33,74 +34,64 @@ def _merge_config(key: str, defaults: dict) -> dict:
         merged.update(user_config)
     return merged
 
+# --- 从配置文件或环境变量加载 ---
 API_ID = config.get('api_id', None)
-API_HASH = config.get('api_hash', None)
+API_HASH = os.getenv('API_HASH') or config.get('api_hash', None)
 ADMIN_USER_ID = config.get('admin_user_id', None)
-GAME_BOT_IDS = config.get('game_bot_ids', []) 
+GAME_BOT_IDS = config.get('game_bot_ids', [])
 GAME_GROUP_IDS = config.get('game_group_ids', [])
-GAME_TOPIC_ID = config.get('game_topic_id', None) 
+GAME_TOPIC_ID = config.get('game_topic_id', None)
 CONTROL_GROUP_ID = config.get('control_group_id', None)
 TEST_GROUP_ID = config.get('test_group_id', None)
 COMMAND_PREFIXES = config.get('command_prefixes', [',', '，'])
 SECT_NAME = config.get('sect_name', None)
 TZ = config.get('timezone', 'Asia/Shanghai')
-
 COMMAND_TIMEOUT = config.get('command_timeout', 60)
 
+# --- AI 配置 ---
 EXAM_SOLVER_CONFIG = _merge_config('exam_solver', {
     'gemini_model_names': ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
     'gemini_api_keys': [],
     'reply_delay': {'min': 5, 'max': 15}
 })
+gemini_keys_from_env = os.getenv('GEMINI_API_KEYS')
+if gemini_keys_from_env:
+    try:
+        keys = json.loads(gemini_keys_from_env)
+        if isinstance(keys, list):
+            EXAM_SOLVER_CONFIG['gemini_api_keys'] = keys
+        else:
+            print("警告: 环境变量 GEMINI_API_KEYS 不是一个有效的 JSON 列表，将忽略。")
+    except json.JSONDecodeError:
+        print("警告: 无法解析环境变量 GEMINI_API_KEYS，它不是有效的 JSON 格式。")
 
-AUTO_DELETE = _merge_config('auto_delete', {
-    'enabled': True, 
-    'delay_admin_command': 30
-})
+GEMINI_MODEL_NAMES = EXAM_SOLVER_CONFIG.get('gemini_model_names')
 
-AUTO_DELETE_STRATEGIES = _merge_config('auto_delete_strategies', {
-    'fire_and_forget': { 'delay_self': 5 },
-    'request_response': { 
-        'delay_self_on_reply': 5, 
-        'delay_self_on_timeout': 60,
-    },
-    'long_task': { 
-        'delay_self': 0,
-        'delay_anchor': 30
-    }
-})
-
-TASK_SWITCHES = _merge_config('task_switches', {
-    'biguan': True, 'dianmao': True, 'learn_recipes': True, 
-    'garden_check': True, 'inventory_refresh': True, 'chuang_ta': True,
-    'mojun_arrival': False, 'sect_treasury': True
-})
-
-AUTO_RESOURCE_MANAGEMENT = _merge_config('auto_resource_management', {'enabled': False})
-AUTO_KNOWLEDGE_SHARING = _merge_config('auto_knowledge_sharing', {'enabled': False})
-
-
-LOGGING_SWITCHES = _merge_config('logging_switches', {
-    'system_activity': True, 'task_activity': True, 'cmd_sent': True, 
-    'msg_recv': True, 'reply_recv': True, 'original_log_enabled': False, 
-    'debug_log': False, 'log_edits': False, 'log_deletes': False
-})
+# --- Redis 配置 ---
 REDIS_CONFIG = _merge_config('redis', {
-    'enabled': False, 'host': 'localhost', 'port': 6379, 
-    'password': None, 'db': 0, 'xuangu_db_name': 'xuangu_qa', 
+    'enabled': False, 'host': 'localhost', 'port': 6379,
+    'password': None, 'db': 0, 'xuangu_db_name': 'xuangu_qa',
     'tianji_db_name': 'tianji_qa'
 })
+REDIS_CONFIG['password'] = os.getenv('REDIS_PASSWORD') or REDIS_CONFIG.get('password')
 
-redis_password_from_env = os.getenv('REDIS_PASSWORD')
-if redis_password_from_env:
-    REDIS_CONFIG['password'] = redis_password_from_env
-
-if 'redis' not in config or not config.get('redis'):
-    print(f"警告: 在 {CONFIG_FILE_PATH} 中未找到 [redis] 配置块。所有依赖Redis的功能将被禁用。")
-    REDIS_CONFIG['enabled'] = False
-else:
-    REDIS_CONFIG['enabled'] = config.get('redis', {}).get('enabled', False)
-
+# --- 其他配置 ---
+AUTO_DELETE = _merge_config('auto_delete', {'enabled': True, 'delay_admin_command': 30})
+AUTO_DELETE_STRATEGIES = _merge_config('auto_delete_strategies', {
+    'fire_and_forget': {'delay_self': 5},
+    'request_response': {'delay_self_on_reply': 5, 'delay_self_on_timeout': 60},
+    'long_task': {'delay_self': 0, 'delay_anchor': 30}
+})
+TASK_SWITCHES = _merge_config('task_switches', {
+    'biguan': True, 'dianmao': True, 'learn_recipes': True,
+    'garden_check': True, 'inventory_refresh': True, 'chuang_ta': True,
+    'mojun_arrival': False, 'sect_treasury': True, 'formation_update': True
+})
+LOGGING_SWITCHES = _merge_config('logging_switches', {
+    'system_activity': True, 'task_activity': True, 'cmd_sent': True,
+    'msg_recv': True, 'reply_recv': True, 'original_log_enabled': False,
+    'debug_log': False, 'log_edits': False, 'log_deletes': False
+})
 SEND_DELAY = config.get('send_delay', {'min': 12, 'max': 16})
 TASK_JITTER = _merge_config('task_jitter', {
     'biguan': {'min': 30, 'max': 90},
@@ -108,78 +99,71 @@ TASK_JITTER = _merge_config('task_jitter', {
     'huangfeng_garden': {'min': 5, 'max': 15},
     'learn_recipes': {'min': 3, 'max': 7}
 })
-TASK_SCHEDULES = _merge_config('task_schedules', { 'dianmao': [ '08:15', '20:15' ] })
-GAME_COMMANDS = _merge_config('game_commands', { 'taiyi_yindao': '.引道 水' })
-
+TASK_SCHEDULES = _merge_config('task_schedules', {'dianmao': ['08:15', '20:15']})
+GAME_COMMANDS = _merge_config('game_commands', {'taiyi_yindao': '.引道 水'})
 HUANGFENG_VALLEY_CONFIG = config.get('huangfeng_valley', {})
 TAIYI_SECT_CONFIG = config.get('taiyi_sect', {})
-
 XUANGU_EXAM_CONFIG = config.get('xuangu_exam_solver', {'enabled': False})
 TIANJI_EXAM_CONFIG = config.get('tianji_exam_solver', {'enabled': False})
 LOG_ROTATION_CONFIG = config.get('log_rotation', {'max_bytes': 1048576, 'backup_count': 9})
-
-TRADE_COORDINATION_CONFIG = _merge_config('trade_coordination', {
-    'focus_fire_auto_delist': True,
-    'crafting_session_timeout_seconds': 300
-})
-
+TRADE_COORDINATION_CONFIG = _merge_config('trade_coordination', {'focus_fire_auto_delist': True, 'crafting_session_timeout_seconds': 300})
 HEARTBEAT_CONFIG = _merge_config('heartbeat', {
-    'active_enabled': True,
-    'active_interval_minutes': 10,
-    'passive_enabled': True,
-    'passive_check_interval_minutes': 5,
-    'passive_threshold_minutes': 30,
-    'sync_enabled': True,
-    'sync_run_time': '04:30'
+    'active_enabled': True, 'active_interval_minutes': 10,
+    'passive_enabled': True, 'passive_check_interval_minutes': 5,
+    'passive_threshold_minutes': 30, 'sync_enabled': True, 'sync_run_time': '04:30'
 })
+BROADCAST_CONFIG = config.get('broadcast', {})
+AUTO_RESOURCE_MANAGEMENT = config.get('auto_resource_management', {'enabled': False})
+AUTO_KNOWLEDGE_SHARING = config.get('auto_knowledge_sharing', {'enabled': False})
 
-BROADCAST_CONFIG = _merge_config('broadcast', {
-    'noisy_commands': [
-        "任务列表", "查看配置", "日志开关", "任务开关", "帮助", "菜单", 
-        "help", "menu", "状态", "查看背包", "查看宝库", "查看角色", "查看阵法"
-    ]
-})
 
-GEMINI_MODEL_NAMES = EXAM_SOLVER_CONFIG.get('gemini_model_names')
-
-gemini_keys_from_env = os.getenv('GEMINI_API_KEYS')
-if gemini_keys_from_env:
-    try:
-        EXAM_SOLVER_CONFIG['gemini_api_keys'] = json.loads(gemini_keys_from_env)
-    except json.JSONDecodeError:
-        print("错误: 环境变量 GEMINI_API_KEYS 格式不正确，应为 JSON 格式的字符串列表。")
-        EXAM_SOLVER_CONFIG['gemini_api_keys'] = []
-
+# --- 路径常量 ---
 SESSION_FILE_PATH = f'{DATA_DIR}/user.session'
 SCHEDULER_DB = f'sqlite:///{DATA_DIR}/jobs.sqlite'
 
+# --- [重构] 启动检查 ---
 def check_startup_settings():
-    missing_info = []
-    required_settings = {
-        'api_id': (API_ID, "api_id: 12345678"),
-        'api_hash': (API_HASH, "api_hash: '0123456789abcdef0123456789abcdef'"),
-        'admin_user_id': (ADMIN_USER_ID, "admin_user_id: 987654321"),
-        'game_group_ids': (GAME_GROUP_IDS, "game_group_ids:\n  - -1001234567890"),
-        'game_bot_ids': (GAME_BOT_IDS, "game_bot_ids:\n  - 123456789 # 游戏机器人或频道的ID"),
+    """
+    一个更全面的启动配置检查器。
+    验证必须项、数据类型和结构。
+    """
+    errors = []
+
+    # 规则: (配置项, 期望类型, 是否必须, "结构检查函数(可选)")
+    validation_rules = {
+        'api_id': (API_ID, int, True, None),
+        'api_hash': (API_HASH, str, True, None),
+        'admin_user_id': (ADMIN_USER_ID, int, True, None),
+        'game_group_ids': (GAME_GROUP_IDS, list, True, lambda l: all(isinstance(i, int) for i in l)),
+        'command_prefixes': (COMMAND_PREFIXES, list, True, lambda l: all(isinstance(i, str) for i in l)),
+        'send_delay': (SEND_DELAY, dict, True, lambda d: 'min' in d and 'max' in d),
     }
 
-    for key, (value, _) in required_settings.items():
-        if not value:
-            missing_info.append(key)
-
+    # 检查 AI 配置
     if XUANGU_EXAM_CONFIG.get('enabled') or TIANJI_EXAM_CONFIG.get('enabled'):
         if not EXAM_SOLVER_CONFIG.get('gemini_api_keys'):
-             missing_info.append('gemini_api_keys')
-             required_settings['gemini_api_keys'] = (None, "在 prod.yaml 中设置 gemini_api_keys 列表")
-    
-    if missing_info:
-        error_message = f"严重错误: 您的 `config/prod.yaml` 或 `.env` 配置文件中缺少或未正确配置以下必须的设置：\n"
+            errors.append("- 'exam_solver.gemini_api_keys' 未在 .env 文件 (GEMINI_API_KEYS) 或 prod.yaml 中配置，但AI答题功能已开启。")
+
+    # 执行规则检查
+    for key, (value, expected_type, is_required, struct_check) in validation_rules.items():
+        if is_required and not value:
+            errors.append(f"- 必填项 '{key}' 未配置。")
+            continue
+
+        if value and not isinstance(value, expected_type):
+            errors.append(f"- 配置项 '{key}' 的类型错误，期望是 {expected_type.__name__}，但实际是 {type(value).__name__}。")
+            continue
+
+        if struct_check and value and not struct_check(value):
+            errors.append(f"- 配置项 '{key}' 的内部结构不正确。")
+
+    if errors:
+        error_message = f"严重错误: 您的 `config/prod.yaml` 或 `.env` 配置文件存在以下问题：\n"
         error_message += "--------------------------------------------------\n"
-        for key in sorted(list(set(missing_info))):
-            _, example = required_settings[key]
-            error_message += f"\n缺失项: {key}\n正确格式示例:\n{example}\n"
+        error_message += "\n".join(errors)
         error_message += "\n--------------------------------------------------\n程序无法启动。"
         print(error_message)
-        exit(1)
+        sys.exit(1)
 
+# 在模块加载时执行检查
 check_startup_settings()
