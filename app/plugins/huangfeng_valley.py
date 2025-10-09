@@ -14,6 +14,7 @@ from app.context import get_application
 from app.inventory_manager import inventory_manager
 from app.utils import resilient_task
 from app import game_adaptor
+from app.plugins.common_tasks import update_inventory_cache
 
 __plugin_sect__ = '黄枫谷'
 TASK_ID_GARDEN = 'huangfeng_garden_task'
@@ -61,10 +62,10 @@ async def trigger_garden_check(force_run=False):
         _sent_harvest, reply_harvest = await client.send_game_command_request_response(game_adaptor.huangfeng_harvest())
         
         if "一键采药完成" in reply_harvest.text:
-            format_and_log(LogType.TASK, "小药园", {'阶段': '采药成功', '详情': '已成熟地块将加入待播种列表。事件将由事件总线处理。'})
+            format_and_log(LogType.TASK, "小药园", {'阶段': '采药成功'})
             plots_to_sow.update(matured_plots)
         else:
-            format_and_log(LogType.TASK, "小药园", {'阶段': '采药失败', '原因': '未收到成功确认', '返回': reply_harvest.text}, level=logging.WARNING)
+            format_and_log(LogType.WARNING, "小药园", {'阶段': '采药失败', '返回': reply_harvest.text})
 
     if plots_to_sow:
         await _sow_seeds(client, list(plots_to_sow))
@@ -94,54 +95,85 @@ def initialize(app):
 
 def _parse_garden_status(message: Message):
     GARDEN_STATUS_KEYWORDS = ['空闲', '已成熟', '灵气干涸', '害虫侵扰', '杂草横生', '生长中']
-    status = {}
-    text = message.text
-
+    status = {}; text = message.text
     matches = list(re.finditer(r'(\d+)号灵田', text))
-    if not matches:
-        return {}
-
+    if not matches: return {}
     for i, match in enumerate(matches):
         try:
             plot_id = int(match.group(1))
-            
             start_pos = match.start()
             end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(text)
             chunk = text[start_pos:end_pos]
-            
             plot_status = next((s for s in GARDEN_STATUS_KEYWORDS if s in chunk), '未知')
             status[plot_id] = plot_status
-        except (ValueError, IndexError):
-            continue
-            
+        except (ValueError, IndexError): continue
     return status
 
-def _find_seed_to_sow(inventory):
-    preferred = settings.HUANGFENG_VALLEY_CONFIG.get('garden_sow_seed')
-    if preferred and inventory.get(preferred, 0) > 0: return preferred
-    return next((item for item, quantity in inventory.items() if "种子" in item and quantity > 0), None)
+async def _try_to_buy_seeds(client, seed_name: str, quantity: int) -> bool:
+    if quantity <= 0: return True
+    format_and_log(LogType.TASK, "小药园-补种", {'阶段': '尝试兑换种子', '数量': quantity})
+    command = game_adaptor.sect_exchange(seed_name, quantity)
+    try:
+        _sent, reply = await client.send_game_command_request_response(command)
+        if "**兑换成功！**" in reply.text:
+            format_and_log(LogType.TASK, "小药园-补种", {'阶段': '兑换成功'})
+            await asyncio.sleep(3) 
+            return True
+        # [修复] 使用您提供的精确回复文本
+        elif "你的宗门贡献不足！" in reply.text:
+            format_and_log(LogType.WARNING, "小药园-补种", {'阶段': '兑换失败', '原因': '宗门贡献不足'})
+            return False
+        else:
+            format_and_log(LogType.WARNING, "小药园-补种", {'阶段': '兑换失败', '原因': '未知回复', '返回': reply.text.strip()})
+            return False
+    except CommandTimeoutError:
+        format_and_log(LogType.WARNING, "小药园-补种", {'阶段': '兑换失败', '原因': '指令超时'})
+        return False
 
+# [重构] 适配新版一键播种，并集成“信任-验证-修正”逻辑
 async def _sow_seeds(client, plots_to_sow: list):
     if not plots_to_sow: return
-    
-    format_and_log(LogType.TASK, "小药园", {'阶段': '准备播种', '待播种地块': str(plots_to_sow)})
-    inventory = await inventory_manager.get_inventory()
-    if not inventory:
-        format_and_log(LogType.TASK, "小药园", {'阶段': '播种中止', '原因': '背包缓存为空'}, level=logging.WARNING)
+
+    seed_to_sow = settings.HUANGFENG_VALLEY_CONFIG.get('garden_sow_seed')
+    if not seed_to_sow:
+        format_and_log(LogType.WARNING, "小药园-播种", {'阶段': '中止', '原因': '未配置 garden_sow_seed'})
         return
-        
-    jitter_config = settings.TASK_JITTER['huangfeng_garden']
-    for plot_id in sorted(plots_to_sow):
-        seed = _find_seed_to_sow(inventory)
-        if not seed:
-            format_and_log(LogType.TASK, "小药园", {'阶段': '播种中止', '原因': '在背包中找不到任何可用种子'})
-            break
-            
-        format_and_log(LogType.TASK, "小药园", {'阶段': '执行播种', '地块': plot_id, '种子': seed})
-        command = game_adaptor.huangfeng_sow(plot_id, seed)
+
+    format_and_log(LogType.TASK, "小药园-播种", {'阶段': '任务开始', '空闲地块数': len(plots_to_sow)})
+
+    # 1. 信任缓存，进行预检查和预购买
+    inventory = await inventory_manager.get_inventory()
+    current_seeds = inventory.get(seed_to_sow, 0)
+    needed_seeds = len(plots_to_sow)
+    
+    if current_seeds < needed_seeds:
+        seeds_to_buy = needed_seeds - current_seeds
+        if not await _try_to_buy_seeds(client, seed_to_sow, seeds_to_buy):
+            format_and_log(LogType.WARNING, "小药园-播种", {'阶段': '预购失败，中止任务'})
+            return
+
+    # 2. 执行一次性的一键播种指令
+    # 在发送指令前，我们先假设缓存是正确的，即我们至少有1个种子
+    if (await inventory_manager.get_item_count(seed_to_sow)) > 0:
+        command = game_adaptor.huangfeng_sow(seed_to_sow)
         _sent, reply = await client.send_game_command_request_response(command)
-        if "成功" in reply.text:
-            format_and_log(LogType.TASK, "小药园", {'阶段': '播种成功', '地块': plot_id, '种子': seed})
+
+        # 3. 验证结果
+        # [修复] 使用您提供的精确成功回复
+        if "**播种成功！**" in reply.text:
+            format_and_log(LogType.TASK, "小药园-播种", {'阶段': '一键播种成功'})
+            # 播种成功后，事件总线会自动处理库存减少，无需手动操作
+
+        # [修复] 使用您提供的精确失败回复
+        elif f"你的储物袋中没有【{seed_to_sow}】" in reply.text:
+            # “验证失败”的明确信号！
+            format_and_log(LogType.WARNING, "小药园-播种-修正", {'状态': '缓存与实际不符，触发自我修正'})
+            # a. 强制刷新库存以修正缓存
+            await update_inventory_cache(force_run=True)
+            # b. 中止当前任务，等待下个周期以全新状态执行
+            format_and_log(LogType.TASK, "小药园-播种-修正", {'状态': '修正流程已执行，中止当前任务等待下周期'})
         else:
-             format_and_log(LogType.TASK, "小药园", {'阶段': '播种失败', '地块': plot_id, '返回': reply.text}, level=logging.WARNING)
-        await asyncio.sleep(random.uniform(jitter_config['min'], jitter_config['max']))
+            format_and_log(LogType.WARNING, "小药园-播种", {'阶段': '播种失败', '返回': reply.text.strip()})
+    else:
+        format_and_log(LogType.WARNING, "小药园-播种", {'阶段': '中止', '原因': '即使在尝试购买后，缓存中的种子数仍为0'})
+

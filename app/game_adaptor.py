@@ -8,7 +8,7 @@
 import re
 from config import settings
 
-# --- 新增：角色信息解析 ---
+# --- 角色信息解析 ---
 PROFILE_PATTERN = re.compile(
     r"\*\*@([^\*]+)\*\*.*?天命玉牒.*?"
     r"(?:\*\*称号\*\*[:：]?\s*【?([^】\n]+)】?.*?)?"
@@ -158,9 +158,10 @@ def huangfeng_harvest() -> str:
     """黄枫谷采药指令"""
     return ".采药"
 
-def huangfeng_sow(plot_id: int, seed_name: str) -> str:
-    """黄枫谷播种指令"""
-    return f".播种 {plot_id} {seed_name}"
+# [重构] 适配新版的一键播种指令
+def huangfeng_sow(seed_name: str) -> str:
+    """黄枫谷一键播种指令"""
+    return f".播种 {seed_name}"
 
 # --- 事件行为 ---
 def mojun_hide_presence() -> str:

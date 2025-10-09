@@ -12,6 +12,8 @@ load_dotenv()
 CONFIG_FILE_PATH = 'config/prod.yaml'
 DATA_DIR = 'data'
 LOG_FILE = 'logs/app.log'
+# [新增] 定义专门的错误日志文件
+ERROR_LOG_FILE = 'logs/error.log'
 RAW_LOG_FILE = 'logs/raw_messages.log'
 
 try:
@@ -106,11 +108,10 @@ TAIYI_SECT_CONFIG = config.get('taiyi_sect', {})
 XUANGU_EXAM_CONFIG = config.get('xuangu_exam_solver', {'enabled': False})
 TIANJI_EXAM_CONFIG = config.get('tianji_exam_solver', {'enabled': False})
 LOG_ROTATION_CONFIG = config.get('log_rotation', {'max_bytes': 1048576, 'backup_count': 9})
-# [修改] 读取新的配置项
 TRADE_COORDINATION_CONFIG = _merge_config('trade_coordination', {
     'focus_fire_auto_delist': True,
     'crafting_session_timeout_seconds': 300,
-    'focus_fire_sync_buffer_seconds': 5  # 新增配置项
+    'focus_fire_sync_buffer_seconds': 3
 })
 HEARTBEAT_CONFIG = _merge_config('heartbeat', {
     'active_enabled': True, 'active_interval_minutes': 10,
@@ -128,12 +129,7 @@ SCHEDULER_DB = f'sqlite:///{DATA_DIR}/jobs.sqlite'
 
 # --- 启动检查 ---
 def check_startup_settings():
-    """
-    一个更全面的启动配置检查器。
-    验证必须项、数据类型和结构。
-    """
     errors = []
-
     validation_rules = {
         'api_id': (API_ID, int, True, None),
         'api_hash': (API_HASH, str, True, None),
@@ -142,23 +138,18 @@ def check_startup_settings():
         'command_prefixes': (COMMAND_PREFIXES, list, True, lambda l: all(isinstance(i, str) for i in l)),
         'send_delay': (SEND_DELAY, dict, True, lambda d: 'min' in d and 'max' in d),
     }
-
     if XUANGU_EXAM_CONFIG.get('enabled') or TIANJI_EXAM_CONFIG.get('enabled'):
         if not EXAM_SOLVER_CONFIG.get('gemini_api_keys'):
             errors.append("- 'exam_solver.gemini_api_keys' 未在 .env 文件 (GEMINI_API_KEYS) 或 prod.yaml 中配置，但AI答题功能已开启。")
-
     for key, (value, expected_type, is_required, struct_check) in validation_rules.items():
         if is_required and not value:
             errors.append(f"- 必填项 '{key}' 未配置。")
             continue
-
         if value and not isinstance(value, expected_type):
             errors.append(f"- 配置项 '{key}' 的类型错误，期望是 {expected_type.__name__}，但实际是 {type(value).__name__}。")
             continue
-
         if struct_check and value and not struct_check(value):
             errors.append(f"- 配置项 '{key}' 的内部结构不正确。")
-
     if errors:
         error_message = f"严重错误: 您的 `config/prod.yaml` 或 `.env` 配置文件存在以下问题：\n"
         error_message += "--------------------------------------------------\n"
