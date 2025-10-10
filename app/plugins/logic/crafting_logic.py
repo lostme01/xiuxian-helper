@@ -14,7 +14,7 @@ CRAFTING_RECIPES_KEY = "crafting_recipes"
 
 async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler):
     """
-    核心炼制逻辑，使用混合模式等待最终结果。
+    核心炼制逻辑，使用混合模式等待最终结果，并能识别多种失败情况。
     """
     app = get_application()
     client = app.client
@@ -26,16 +26,19 @@ async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler
     try:
         _sent, final_reply = await client.send_and_wait_for_edit(
             command=command,
-            final_pattern=r"炼制结束",
+            final_pattern=r"炼制结束|尚未习得", # 等待任意一个结束标志
             initial_pattern=r"你凝神静气"
         )
         
         raw_text = final_reply.text
         
-        if "炼制结束" in raw_text and "最终获得" in raw_text:
+        # [核心修复] 增加对“尚未习得”失败情况的精确判断
+        if f"你尚未习得【{item_name}】的炼制之法" in raw_text:
+            await feedback_handler(f"❌ **炼制失败**: 您尚未学习该物品的配方。")
+        elif "炼制结束" in raw_text and "最终获得" in raw_text:
             await feedback_handler(f"✅ **炼制指令已成功**!\n系统将通过事件监听器自动更新库存。")
         else:
-            await feedback_handler(f"❌ **炼制失败或未收到预期回复。**\n\n**游戏回复**:\n`{raw_text}`")
+            await feedback_handler(f"❓ **炼制失败或收到未知回复。**\n\n**游戏回复**:\n`{raw_text}`")
 
     except CommandTimeoutError as e:
         error_text = create_error_reply("炼制物品", "游戏指令超时", details=str(e))
@@ -79,7 +82,6 @@ async def logic_check_local_materials(item_name: str, quantity: int = 1) -> dict
     except json.JSONDecodeError:
         return "❌ **规划失败**: 解析配方数据时出错。"
 
-# [重构] 规划函数现在只负责为“缺失的材料”在网络中寻找提供者
 async def logic_plan_crafting_session(missing_materials: dict, initiator_id: str) -> dict | str:
     """
     为一份【缺失材料清单】在网络中寻找提供者并制定贡献计划。
@@ -88,16 +90,14 @@ async def logic_plan_crafting_session(missing_materials: dict, initiator_id: str
         return "❌ 错误: Redis 未连接。"
 
     if not missing_materials:
-        return {} # 如果没有缺失的，直接返回空计划
+        return {}
 
-    # 1. 汇总所有【其他】助手的总库存
     accounts_inventories = {}
     total_network_inventory = defaultdict(int)
     
     keys_found = await data_manager.get_all_assistant_keys()
     for key in keys_found:
         account_id = key.split(':')[-1]
-        # [核心修正] 规划时，只考虑其他助手的库存
         if account_id == initiator_id:
             continue
             
@@ -111,20 +111,17 @@ async def logic_plan_crafting_session(missing_materials: dict, initiator_id: str
             except json.JSONDecodeError:
                 continue
 
-    # 2. 检查网络总库存是否能补足缺口
     unfulfillable = {mat: req_count - total_network_inventory[mat] for mat, req_count in missing_materials.items() if total_network_inventory[mat] < req_count}
     if unfulfillable:
         errors = [f"- `{name}`: 仍缺少 {count}" for name, count in unfulfillable.items()]
         return f"❌ **全网材料不足，无法炼制**:\n" + "\n".join(errors)
 
-    # 3. 贪心算法：为每个缺失的材料，从拥有量最多的助手中获取
     contribution_plan = defaultdict(lambda: defaultdict(int))
     temp_inventories = {acc_id: inv.copy() for acc_id, inv in accounts_inventories.items()}
     
     for material, required_count in missing_materials.items():
         needed = required_count
         
-        # 按当前材料的拥有量对助手进行降序排序
         sorted_accounts = sorted(
             temp_inventories.keys(),
             key=lambda acc_id: temp_inventories[acc_id].get(material, 0),
@@ -143,4 +140,3 @@ async def logic_plan_crafting_session(missing_materials: dict, initiator_id: str
 
     format_and_log(LogType.TASK, "炼制规划", {'物品': '...', '缺失': missing_materials, '最终分配方案': json.dumps(contribution_plan, indent=2)})
     return dict(contribution_plan)
-

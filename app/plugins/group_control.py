@@ -23,10 +23,16 @@ async def _handle_help_command(event, parts):
             await client.reply_to_admin(event, f"❓ 未找到指令: `{cmd_name_to_find}`")
         return
 
+    hidden_commands = {
+        "查看背包", "查看宝库", "查看角色", "查看阵法"
+    }
+
     categorized_cmds = {}
     unique_cmds = {}
     for name, data in app.commands.items():
         canonical_name = data.get("name")
+        if canonical_name in hidden_commands:
+            continue
         handler = data.get('handler')
         if handler and handler not in unique_cmds:
             unique_cmds[handler] = {
@@ -47,42 +53,41 @@ async def _handle_help_command(event, parts):
         "协同": "🤝", "知识": "📚", "数据查询": "📊", "默认": "🔸"
     }
 
-    def format_commands_with_final_rules(commands):
+    # [核心修复] 采用全新的、基于指令长度的多栏排版逻辑
+    def format_commands_by_length(commands):
         lines = []
         cmd_prefix_len = len(prefix)
+        
+        # 按中文字符长度分类
         two_char_cmds = sorted([cmd for cmd in commands if len(cmd.strip('`')) - cmd_prefix_len == 2])
         four_char_cmds = sorted([cmd for cmd in commands if len(cmd.strip('`')) - cmd_prefix_len == 4])
         other_cmds = sorted([cmd for cmd in commands if cmd not in two_char_cmds and cmd not in four_char_cmds])
 
-        while len(four_char_cmds) >= 3 and len(two_char_cmds) >= 1:
-            lines.append('  '.join(four_char_cmds[:3] + [two_char_cmds[0]]))
-            four_char_cmds = four_char_cmds[3:]
-            two_char_cmds = two_char_cmds[1:]
+        # 两字指令，每行4个
+        for i in range(0, len(two_char_cmds), 4):
+            lines.append("  ".join(two_char_cmds[i:i+4]))
 
-        while len(four_char_cmds) >= 1 and len(two_char_cmds) >= 3:
-            lines.append('  '.join([four_char_cmds[0]] + two_char_cmds[:3]))
-            four_char_cmds = four_char_cmds[1:]
-            two_char_cmds = two_char_cmds[3:]
+        # 四字指令，每行3个
+        for i in range(0, len(four_char_cmds), 3):
+            lines.append("  ".join(four_char_cmds[i:i+3]))
+
+        # 其他长指令，每行2个
+        for i in range(0, len(other_cmds), 2):
+            lines.append("  ".join(other_cmds[i:i+2]))
             
-        while len(four_char_cmds) >= 3:
-            lines.append('  '.join(four_char_cmds[:3]))
-            four_char_cmds = four_char_cmds[3:]
-
-        leftovers = sorted(four_char_cmds + two_char_cmds + other_cmds)
-        if leftovers:
-            for i in range(0, len(leftovers), 4):
-                lines.append('  '.join(leftovers[i:i + 4]))
-        
         return lines
 
-    all_categories = category_order + [cat for cat in categorized_cmds if cat not in category_order]
+    all_categories = category_order + [cat for cat in sorted(categorized_cmds.keys()) if cat not in category_order]
     for category in all_categories:
         if category in categorized_cmds:
             icon = category_icons.get(category, "🔸")
             help_lines.append(f"**{icon} {category}**")
-            formatted_lines = format_commands_with_final_rules(categorized_cmds[category])
+            # 使用新的排版函数
+            formatted_lines = format_commands_by_length(categorized_cmds[category])
             help_lines.extend(formatted_lines)
             help_lines.append("")
+    
+    help_lines.append(f"**使用 `{prefix}帮助 <指令名>` 查看具体用法。**")
     await client.reply_to_admin(event, "\n".join(help_lines))
 
 async def execute_command(event):
@@ -111,7 +116,6 @@ async def execute_command(event):
 
     is_admin_sender = str(event.sender_id) == str(settings.ADMIN_USER_ID)
     my_id = str(client.me.id)
-    is_main_bot = my_id == str(settings.ADMIN_USER_ID)
 
     can_execute = False
     
@@ -126,21 +130,16 @@ async def execute_command(event):
             else:
                 can_execute = True
     elif str(event.sender_id) == my_id and event.is_private and str(event.chat_id) == my_id:
-        can_execute = True
+         can_execute = True
+
 
     if can_execute:
-        # [FIX] 优化指令删除逻辑
-        # 无论是管理员发的指令，还是助手自己给自己发的指令（如在收藏夹中），都安排删除
         is_self_command = str(event.sender_id) == my_id
         if is_admin_sender or is_self_command:
-            client._schedule_message_deletion(
-                event.message,
-                settings.AUTO_DELETE.get('delay_admin_command'),
-                "管理员或自身指令原文"
-            )
+            client._schedule_message_deletion(event.message, settings.AUTO_DELETE.get('delay_admin_command'), "管理员或自身指令原文")
 
-        # [重构] 从配置中读取防刷屏指令列表
         noisy_commands = settings.BROADCAST_CONFIG.get('noisy_commands', [])
+        is_main_bot = my_id == str(settings.ADMIN_USER_ID)
         is_broadcast_in_group = is_admin_sender and event.is_group and not event.is_reply
         if is_broadcast_in_group and cmd_name in noisy_commands and not is_main_bot:
             format_and_log(LogType.TASK, "指令忽略", {'指令': cmd_name, '执行者': my_id, '原因': '非主控号，避免群内刷屏'})
@@ -170,4 +169,3 @@ def initialize(app):
     @client.client.on(events.NewMessage(chats=listen_chats))
     async def unified_command_handler(event):
         await execute_command(event)
-
