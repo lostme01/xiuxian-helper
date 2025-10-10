@@ -11,6 +11,7 @@ from app.character_stats_manager import stats_manager
 from app.constants import (CRAFTING_SESSIONS_KEY, GAME_EVENTS_CHANNEL,
                            TASK_ID_CRAFTING_TIMEOUT)
 from app.context import get_application
+from app.data_manager import data_manager
 from app.inventory_manager import inventory_manager
 from app.logging_service import LogType, format_and_log
 from app.plugins.logic import trade_logic
@@ -48,19 +49,9 @@ async def _cmd_focus_fire(event, parts):
     item_details = {}
     try:
         if len(parts) == 3:
-            item_details = {
-                "item_to_sell_name": parts[1], 
-                "item_to_sell_quantity": int(parts[2]),
-                "item_to_buy_name": "灵石", 
-                "item_to_buy_quantity": 1
-            }
+            item_details = {"item_to_sell_name": parts[1], "item_to_sell_quantity": int(parts[2]), "item_to_buy_name": "灵石", "item_to_buy_quantity": 1}
         elif len(parts) == 5:
-            item_details = {
-                "item_to_sell_name": parts[1], 
-                "item_to_sell_quantity": int(parts[2]),
-                "item_to_buy_name": parts[3], 
-                "item_to_buy_quantity": int(parts[4])
-            }
+            item_details = {"item_to_sell_name": parts[1], "item_to_sell_quantity": int(parts[2]), "item_to_buy_name": parts[3], "item_to_buy_quantity": int(parts[4])}
         else:
             await client.reply_to_admin(event, f"❌ 参数格式错误！\n\n{HELP_TEXT_FOCUS_FIRE}")
             return
@@ -76,11 +67,7 @@ async def _cmd_focus_fire(event, parts):
     my_current_quantity = await inventory_manager.get_item_count(payment_item)
 
     if my_current_quantity < payment_quantity:
-        error_msg = create_error_reply(
-            "集火", 
-            "物品不足，无法发起交易",
-            details=f"你需要 `{payment_quantity}` 个`{payment_item}`，但背包中只有 `{my_current_quantity}` 个。"
-        )
+        error_msg = create_error_reply("集火", "物品不足，无法发起交易", details=f"你需要 `{payment_quantity}` 个`{payment_item}`，但背包中只有 `{my_current_quantity}` 个。")
         await progress_msg.edit(error_msg)
         client.unpin_message(progress_msg)
         return
@@ -90,58 +77,38 @@ async def _cmd_focus_fire(event, parts):
         await progress_msg.edit(f"✅ `自身库存充足`\n正在扫描网络查找目标物品...")
         item_to_find = item_details["item_to_sell_name"]
         quantity_to_find = item_details["item_to_sell_quantity"]
-
         best_account_id, _ = await trade_logic.find_best_executor(item_to_find, quantity_to_find, exclude_id=my_id)
-
-        if not best_account_id:
-            raise RuntimeError(f"未在网络中找到拥有足够数量 `{item_to_find}` 的其他助手。")
-
+        if not best_account_id: raise RuntimeError(f"未在网络中找到拥有足够数量 `{item_to_find}` 的其他助手。")
         await progress_msg.edit(f"✅ `已定位助手`\n⏳ 正在下达上架指令 (阶段1)...")
-
         list_future = asyncio.Future()
         FOCUS_FIRE_SESSIONS[session_id + "_list"] = list_future
         task_to_publish = {"task_type": "list_item_for_ff", "requester_account_id": my_id, "target_account_id": best_account_id, "payload": {**item_details, "session_id": session_id}}
-        if not await trade_logic.publish_task(task_to_publish):
-            raise ConnectionError("发布上架任务至 Redis 失败。")
-
+        if not await trade_logic.publish_task(task_to_publish): raise ConnectionError("发布上架任务至 Redis 失败。")
         await progress_msg.edit(f"✅ `上架指令已发送`\n正在等待回报挂单ID (阶段2)...")
         listing_id, executor_id = await asyncio.wait_for(list_future, timeout=settings.COMMAND_TIMEOUT)
-
         await progress_msg.edit(f"✅ `已收到挂单ID`: `{listing_id}`\n⏳ 正在进行状态质询以计算安全同步点 (阶段3)...")
-
         state_future = asyncio.Future()
         FOCUS_FIRE_SESSIONS[session_id + "_state"] = state_future
         game_group_id = settings.GAME_GROUP_IDS[0]
-
         buyer_ready_time_task = client.get_next_sendable_time(game_group_id)
         query_task = trade_logic.publish_task({"task_type": "query_state", "requester_account_id": my_id, "target_account_id": executor_id, "payload": {"session_id": session_id, "chat_id": game_group_id}})
-        
         buyer_ready_time, _ = await asyncio.gather(buyer_ready_time_task, query_task)
-        
         await progress_msg.edit(f"✅ `状态质询已发送`\n正在等待对方回报最早可发送时间...")
         seller_ready_time_iso = await asyncio.wait_for(state_future, timeout=settings.COMMAND_TIMEOUT)
         seller_ready_time = datetime.fromisoformat(seller_ready_time_iso)
-
         earliest_sync_time = max(buyer_ready_time, seller_ready_time)
         buffer_seconds = settings.TRADE_COORDINATION_CONFIG.get('focus_fire_sync_buffer_seconds', 3)
         go_time = earliest_sync_time + timedelta(seconds=buffer_seconds)
-        
         now_utc = datetime.now(timezone.utc)
         wait_duration = (go_time - now_utc).total_seconds()
-        
         await progress_msg.edit(f"✅ `状态同步完成!`\n将在 **{max(0, wait_duration):.1f}** 秒后执行。")
-
         async def buyer_action():
-            if wait_duration > 0:
-                await asyncio.sleep(wait_duration)
+            if wait_duration > 0: await asyncio.sleep(wait_duration)
             await client.send_game_command_fire_and_forget(game_adaptor.buy_item(listing_id))
-
         async def seller_action():
             await trade_logic.publish_task({"task_type": "execute_synced_delist", "target_account_id": executor_id, "payload": {"item_id": listing_id, "go_time_iso": go_time.isoformat()}})
-
         await asyncio.gather(buyer_action(), seller_action())
         await progress_msg.edit(f"✅ **集火任务完成**\n双方指令已在 `{go_time.strftime('%H:%M:%S.%f')[:-3]}` UTC 发送。")
-
     except asyncio.TimeoutError:
         await progress_msg.edit(create_error_reply("集火", "任务超时", details=f"在 {settings.COMMAND_TIMEOUT} 秒内未收到必要回复。"))
     except Exception as e:
@@ -221,8 +188,33 @@ async def _handle_broadcast_command(app, data):
         format_and_log(LogType.TASK, "广播指令-执行", {'指令': command_to_run, '宗门匹配': bool(target_sect)})
         await app.client.send_game_command_fire_and_forget(command_to_run)
 
+# [核心修复] 将 handle_material_delivered 函数的定义补充回来
+async def handle_material_delivered(app, data):
+    if str(app.client.me.id) != data.get("target_account_id"):
+        return
+    payload = data.get("payload", {}); session_id = payload.get("session_id"); supplier_id = payload.get("supplier_id")
+    if not session_id or not supplier_id: return
+    session_json = await app.redis_db.hget(CRAFTING_SESSIONS_KEY, session_id)
+    if not session_json: return
+    session_data = json.loads(session_json)
+    session_data["needed_from"][supplier_id] = True
+    await app.redis_db.hset(CRAFTING_SESSIONS_KEY, session_id, json.dumps(session_data))
+    format_and_log(LogType.TASK, "智能炼制-回执", {'状态': '已签收', '会话ID': session_id, '提供方': f'...{supplier_id[-4:]}'})
+    if all(status for status in session_data["needed_from"].values()):
+        format_and_log(LogType.TASK, "智能炼制", {'状态': '材料已集齐', '会话ID': session_id})
+        if session_data.get("synthesize", False):
+            item_to_craft = session_data.get("item"); quantity = session_data.get("quantity")
+            await app.client.send_admin_notification(f"✅ **材料已集齐**\n正在为 `{item_to_craft}` x{quantity} 执行最终炼制...")
+            from .crafting_actions import _cmd_craft_item as execute_craft_item
+            class FakeEvent: pass
+            await execute_craft_item(FakeEvent(), ["炼制", item_to_craft, str(quantity)])
+        else:
+             await app.client.send_admin_notification(f"✅ **材料已集齐**\n为炼制 `{session_data.get('item', '未知物品')}` 发起的材料收集任务已完成。")
+        await app.redis_db.hdel(CRAFTING_SESSIONS_KEY, session_id)
+
 async def redis_message_handler(message):
     app = get_application()
+    # [核心修复] 将 handle_material_delivered 添加到处理器字典中
     task_handlers = {"listing_successful": _handle_listing_successful, "broadcast_command": _handle_broadcast_command, "report_state": _handle_report_state, "crafting_material_delivered": handle_material_delivered}
     try:
         channel, data_str = message['channel'], message['data']
