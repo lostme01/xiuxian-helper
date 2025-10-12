@@ -161,7 +161,9 @@ async def handle_auto_management_tasks(data):
     if task_type == "execute_game_command" and str(app.client.me.id) == data.get("target_account_id"):
         command = data.get("command")
         if command:
-            await app.client.send_game_command_fire_and_forget(command)
+            # --- [核心修改] 为后台任务的指令设置低优先级 ---
+            format_and_log(LogType.DEBUG, "后台任务执行", {'指令': command, '优先级': '低 (2)'})
+            await app.client.send_game_command_fire_and_forget(command, priority=2)
             return True
             
     return False
@@ -176,4 +178,3 @@ def initialize(app):
         interval = settings.AUTO_KNOWLEDGE_SHARING.get('interval_minutes', 240)
         scheduler.add_job(_execute_knowledge_sharing, 'interval', minutes=interval, id='auto_knowledge_sharing_task', replace_existing=True)
         scheduler.add_job(_check_knowledge_session_timeouts, 'interval', minutes=5, id='knowledge_timeout_checker_task', replace_existing=True)
-

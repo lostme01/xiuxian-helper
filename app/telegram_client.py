@@ -42,7 +42,8 @@ class TelegramClient:
         self.slowmode_cache = {}
         self.last_message_timestamps = {}
 
-        self.message_queue = asyncio.Queue()
+        # --- [核心修改 v1.0] 使用优先级队列 ---
+        self.message_queue = asyncio.PriorityQueue()
         self.deletion_tasks = {}
         self._pinned_messages = set()
 
@@ -105,7 +106,9 @@ class TelegramClient:
 
     async def _message_sender_loop(self):
         while True:
-            command, reply_to, future, target_chat_id, post_send_callback = await self.message_queue.get()
+            # --- [核心修改 v1.1] 从优先级队列中解包 ---
+            # 优先级数字越小，越先被执行
+            priority, (command, reply_to, future, target_chat_id, post_send_callback) = await self.message_queue.get()
             sent_message = None
             try:
                 target_group = target_chat_id or (settings.GAME_GROUP_IDS[0] if settings.GAME_GROUP_IDS else 0)
@@ -145,9 +148,15 @@ class TelegramClient:
                 self.message_queue.task_done()
 
     async def _send_command_and_get_message(self, command: str, reply_to: int = None,
-                                           target_chat_id: int = None, post_send_callback=None) -> Message | asyncio.Task:
+                                           target_chat_id: int = None, post_send_callback=None, priority: int = 1):
+        """
+        [核心修改 v1.2] 内部发送接口增加 priority 参数
+        - priority: 0=紧急, 1=普通, 2=后台
+        """
         future = asyncio.Future()
-        task = asyncio.create_task(self.message_queue.put((command, reply_to, future, target_chat_id, post_send_callback)))
+        # 封装成 (priority, item) 元组放入队列
+        item = (command, reply_to, future, target_chat_id, post_send_callback)
+        task = asyncio.create_task(self.message_queue.put((priority, item)))
 
         if post_send_callback is None:
             await future
@@ -155,34 +164,39 @@ class TelegramClient:
         else:
             return task
 
-    async def send_game_command_fire_and_forget(self, command: str, reply_to: int = None, target_chat_id: int = None):
+    async def send_game_command_fire_and_forget(self, command: str, reply_to: int = None, target_chat_id: int = None, priority: int = 1):
+        """[核心修改 v1.3] 对外接口透出 priority 参数"""
         strategy = settings.AUTO_DELETE_STRATEGIES['fire_and_forget']
         
         def schedule_deletion_callback(message: Message):
             self._schedule_message_deletion(message, strategy['delay_self'], "游戏指令(发后不理)")
 
         put_task = await self._send_command_and_get_message(
-            command, reply_to, target_chat_id, post_send_callback=schedule_deletion_callback
+            command, reply_to, target_chat_id, 
+            post_send_callback=schedule_deletion_callback,
+            priority=priority
         )
         self.fire_and_forget_tasks.add(put_task)
         put_task.add_done_callback(self.fire_and_forget_tasks.discard)
 
 
-    async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
+    async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None, target_chat_id: int = None, priority: int = 1) -> tuple[Message, Message]:
+        """[核心修改 v1.3] 对外接口透出 priority 参数"""
         strategy = settings.AUTO_DELETE_STRATEGIES['request_response']
         sent_message = None
         try:
-            sent_message, reply_message = await self._send_and_wait_for_response(command, reply_to=reply_to, timeout=timeout, target_chat_id=target_chat_id)
+            sent_message, reply_message = await self._send_and_wait_for_response(command, reply_to=reply_to, timeout=timeout, target_chat_id=target_chat_id, priority=priority)
             self._schedule_message_deletion(sent_message, strategy['delay_self_on_reply'], "游戏指令(问答-成功)")
             return sent_message, reply_message
         except CommandTimeoutError as e:
             if e.sent_message: self._schedule_message_deletion(e.sent_message, strategy['delay_self_on_timeout'], "游戏指令(问答-超时)")
             raise e
 
-    async def send_and_wait_for_edit(self, command: str, initial_pattern: str, final_pattern: str, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
+    async def send_and_wait_for_edit(self, command: str, initial_pattern: str, final_pattern: str, timeout: int = None, target_chat_id: int = None, priority: int = 1) -> tuple[Message, Message]:
+        """[核心修改 v1.3] 对外接口透出 priority 参数"""
         strategy = settings.AUTO_DELETE_STRATEGIES['request_response']; sent_message = None; initial_reply_id = None
         try:
-            sent_message, initial_reply = await self._send_and_wait_for_response(command, final_pattern=initial_pattern, target_chat_id=target_chat_id)
+            sent_message, initial_reply = await self._send_and_wait_for_response(command, final_pattern=initial_pattern, target_chat_id=target_chat_id, priority=priority)
             initial_reply_id = initial_reply.id
             future = asyncio.Future()
             self.pending_edits[initial_reply_id] = {'future': future, 'pattern': final_pattern}
@@ -195,10 +209,11 @@ class TelegramClient:
         finally:
             if initial_reply_id: self.pending_edits.pop(initial_reply_id, None)
 
-    async def _send_and_wait_for_response(self, command: str, final_pattern: str = ".*", timeout: int = None, reply_to: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
+    async def _send_and_wait_for_response(self, command: str, final_pattern: str = ".*", timeout: int = None, reply_to: int = None, target_chat_id: int = None, priority: int = 1) -> tuple[Message, Message]:
+        """[核心修改 v1.3] 对外接口透出 priority 参数"""
         timeout = timeout or settings.COMMAND_TIMEOUT; sent_message = None
         try:
-            sent_message = await self._send_command_and_get_message(command, reply_to, target_chat_id, post_send_callback=None)
+            sent_message = await self._send_command_and_get_message(command, reply_to, target_chat_id, post_send_callback=None, priority=priority)
             future = asyncio.Future()
             self.pending_replies[sent_message.id] = {'future': future, 'pattern': final_pattern}
             reply_message = await asyncio.wait_for(future, timeout=timeout)
@@ -250,7 +265,6 @@ class TelegramClient:
     async def _sleep_and_delete(self, delay: int, message: Message):
         await asyncio.sleep(delay)
         task_key = (message.chat_id, message.id)
-        # [修改] 增加对 pinned_messages 的检查
         if task_key in self._pinned_messages or task_key not in self.deletion_tasks:
             self.deletion_tasks.pop(task_key, None)
             return
@@ -281,7 +295,6 @@ class TelegramClient:
         self._pinned_messages.add(task_key)
         if task := self.deletion_tasks.pop(task_key, None):
             task.cancel()
-            # [新增] 如果是永久保留，则不重新安排删除
             if not permanent:
                 self.unpin_message(message)
 
@@ -291,9 +304,7 @@ class TelegramClient:
         self._pinned_messages.discard(task_key)
         self._schedule_message_deletion(message, settings.AUTO_DELETE.get('delay_admin_command'), "解钉后自动清理")
 
-    # [新增] 为`,保留`指令提供底层支持
     async def cancel_message_deletion_permanently(self, message: Message):
-        """永久取消一条消息的自动删除计划。"""
         if not message: return
         self.pin_message(message, permanent=True)
 
