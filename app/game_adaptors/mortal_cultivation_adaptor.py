@@ -19,6 +19,9 @@ class MortalCultivationAdaptor(BaseGameAdaptor):
         , re.S | re.I
     )
 
+    def divination(self) -> str:
+        return ".卜筮问天"
+
     def parse_profile(self, text: str) -> dict | None:
         match = self.PROFILE_PATTERN.search(text)
         if not match:

@@ -8,6 +8,11 @@ class BaseGameAdaptor(ABC):
     """
 
     @abstractmethod
+    def divination(self) -> str:
+        """卜筮问天指令。"""
+        pass
+
+    @abstractmethod
     def parse_profile(self, text: str) -> dict | None:
         """从文本中解析角色信息。"""
         pass

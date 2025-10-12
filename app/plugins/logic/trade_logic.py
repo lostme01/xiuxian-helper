@@ -76,7 +76,6 @@ async def execute_broadcast_command(app, data):
     command_to_run = data.get("command_to_run")
     if command_to_run:
         format_and_log(LogType.TASK, "广播指令-执行", {'指令': command_to_run, '宗门匹配': bool(target_sect)})
-        # 广播指令使用普通优先级
         await app.client.send_game_command_fire_and_forget(command_to_run, priority=1)
 
 async def execute_listing_task(app, requester_account_id: str, **kwargs):
@@ -89,7 +88,6 @@ async def execute_listing_task(app, requester_account_id: str, **kwargs):
     format_and_log(LogType.TASK, "集火-上架", {'阶段': '开始执行', '指令': command})
 
     try:
-        # 上架操作本身不那么争分夺秒，使用普通优先级
         _sent, reply = await app.client.send_game_command_request_response(command, priority=1)
         reply_text = reply.text
 
@@ -121,7 +119,6 @@ async def execute_listing_task(app, requester_account_id: str, **kwargs):
 
 
 async def execute_synced_unlisting_task(app, **payload):
-    """[核心修改 v2.0] 下架指令设为最高优先级"""
     listing_id = payload.get("listing_id")
     go_time_iso = payload.get("go_time_iso")
     if not listing_id or not go_time_iso:
@@ -136,19 +133,33 @@ async def execute_synced_unlisting_task(app, **payload):
             await asyncio.sleep(wait_seconds)
 
         command = game_adaptor.unlist_item(listing_id)
-        # 设为最高优先级
         await app.client.send_game_command_fire_and_forget(command, priority=0)
     except Exception as e:
         format_and_log(LogType.ERROR, "同步下架异常", {'错误': str(e)})
 
 
 async def execute_purchase_task(app, **payload):
-    """[核心修改 v2.0] 购买指令设为最高优先级"""
+    """[最终修复] 补全等待逻辑"""
     listing_id = payload.get("listing_id") or payload.get("item_id")
-    command = game_adaptor.buy_item(listing_id)
-    format_and_log(LogType.TASK, "协同任务-购买", {'阶段': '开始执行', '指令': command, '优先级': '最高'})
+    go_time_iso = payload.get("go_time_iso")
+
+    if not listing_id or not go_time_iso:
+        format_and_log(LogType.WARNING, "协同任务-购买", {'阶段': '中止', '原因': '缺少listing_id或go_time_iso'})
+        return
+
     try:
-        # 设为最高优先级
+        # --- 核心修复：从 execute_synced_unlisting_task 复制过来的等待逻辑 ---
+        go_time = datetime.fromisoformat(go_time_iso)
+        now_utc = datetime.now(timezone.utc)
+        wait_seconds = (go_time - now_utc).total_seconds()
+
+        if wait_seconds > 0:
+            await asyncio.sleep(wait_seconds)
+        # --- 修复结束 ---
+
+        command = game_adaptor.buy_item(listing_id)
+        format_and_log(LogType.TASK, "协同任务-购买", {'阶段': '开始执行', '指令': command, '优先级': '最高'})
+        
         _sent, reply = await app.client.send_game_command_request_response(command, priority=0)
         
         if "交易成功" not in reply.text:
@@ -166,4 +177,3 @@ async def execute_purchase_task(app, **payload):
             await publish_task(receipt_task)
     except Exception as e:
         format_and_log(LogType.ERROR, "协同购买异常", {'错误': str(e)})
-
