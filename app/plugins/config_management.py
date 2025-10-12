@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-from app.config_manager import update_nested_setting, update_setting
 from app.context import get_application
 from app.logging_service import LogType
 from config import settings
 from .logic import config_logic
-# [重构] 从元数据中心导入配置定义
+
+# [修复] 直接从 config_manager 导入那个唯一正确的、经过验证的辅助函数
+from app.config_manager import update_nested_setting, update_setting, _get_settings_object
+
 from app.config_meta import MODIFIABLE_CONFIGS, LOGGING_SWITCHES_META, TASK_SWITCHES_META
 
 HELP_TEXT_GET_CONFIG = """🔍 **查看当前配置**
@@ -29,7 +31,6 @@ HELP_TEXT_SET_CONFIG = """⚙️ **动态修改详细配置**
 - 不带参数发送可查看所有支持动态修改的配置项。
 **用法**: `,修改配置 <配置别名> <新值>`"""
 
-# [重构] 动态生成反向映射
 LOG_DESC_TO_SWITCH = {v: k for k, v in LOGGING_SWITCHES_META.items()}
 
 async def _cmd_get_config(event, parts):
@@ -42,7 +43,6 @@ async def _cmd_toggle_log(event, parts):
     if len(parts) == 1:
         status_text = "📝 **各模块日志开关状态**:\n\n"
         switches = []
-        # [重构] 从元数据生成列表
         for switch_name, desc in LOGGING_SWITCHES_META.items():
             is_enabled = settings.LOGGING_SWITCHES.get(switch_name, False)
             status = "✅ 开启" if is_enabled else "❌ 关闭"
@@ -70,7 +70,6 @@ async def _cmd_toggle_log(event, parts):
         await client.reply_to_admin(event, f"❌ 未知的日志类型: `{log_type_desc}`\n\n**可用类型**: {available_types}")
         return
 
-    # [重构] 调用 update_setting
     msg = await update_setting('logging_switches', log_switch_name, new_status, f"**{log_type_desc}** 日志已 **{switch}**")
     await client.reply_to_admin(event, msg)
 
@@ -78,17 +77,17 @@ async def _cmd_toggle_log(event, parts):
 async def _cmd_toggle_task(event, parts):
     client = get_application().client
 
+    # [修复] 移除之前所有错误的辅助函数
+
     if len(parts) == 1:
         status_lines = ["🔧 **各功能开关状态**:\n"]
-        # [重构] 从元数据生成
         for key, (friendly_name, path) in sorted(TASK_SWITCHES_META.items()):
             root_key, sub_key = path.split('.', 1)
-            # 使用 getattr 安全地访问 settings 模块中的配置字典
-            config_obj = getattr(settings, root_key.upper(), {})
-            if not isinstance(config_obj, dict):
-                config_obj = getattr(settings, f"{root_key.upper()}_CONFIG", {})
             
-            is_enabled = config_obj.get(sub_key, False)
+            # [修复] 直接使用从 config_manager 导入的、唯一正确的 _get_settings_object 函数
+            config_obj = _get_settings_object(root_key)
+            
+            is_enabled = config_obj.get(sub_key, False) if config_obj else False
             status = "✅ 开启" if is_enabled else "❌ 关闭"
             status_lines.append(f"- **{friendly_name}** (`{key}`): {status}")
         status_lines.append(f"\n**用法**: `,任务开关 <功能名> [<开|关>]`")
@@ -104,10 +103,9 @@ async def _cmd_toggle_task(event, parts):
     root_key, sub_key = path.split('.', 1)
 
     if len(parts) == 2:
-        config_obj = getattr(settings, root_key.upper(), {})
-        if not isinstance(config_obj, dict):
-             config_obj = getattr(settings, f"{root_key.upper()}_CONFIG", {})
-        current_value = config_obj.get(sub_key)
+        # [修复] 同样使用正确的函数来获取状态
+        config_obj = _get_settings_object(root_key)
+        current_value = config_obj.get(sub_key) if config_obj else False
         await client.reply_to_admin(event, f"ℹ️ 当前 **{friendly_name}** 功能状态: **{'开启' if current_value else '关闭'}**")
         return
 
@@ -115,9 +113,8 @@ async def _cmd_toggle_task(event, parts):
         new_status = (parts[2] == "开")
         success_msg = f"**{friendly_name}** 功能已 **{parts[2]}**"
         
-        # [重构] 调用 update_setting
-        root_key_for_update = root_key.replace('_enabled', '') # 适配 update_setting 的逻辑
-        msg = await update_setting(root_key_for_update, sub_key, new_status, success_msg)
+        # update_setting 内部会调用正确的 _get_settings_object，所以这里是正常的
+        msg = await update_setting(root_key, sub_key, new_status, success_msg)
         await client.reply_to_admin(event, msg)
     else:
         await client.reply_to_admin(event, f"❌ 参数格式错误！\n\n{HELP_TEXT_TOGGLE_TASK}")
@@ -128,7 +125,6 @@ async def _cmd_set_config(event, parts):
 
     if len(parts) == 1:
         header = "⚙️ **可动态修改的配置项如下 (使用别名修改):**\n"
-        # [重构] 从元数据生成
         items = [f"- **{alias}**: {desc}" for alias, (_, desc) in sorted(MODIFIABLE_CONFIGS.items())]
         usage = f"\n\n**用法**: `,修改配置 <配置别名> <新值>`"
         await client.reply_to_admin(event, header + '\n'.join(items) + usage)
@@ -158,4 +154,3 @@ def initialize(app):
                          usage=HELP_TEXT_TOGGLE_TASK)
     app.register_command("修改配置", _cmd_set_config, help_text="⚙️ 动态修改详细配置。", category="系统", aliases=['setconfig'],
                          usage=HELP_TEXT_SET_CONFIG)
-

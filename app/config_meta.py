@@ -27,6 +27,7 @@ MODIFIABLE_CONFIGS = {
     
     # 协同与自动化
     "智能炼制超时秒数": ("trade_coordination.crafting_session_timeout_seconds", "智能炼制任务等待材料的超时时间（秒）。"),
+    "集火同步缓冲": ("trade_coordination.focus_fire_sync_buffer_seconds", "集火任务中，计算出的同步时间点之后的额外缓冲秒数。"),
     
     # 心跳与维护
     "主动心跳间隔分钟": ("heartbeat.active_interval_minutes", "保持 Telegram 连接活跃的心跳间隔（分钟）。"),
@@ -64,7 +65,7 @@ TASK_SWITCHES_META = {
     '阵法': ('自动更新阵法', 'task_switches.formation_update'),
     '魔君': ('自动应对魔君', 'task_switches.mojun_arrival'),
     '自动删除': ('消息自动删除', 'auto_delete.enabled'),
-    '集火下架': ('集火后自动下架', 'trade_coordination.focus_fire_auto_delist'),
+    # [修复] “集火下架”是一个详细配置，不应出现在任务开关中，已移除
     '智能资源': ('智能资源管理', 'auto_resource_management.enabled'),
     '知识共享': ('自动化知识共享', 'auto_knowledge_sharing.enabled'),
 }

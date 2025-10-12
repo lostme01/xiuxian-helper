@@ -7,7 +7,6 @@ from app.constants import GAME_EVENTS_CHANNEL, TASK_CHANNEL
 from app.context import get_application
 from app.logging_service import LogType, format_and_log
 
-# --- 核心处理器 ---
 
 async def redis_message_handler(message):
     """
@@ -27,11 +26,15 @@ async def redis_message_handler(message):
             await _handle_game_event(app, data)
             return
 
+        # 广播指令是例外，它没有target_id，需要所有非admin号执行
+        if task_type == "broadcast_command":
+            from app.plugins.logic.trade_logic import execute_broadcast_command
+            await execute_broadcast_command(app, data)
+            return
+
         # 检查是否是针对本机的任务
         if str(app.client.me.id) != target_id:
-            # 广播指令是例外，它没有target_id，需要所有非admin号执行
-            if task_type != "broadcast_command":
-                return
+            return
 
         # --- 路由到插件的特定任务处理器 ---
         from app.plugins.trade_coordination import (
@@ -51,7 +54,8 @@ async def redis_message_handler(message):
             "query_state": handle_query_state
         }
         if task_type in plugin_handlers:
-            await plugin_handlers[app, data]
+            # [修复] 使用正确的函数调用语法: plugin_handlers[task_type](...)
+            await plugin_handlers[task_type](app, data)
             return
 
         # --- 路由到通用的逻辑处理器 ---
@@ -62,11 +66,9 @@ async def redis_message_handler(message):
             return
 
         generic_handlers = {
-            "broadcast_command": trade_logic.execute_broadcast_command,
             "list_item_for_ff": trade_logic.execute_listing_task,
             "purchase_item": trade_logic.execute_purchase_task,
             "execute_synced_delist": trade_logic.execute_synced_unlisting_task,
-            # [新增] 集火购买方的最终执行任务
             "execute_purchase": trade_logic.execute_purchase_task,
         }
         
@@ -75,11 +77,7 @@ async def redis_message_handler(message):
             if task_type == "list_item_for_ff":
                 await generic_handlers[task_type](app, data.get("requester_account_id"), **data.get("payload", {}))
             else:
-                 # broadcast_command 和其他任务有不同的签名
-                if task_type == 'broadcast_command':
-                    await generic_handlers[task_type](app, data)
-                else:
-                    await generic_handlers[task_type](app, **data.get("payload", {}))
+                await generic_handlers[task_type](app, **data.get("payload", {}))
             return
 
     except (json.JSONDecodeError, TypeError):
@@ -96,7 +94,7 @@ async def redis_listener_loop():
     app = get_application()
     while True:
         if not app.redis_db or not app.redis_db.is_connected:
-            if app.redis_db: # Check if redis is enabled
+            if app.redis_db:
                 format_and_log(LogType.WARNING, "Redis 监听器", {'状态': '暂停', '原因': 'Redis 未连接'})
                 await asyncio.sleep(15)
             else:
