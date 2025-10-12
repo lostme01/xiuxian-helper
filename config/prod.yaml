@@ -58,6 +58,8 @@ game_commands:
 trade_coordination:
   focus_fire_auto_delist: true
   crafting_session_timeout_seconds: 300
+  # [修复] 添加缺失的配置项，默认值为3秒
+  focus_fire_sync_buffer_seconds: 3
 
 auto_resource_management:
   enabled: true

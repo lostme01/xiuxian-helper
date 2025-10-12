@@ -4,8 +4,10 @@ import functools
 import json
 import logging
 import re
+from contextlib import asynccontextmanager
 from datetime import timedelta
 
+from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError, MessageNotModifiedError
 from telethon.tl.types import Message
 
 from app.context import get_application
@@ -13,11 +15,86 @@ from app.logging_service import LogType, format_and_log
 from config import settings
 
 
+@asynccontextmanager
+async def progress_manager(event, initial_message: str):
+    """
+    一个异步上下文管理器，用于简化 "发送进度 -> pin -> 执行 -> unpin -> 编辑结果" 的UI流程。
+
+    用法:
+    async with progress_manager(event, "⏳ 正在执行任务...") as progress:
+        result = await some_long_task()
+        await progress.update(f"✅ 任务完成: {result}")
+    """
+    app = get_application()
+    client = app.client
+    progress_message = None
+    try:
+        progress_message = await client.reply_to_admin(event, initial_message)
+        if not progress_message:
+            class DummyProgress:
+                async def update(self, text): pass
+                @property
+                def message(self): return None
+            yield DummyProgress()
+            return
+
+        client.pin_message(progress_message)
+
+        class ProgressUpdater:
+            def __init__(self, msg):
+                self._msg = msg
+                self._final_text = ""
+
+            @property
+            def message(self):
+                return self._msg
+
+            async def update(self, text: str):
+                self._final_text = text
+                try:
+                    if self._msg and self._msg.text != text:
+                        await self._msg.edit(text)
+                except (MessageEditTimeExpiredError, MessageNotModifiedError):
+                    self._msg = None 
+                except Exception:
+                    pass
+            
+            async def _finalize(self):
+                """在上下文退出时调用，确保最终消息被设置"""
+                if not self._msg:
+                     if self._final_text:
+                        await client.reply_to_admin(event, self._final_text)
+                elif self._final_text and self._msg.text != self._final_text:
+                    try:
+                        await self._msg.edit(self._final_text)
+                    except MessageNotModifiedError:
+                        # [修复] 优雅地忽略“消息未修改”错误
+                        pass
+                    except MessageEditTimeExpiredError:
+                         await client.reply_to_admin(event, self._final_text)
+
+        progress_updater = ProgressUpdater(progress_message)
+        
+        yield progress_updater
+        
+        await progress_updater._finalize()
+
+    except Exception as e:
+        error_text = create_error_reply("指令执行", "任务执行期间发生意外错误", details=str(e))
+        if progress_message:
+            try:
+                await progress_message.edit(error_text)
+            except Exception:
+                await client.reply_to_admin(event, error_text)
+        else:
+            await client.reply_to_admin(event, error_text)
+        raise e
+    finally:
+        if progress_message:
+            client.unpin_message(progress_message)
+
+
 def get_display_width(text: str) -> int:
-    """
-    计算字符串在终端中的显示宽度。
-    一个中文字符宽度为2，一个英文字符宽度为1。
-    """
     width = 0
     for char in text:
         if '\u4e00' <= char <= '\u9fff' or char in '，。？！；：《》【】':
@@ -42,9 +119,6 @@ def create_error_reply(command_name: str, reason: str, details: str = None, usag
     return "\n".join(lines)
 
 def parse_item_and_quantity(parts: list, default_quantity: int = 1) -> tuple[str | None, int | None, str | None]:
-    """
-    一个通用的基础函数，用于从指令参数中解析物品名称和数量。
-    """
     if len(parts) < 2:
         return None, None, "参数不足"
 

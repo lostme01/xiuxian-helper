@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-import re
 import json
+import re
+
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 
 from app.context import get_application
-from app.telegram_client import CommandTimeoutError
-from app.utils import create_error_reply, send_paginated_message
-from app.inventory_manager import inventory_manager
-# [重构] 导入新的核心逻辑函数
+# [重构] 导入新的UI流程管理器
 from app.plugins.logic.crafting_logic import logic_execute_crafting
+from app.telegram_client import CommandTimeoutError
+from app.utils import create_error_reply, progress_manager, send_paginated_message
 
 HELP_TEXT_CRAFT_ITEM = """🛠️ **炼制物品 (带库存同步)**
 **说明**: 执行炼制操作，并在成功后自动更新内部的背包缓存，实现材料的减少和成品的增加。
@@ -35,24 +35,14 @@ async def _cmd_craft_item(event, parts):
     else:
         item_name = " ".join(parts[1:])
     
-    progress_msg = await client.reply_to_admin(event, f"⏳ 正在准备炼制任务: `{item_name} x{quantity}`...")
-    if not progress_msg: return
-    client.pin_message(progress_msg)
-    
-    # [重构] 定义一个用于编辑消息的反馈处理器
-    async def feedback_handler(text):
-        try:
-            await progress_msg.edit(text)
-        except MessageEditTimeExpiredError:
-            # 如果原始消息过期，就发送一条新消息
-            await client.reply_to_admin(event, text)
-
-    try:
-        # [重构] 调用核心逻辑函数
+    # [重构] 使用 progress_manager 自动处理UI流程
+    async with progress_manager(event, f"⏳ 正在准备炼制任务: `{item_name} x{quantity}`...") as progress:
+        # 定义一个内联的 feedback_handler，它会调用 progress.update
+        async def feedback_handler(text):
+            await progress.update(text)
+        
+        # 调用核心逻辑，并传入新的 feedback_handler
         await logic_execute_crafting(item_name, quantity, feedback_handler)
-    finally:
-        # 核心逻辑函数会处理所有反馈，这里只需要解钉
-        client.unpin_message(progress_msg)
 
 
 async def _cmd_list_craftable_items(event, parts):

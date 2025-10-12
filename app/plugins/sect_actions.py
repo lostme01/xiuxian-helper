@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 import re
+
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 
+from app import game_adaptor
 from app.context import get_application
 from app.telegram_client import CommandTimeoutError
-# [REFACTOR] 导入新的通用解析器
-from app.utils import create_error_reply, parse_item_and_quantity
-from app import game_adaptor
+# [重构] 导入新的UI流程管理器
+from app.utils import create_error_reply, parse_item_and_quantity, progress_manager
 
 HELP_TEXT_EXCHANGE_ITEM = """🔄 **宗门兑换 (事件驱动)**
 **说明**: 执行宗门宝库的兑换操作。成功后，系统将通过监听游戏事件自动更新库存和贡献。
@@ -25,7 +26,6 @@ async def _cmd_exchange_item(event, parts):
     client = app.client
     usage = app.commands.get('兑换', {}).get('usage')
 
-    # [REFACTOR] 使用通用解析器
     item_name, quantity, error = parse_item_and_quantity(parts)
     if error:
         error_msg = create_error_reply("兑换", error, usage_text=usage)
@@ -33,40 +33,30 @@ async def _cmd_exchange_item(event, parts):
         return
 
     command = game_adaptor.sect_exchange(item_name, quantity)
-        
-    progress_message = await client.reply_to_admin(event, f"⏳ 正在执行兑换指令: `{command}`...")
-    if not progress_message: return
-    client.pin_message(progress_message)
-
-    final_text = ""
-    try:
-        _sent, reply = await client.send_game_command_request_response(command)
-
-        if "**兑换成功！**" in reply.text:
-            final_text = f"✅ **兑换指令已发送**!\n系统将通过事件监听器自动更新状态。"
-        elif "贡献不足" in reply.text:
-            final_text = f"ℹ️ **兑换失败**: 宗门贡献不足。"
-        else:
-            final_text = f"❓ **兑换失败**: 收到未知回复。\n\n**游戏返回**:\n`{reply.text}`"
-
-    except CommandTimeoutError as e:
-        final_text = create_error_reply("兑换", "游戏指令超时", details=str(e))
-    except Exception as e:
-        final_text = create_error_reply("兑换", "任务执行期间发生意外错误", details=str(e))
-    finally:
-        client.unpin_message(progress_message)
+    
+    # [重构] 使用 progress_manager
+    async with progress_manager(event, f"⏳ 正在执行兑换指令: `{command}`...") as progress:
+        final_text = ""
         try:
-            await client._cancel_message_deletion(progress_message)
-            await progress_message.edit(final_text)
-        except MessageEditTimeExpiredError:
-            await client.reply_to_admin(event, final_text)
+            _sent, reply = await client.send_game_command_request_response(command)
+
+            if "**兑换成功！**" in reply.text:
+                final_text = f"✅ **兑换指令已发送**!\n系统将通过事件监听器自动更新状态。"
+            elif "贡献不足" in reply.text:
+                final_text = f"ℹ️ **兑换失败**: 宗门贡献不足。"
+            else:
+                final_text = f"❓ **兑换失败**: 收到未知回复。\n\n**游戏返回**:\n`{reply.text}`"
+        except CommandTimeoutError as e:
+            final_text = create_error_reply("兑换", "游戏指令超时", details=str(e))
+        
+        await progress.update(final_text)
+
 
 async def _cmd_donate_item(event, parts):
     app = get_application()
     client = app.client
     usage = app.commands.get('捐献', {}).get('usage')
 
-    # [REFACTOR] 捐献指令需要强制数量，所以单独处理，但也可以简化
     if len(parts) < 3:
         error_msg = create_error_reply("捐献", "参数不足", usage_text=usage)
         await client.reply_to_admin(event, error_msg)
@@ -89,32 +79,23 @@ async def _cmd_donate_item(event, parts):
 
     command = game_adaptor.sect_donate(item_name, quantity)
         
-    progress_message = await client.reply_to_admin(event, f"⏳ 正在执行捐献指令: `{command}`...")
-    if not progress_message: return
-    client.pin_message(progress_message)
-
-    final_text = ""
-    try:
-        _sent, reply = await client.send_game_command_request_response(command)
-
-        if "你向宗门捐献了" in reply.text:
-            final_text = f"✅ **捐献指令已发送**!\n系统将通过事件监听器自动更新状态。"
-        elif "数量不足" in reply.text or "并无价值" in reply.text:
-            final_text = f"ℹ️ **捐献失败** (状态未变动)\n\n**游戏返回**:\n`{reply.text}`"
-        else:
-            final_text = f"❓ **捐献失败**: 收到未知回复。\n\n**游戏返回**:\n`{reply.text}`"
-
-    except CommandTimeoutError as e:
-        final_text = create_error_reply("捐献", "游戏指令超时", details=str(e))
-    except Exception as e:
-        final_text = create_error_reply("捐献", "任务执行期间发生意外错误", details=str(e))
-    finally:
-        client.unpin_message(progress_message)
+    # [重构] 使用 progress_manager
+    async with progress_manager(event, f"⏳ 正在执行捐献指令: `{command}`...") as progress:
+        final_text = ""
         try:
-            await client._cancel_message_deletion(progress_message)
-            await progress_message.edit(final_text)
-        except MessageEditTimeExpiredError:
-            await client.reply_to_admin(event, final_text)
+            _sent, reply = await client.send_game_command_request_response(command)
+
+            if "你向宗门捐献了" in reply.text:
+                final_text = f"✅ **捐献指令已发送**!\n系统将通过事件监听器自动更新状态。"
+            elif "数量不足" in reply.text or "并无价值" in reply.text:
+                final_text = f"ℹ️ **捐献失败** (状态未变动)\n\n**游戏返回**:\n`{reply.text}`"
+            else:
+                final_text = f"❓ **捐献失败**: 收到未知回复。\n\n**游戏返回**:\n`{reply.text}`"
+
+        except CommandTimeoutError as e:
+            final_text = create_error_reply("捐献", "游戏指令超时", details=str(e))
+        
+        await progress.update(final_text)
 
 def initialize(app):
     app.register_command(

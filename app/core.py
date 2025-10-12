@@ -5,6 +5,7 @@ import logging.handlers
 import os
 import sys
 import time
+import traceback
 from importlib import reload
 
 import redis.asyncio as redis
@@ -19,7 +20,7 @@ from app.plugins import load_all_plugins
 from app.redis_client import initialize_redis
 from app.task_scheduler import scheduler, shutdown
 from app.telegram_client import CommandTimeoutError, TelegramClient
-from app.utils import create_error_reply
+from app.utils import create_error_reply, progress_manager
 from config import settings
 
 
@@ -42,10 +43,49 @@ class Application:
         set_scheduler(scheduler)
 
         self.setup_logging()
+        # [新增] 在初始化时设置全局异常处理器
+        self.setup_exception_handler()
+        
         format_and_log(LogType.SYSTEM, "应用初始化", {'阶段': '开始...'})
         gemini_client.initialize_gemini()
         self.client = TelegramClient()
         format_and_log(LogType.SYSTEM, "组件初始化", {'组件': 'Telegram 客户端', '状态': '实例化完成'})
+    
+    # [新增] 全局异常处理模块
+    def _handle_uncaught_exception(self, exc_type, exc_value, exc_traceback):
+        """全局异常钩子的处理函数"""
+        # 确保日志记录器可用
+        if logging.getLogger("app").handlers:
+            # 格式化异常信息
+            error_message = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+            
+            # 使用CRITICAL级别记录未捕获的异常
+            logging.critical(f"捕获到未处理的全局异常:\n{error_message}", extra={'log_type_key': 'ERROR'})
+
+            # 准备通过Telegram发送通知
+            if self.client and self.client.is_connected():
+                notification_message = (
+                    f"🆘 **严重警报：捕获到未处理的全局异常**\n\n"
+                    f"**类型**: `{exc_type.__name__}`\n"
+                    f"**信息**: `{exc_value}`\n\n"
+                    f"程序可能处于不稳定状态，请立即检查 `error.log` 文件获取详细的堆栈跟踪信息。"
+                )
+                
+                # 从同步函数安全地调用异步代码
+                # 获取正在运行的事件循环
+                loop = asyncio.get_running_loop()
+                if loop and loop.is_running():
+                    # 在事件循环中安排协程的执行
+                    asyncio.run_coroutine_threadsafe(
+                        self.client.send_admin_notification(notification_message), 
+                        loop
+                    )
+
+    def setup_exception_handler(self):
+        """设置sys.excepthook来捕获所有未处理的异常"""
+        sys.excepthook = self._handle_uncaught_exception
+        format_and_log(LogType.SYSTEM, "核心服务", {'阶段': '已设置全局异常处理器'})
+
 
     async def _redis_listener_loop(self):
         from app.plugins.trade_coordination import redis_message_handler
@@ -72,7 +112,6 @@ class Application:
                 format_and_log(LogType.ERROR, "Redis 监听循环异常", {'错误': str(e)}, level=logging.CRITICAL)
                 await asyncio.sleep(15)
 
-    # [重构] 实现错误日志分离
     def setup_logging(self):
         print("开始配置日志系统...")
         app_logger = logging.getLogger("app")
@@ -82,22 +121,19 @@ class Application:
         app_logger.setLevel(log_level)
         app_logger.propagate = False
 
-        # --- 通用格式化器 ---
         console_formatter = logging.Formatter(fmt='%(message)s')
         file_formatter = TimezoneFormatter(
             fmt='%(asctime)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S %Z',
+            datefmt='%Y-m-d %H:%M:%S %Z',
             tz_name=settings.TZ
         )
 
-        # --- 控制台处理器 (所有级别) ---
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setFormatter(console_formatter)
         app_logger.addHandler(stream_handler)
         
         os.makedirs('logs', exist_ok=True)
 
-        # --- 主日志文件处理器 (INFO, WARNING) ---
         class InfoFilter(logging.Filter):
             def filter(self, record):
                 return record.levelno <= logging.WARNING
@@ -112,18 +148,16 @@ class Application:
         main_log_handler.addFilter(InfoFilter())
         app_logger.addHandler(main_log_handler)
 
-        # --- 错误日志文件处理器 (ERROR, CRITICAL) ---
         error_log_handler = logging.handlers.RotatingFileHandler(
-            settings.ERROR_LOG_FILE, # 使用新的文件名
+            settings.ERROR_LOG_FILE,
             maxBytes=settings.LOG_ROTATION_CONFIG['max_bytes'],
             backupCount=settings.LOG_ROTATION_CONFIG['backup_count'],
             encoding='utf-8'
         )
         error_log_handler.setFormatter(file_formatter)
-        error_log_handler.setLevel(logging.ERROR) # 只处理 ERROR 及以上级别
+        error_log_handler.setLevel(logging.ERROR)
         app_logger.addHandler(error_log_handler)
 
-        # --- 原始消息日志处理器 (可选) ---
         raw_logger = logging.getLogger('raw_messages')
         if raw_logger.hasHandlers(): raw_logger.handlers.clear()
         raw_logger.propagate = False
@@ -136,7 +170,6 @@ class Application:
         else:
             raw_logger.setLevel(logging.CRITICAL + 1)
 
-        # --- 屏蔽第三方库的冗余日志 ---
         logging.getLogger('apscheduler').setLevel(logging.ERROR)
         logging.getLogger('telethon').setLevel(logging.WARNING)
         logging.getLogger('asyncio').setLevel(logging.WARNING)
@@ -161,6 +194,7 @@ class Application:
     async def run(self):
         background_tasks = set()
         try:
+            # Pydantic 验证已在 settings.py 中完成
             self.redis_db = await initialize_redis()
             self.data_manager.initialize(self.redis_db)
             self.inventory_manager.initialize(self.data_manager)
@@ -195,10 +229,24 @@ class Application:
         except Exception as e:
             logging.critical(f"应用主流程发生严重错误: {e}", exc_info=True)
         finally:
+            # [修改] 优雅关机流程
+            format_and_log(LogType.SYSTEM, "核心服务", {'阶段': '开始优雅关机...'})
+
+            # 1. 等待所有发后不理任务完成
+            if self.client and self.client.fire_and_forget_tasks:
+                format_and_log(LogType.SYSTEM, "关机流程", {'状态': f'等待 {len(self.client.fire_and_forget_tasks)} 个发后不理任务完成...'})
+                await asyncio.gather(*self.client.fire_and_forget_tasks, return_exceptions=True)
+
+            # 2. 取消其他后台任务
             for task in background_tasks: task.cancel()
             await asyncio.gather(*background_tasks, return_exceptions=True)
+            
+            # 3. 断开客户端连接
             if self.client and self.client.is_connected(): await self.client.disconnect()
+            
+            # 4. 关闭调度器
             shutdown()
+            
             format_and_log(LogType.SYSTEM, "核心服务", {'阶段': '应用已关闭'})
 
     def register_command(self, name, handler, help_text="", category="默认", aliases=None, usage=None):
@@ -209,31 +257,25 @@ class Application:
 
     def register_task(self, task_key, function, command_name, help_text):
         self.task_functions[task_key] = function
+        
         async def task_trigger_handler(event, parts):
-            app = get_application(); client = app.client
-            progress_message = await client.reply_to_admin(event, f"⏳ 正在手动执行 **[{command_name}]** 任务...")
-            if not progress_message: return
-            client.pin_message(progress_message)
-            final_text = ""
-            try:
-                task_func = self.task_functions.get(task_key)
-                if task_func:
-                    result = await task_func(force_run=True)
-                    final_text = result if isinstance(result, str) else f"✅ **[{command_name}]** 任务已成功触发。"
-                else:
-                    raise ValueError(f"未找到与 `{task_key}` 关联的任务实现。")
-            except CommandTimeoutError as e:
-                final_text = create_error_reply(command_name, "游戏指令超时", details=str(e))
-            except Exception as e:
-                final_text = create_error_reply(command_name, "任务执行期间发生意外错误", details=str(e))
-                format_and_log(LogType.ERROR, "手动任务执行失败", {'任务': command_name, '错误': str(e)}, level=logging.ERROR)
-            finally:
-                client.unpin_message(progress_message)
+            async with progress_manager(event, f"⏳ 正在手动执行 **[{command_name}]** 任务...") as progress:
+                final_text = ""
                 try:
-                    await client._cancel_message_deletion(progress_message)
-                    await progress_message.edit(final_text)
-                except MessageEditTimeExpiredError:
-                    await client.reply_to_admin(event, final_text)
+                    task_func = self.task_functions.get(task_key)
+                    if task_func:
+                        result = await task_func(force_run=True)
+                        final_text = result if isinstance(result, str) else f"✅ **[{command_name}]** 任务已成功触发。"
+                    else:
+                        raise ValueError(f"未找到与 `{task_key}` 关联的任务实现。")
+                except CommandTimeoutError as e:
+                    final_text = create_error_reply(command_name, "游戏指令超时", details=str(e))
+                except Exception as e:
+                    format_and_log(LogType.ERROR, "手动任务执行失败", {'任务': command_name, '错误': str(e)}, level=logging.ERROR)
+                    raise e
+                
+                await progress.update(final_text)
+
         self.register_command(command_name, task_trigger_handler, help_text=help_text, category="动作")
 
     async def reload_plugins_and_commands(self):
@@ -248,3 +290,4 @@ class Application:
         self.load_plugins_and_commands(is_reload=True)
         asyncio.create_task(self._run_startup_checks())
         format_and_log(LogType.SYSTEM, "热重载", {'阶段': '完成'})
+

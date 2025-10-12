@@ -1,17 +1,15 @@
 # -*- coding: utf-8 -*-
-import re
-import logging
 import asyncio
-import pytz
-from datetime import datetime
+
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
-from config import settings
-from app.logging_service import LogType, format_and_log
-from app.context import get_application
-from app.telegram_client import CommandTimeoutError
-from app.utils import create_error_reply
+
 from app import game_adaptor
+from app.context import get_application
 from app.data_manager import data_manager
+from app.logging_service import LogType, format_and_log
+from app.telegram_client import CommandTimeoutError
+# [重构] 导入新的UI流程管理器和错误回复生成器
+from app.utils import create_error_reply, progress_manager
 
 STATE_KEY_PROFILE = "character_profile"
 
@@ -41,7 +39,6 @@ async def trigger_update_profile(force_run=False):
     command = game_adaptor.get_profile()
     
     try:
-        # [REVERT] 恢复使用 send_and_wait_for_edit 以匹配事件处理器的逻辑
         _sent, final_message = await client.send_and_wait_for_edit(
             command=command,
             final_pattern=r"\*\*境界\*\*",
@@ -60,7 +57,7 @@ async def trigger_update_profile(force_run=False):
             return _format_profile_reply(profile_data, "✅ **角色信息已更新并缓存**:")
 
     except (CommandTimeoutError, asyncio.TimeoutError) as e:
-        error_msg = f"等待游戏机器人响应或更新信息超时(超过 {settings.COMMAND_TIMEOUT} 秒)。"
+        error_msg = f"等待游戏机器人响应或更新信息超时。"
         if force_run:
             return create_error_reply("我的灵根", "游戏指令超时", details=error_msg)
         else:
@@ -73,22 +70,15 @@ async def trigger_update_profile(force_run=False):
 
 
 async def _cmd_query_profile(event, parts):
-    app = get_application()
-    client = app.client
-    progress_message = await client.reply_to_admin(event, "⏳ 正在发送指令并等待查询结果...")
-    
-    if not progress_message: return
-
-    client.pin_message(progress_message)
-    
-    final_text = await trigger_update_profile(force_run=True)
-    
-    client.unpin_message(progress_message)
-    try:
-        await client._cancel_message_deletion(progress_message)
-        await progress_message.edit(final_text)
-    except MessageEditTimeExpiredError:
-        await client.reply_to_admin(event, final_text)
+    """
+    [重构]
+    使用新的 progress_manager 上下文管理器来简化UI流程。
+    """
+    async with progress_manager(event, "⏳ 正在发送指令并等待查询结果...") as progress:
+        # 在 'with' 块内，我们只关心核心业务逻辑
+        final_text = await trigger_update_profile(force_run=True)
+        # 将最终结果交给 progress_manager 来更新消息
+        await progress.update(final_text)
 
 
 async def _cmd_view_cached_profile(event, parts):

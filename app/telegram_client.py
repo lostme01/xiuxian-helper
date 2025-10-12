@@ -48,6 +48,9 @@ class TelegramClient:
 
         self.pending_replies = {}
         self.pending_edits = {}
+        
+        # [新增] 用于追踪发后不理任务的集合
+        self.fire_and_forget_tasks = set()
 
         all_configured_groups = settings.GAME_GROUP_IDS + ([settings.CONTROL_GROUP_ID] if settings.CONTROL_GROUP_ID else [])
         if getattr(settings, 'TEST_GROUP_ID', None):
@@ -101,10 +104,8 @@ class TelegramClient:
             format_and_log(LogType.ERROR, "回复管理员失败", {'错误': str(e)}, level=logging.ERROR)
             return None
 
-    # [重构] 调整消息发送循环，使其能回传更多信息
     async def _message_sender_loop(self):
         while True:
-            # 队列现在包含一个回调函数，用于发送后处理
             command, reply_to, future, target_chat_id, post_send_callback = await self.message_queue.get()
             sent_message = None
             try:
@@ -136,32 +137,42 @@ class TelegramClient:
                 if future: future.set_exception(e)
             
             finally:
-                # 无论成功失败，都尝试执行发送后回调
                 if post_send_callback and sent_message:
                     try:
                         post_send_callback(sent_message)
                     except Exception as cb_e:
                         format_and_log(LogType.ERROR, "发送后回调执行失败", {'错误': str(cb_e)}, level=logging.ERROR)
+                
+                # [修改] 标记队列任务完成
+                self.message_queue.task_done()
 
     async def _send_command_and_get_message(self, command: str, reply_to: int = None,
-                                           target_chat_id: int = None, post_send_callback=None) -> Message:
-        future = asyncio.Future() if post_send_callback is None else None
-        await self.message_queue.put((command, reply_to, future, target_chat_id, post_send_callback))
-        if future:
-            return await future
+                                           target_chat_id: int = None, post_send_callback=None) -> Message | asyncio.Task:
+        # [修改] 对于不需要 future 的调用，返回一个 task
+        future = asyncio.Future()
+        task = asyncio.create_task(self.message_queue.put((command, reply_to, future, target_chat_id, post_send_callback)))
 
-    # [核心修复] 重构发后不理的实现方式
+        # 如果需要等待消息对象（request-response模式），则等待 future
+        if post_send_callback is None:
+            await future
+            return future.result()
+        else:
+            # 否则（fire-and-forget模式），返回put操作的 task，以便追踪
+            return task
+
     async def send_game_command_fire_and_forget(self, command: str, reply_to: int = None, target_chat_id: int = None):
         strategy = settings.AUTO_DELETE_STRATEGIES['fire_and_forget']
         
-        # 定义一个回调函数，它将在消息被发送后由 _message_sender_loop 调用
         def schedule_deletion_callback(message: Message):
             self._schedule_message_deletion(message, strategy['delay_self'], "游戏指令(发后不理)")
 
-        # 将指令和回调函数一起放入队列，不再等待 future
-        await self._send_command_and_get_message(
+        # [修改] 获取放入队列的 task，并将其添加到追踪集合中
+        put_task = await self._send_command_and_get_message(
             command, reply_to, target_chat_id, post_send_callback=schedule_deletion_callback
         )
+        self.fire_and_forget_tasks.add(put_task)
+        put_task.add_done_callback(self.fire_and_forget_tasks.discard)
+
 
     async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
         strategy = settings.AUTO_DELETE_STRATEGIES['request_response']; sent_message = None
@@ -192,9 +203,9 @@ class TelegramClient:
     async def _send_and_wait_for_response(self, command: str, final_pattern: str = ".*", timeout: int = None, reply_to: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
         timeout = timeout or settings.COMMAND_TIMEOUT; sent_message = None
         try:
-            future = asyncio.Future()
-            # 对于需要等待回复的指令，我们仍然使用 future，但不传递回调
+            # [修改] 调用已更新的函数
             sent_message = await self._send_command_and_get_message(command, reply_to, target_chat_id, post_send_callback=None)
+            future = asyncio.Future()
             self.pending_replies[sent_message.id] = {'future': future, 'pattern': final_pattern}
             reply_message = await asyncio.wait_for(future, timeout=timeout)
             return sent_message, reply_message
