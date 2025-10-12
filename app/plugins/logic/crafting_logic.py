@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import re
+import asyncio
 from collections import defaultdict
 from app.context import get_application
 from app.logging_service import LogType, format_and_log
@@ -9,34 +10,82 @@ from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply
 from app import game_adaptor
 from app.data_manager import data_manager
+# [v2.1 新增] 导入背包校准任务
+from app.plugins.common_tasks import update_inventory_cache
 
 CRAFTING_RECIPES_KEY = "crafting_recipes"
 
 async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler):
     """
-    核心炼制逻辑，使用混合模式等待最终结果，并能识别多种失败情况。
+    [v2.1 最终优化版]
+    核心炼制逻辑，增加自动学习配方及缓存自我修正功能。
     """
     app = get_application()
     client = app.client
-    
-    command = game_adaptor.craft_item(item_name, quantity)
-    
-    await feedback_handler(f"⏳ 正在执行指令: `{command}`\n正在等待游戏机器人返回最终结果...")
-    
-    try:
+
+    # --- 内部函数：执行一次炼制尝试 ---
+    async def _attempt_craft():
+        command = game_adaptor.craft_item(item_name, quantity)
+        await feedback_handler(f"⏳ 正在执行指令: `{command}`\n正在等待游戏机器人返回最终结果...")
+        
         _sent, final_reply = await client.send_and_wait_for_edit(
             command=command,
-            final_pattern=r"炼制结束|尚未习得", # 等待任意一个结束标志
+            final_pattern=r"炼制结束|尚未习得|材料不足", # 等待任意一个结束标志
             initial_pattern=r"你凝神静气"
         )
-        
-        raw_text = final_reply.text
-        
-        # [核心修复] 增加对“尚未习得”失败情况的精确判断
+        return final_reply.text
+
+    # --- 主流程 ---
+    try:
+        # 第一次尝试炼制
+        raw_text = await _attempt_craft()
+
+        # 场景1: 未学习配方 -> 尝试自动学习并重试
         if f"你尚未习得【{item_name}】的炼制之法" in raw_text:
-            await feedback_handler(f"❌ **炼制失败**: 您尚未学习该物品的配方。")
+            await feedback_handler(f"⚠️ **未习得配方**\n正在检查背包中是否有对应的丹方/图纸...")
+            
+            recipe_name = None
+            inventory = await inventory_manager.get_inventory()
+            possible_recipe_names = [f"{item_name}丹方", f"{item_name}图纸"]
+            for name in possible_recipe_names:
+                if name in inventory:
+                    recipe_name = name
+                    break
+            
+            if not recipe_name:
+                await feedback_handler(f"❌ **炼制失败**: 您尚未学习该配方，且背包中未找到对应的丹方/图纸。")
+                return
+
+            await feedback_handler(f"✅ **发现配方**: `{recipe_name}`\n正在发送学习指令...")
+            learn_command = game_adaptor.learn_recipe(recipe_name)
+            _sent_learn, reply_learn = await client.send_game_command_request_response(learn_command)
+
+            # 场景 1.1: 学习成功
+            if "成功领悟了它的炼制之法" in reply_learn.text:
+                await feedback_handler(f"✅ **学习成功!**\n正在重试炼制操作...")
+                raw_text_retry = await _attempt_craft()
+                if "炼制结束" in raw_text_retry and "最终获得" in raw_text_retry:
+                    await feedback_handler(f"✅ **炼制成功!**\n系统将通过事件监听器自动更新库存。")
+                else:
+                    await feedback_handler(f"❓ **重试炼制失败**\n\n**游戏回复**:\n`{raw_text_retry}`")
+            
+            # 场景 1.2: [v2.1 新增] 学习因“物品不存在”失败 -> 缓存不一致，触发自我修正
+            elif f"你的储物袋中没有【{recipe_name}】" in reply_learn.text:
+                await feedback_handler(f"⚠️ **学习失败**: 缓存与实际背包不符。\n正在自动校准背包缓存，请稍后重试...")
+                # 触发一次强制后台背包刷新
+                await update_inventory_cache(force_run=True)
+                await feedback_handler(f"✅ **背包已校准**\n缓存不一致问题已修正，请您再次尝试炼制。")
+
+            # 场景 1.3: 其他学习失败情况
+            else:
+                await feedback_handler(f"❌ **学习失败**\n\n**游戏回复**:\n`{reply_learn.text}`")
+            return
+
+        # 场景2: 炼制成功
         elif "炼制结束" in raw_text and "最终获得" in raw_text:
             await feedback_handler(f"✅ **炼制指令已成功**!\n系统将通过事件监听器自动更新库存。")
+        
+        # 场景3: 其他失败情况
         else:
             await feedback_handler(f"❓ **炼制失败或收到未知回复。**\n\n**游戏回复**:\n`{raw_text}`")
 
@@ -47,12 +96,10 @@ async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler
         error_text = create_error_reply("炼制物品", "执行时发生未知异常", details=str(e))
         await feedback_handler(error_text)
 
+
 async def logic_check_local_materials(item_name: str, quantity: int = 1) -> dict | str:
     """
     检查本地材料是否充足。
-    - 如果充足，返回一个空字典 {}。
-    - 如果不充足，返回一个包含【缺少】的材料和数量的字典。
-    - 如果发生错误，返回一个错误字符串。
     """
     if not data_manager.db or not data_manager.db.is_connected:
         return "❌ 错误: Redis 未连接。"

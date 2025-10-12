@@ -139,41 +139,50 @@ async def execute_synced_unlisting_task(app, **payload):
 
 
 async def execute_purchase_task(app, **payload):
-    """[最终修复] 补全等待逻辑"""
     listing_id = payload.get("listing_id") or payload.get("item_id")
     go_time_iso = payload.get("go_time_iso")
 
-    if not listing_id or not go_time_iso:
-        format_and_log(LogType.WARNING, "协同任务-购买", {'阶段': '中止', '原因': '缺少listing_id或go_time_iso'})
+    # 根据是否存在 go_time_iso 判断是集火任务还是普通购买
+    is_focus_fire = bool(go_time_iso)
+
+    if not listing_id:
+        format_and_log(LogType.WARNING, "协同任务-购买", {'阶段': '中止', '原因': '缺少listing_id'})
         return
 
     try:
-        # --- 核心修复：从 execute_synced_unlisting_task 复制过来的等待逻辑 ---
-        go_time = datetime.fromisoformat(go_time_iso)
-        now_utc = datetime.now(timezone.utc)
-        wait_seconds = (go_time - now_utc).total_seconds()
-
-        if wait_seconds > 0:
-            await asyncio.sleep(wait_seconds)
-        # --- 修复结束 ---
-
-        command = game_adaptor.buy_item(listing_id)
-        format_and_log(LogType.TASK, "协同任务-购买", {'阶段': '开始执行', '指令': command, '优先级': '最高'})
+        # 如果是集火任务，则执行等待逻辑
+        if is_focus_fire:
+            go_time = datetime.fromisoformat(go_time_iso)
+            now_utc = datetime.now(timezone.utc)
+            wait_seconds = (go_time - now_utc).total_seconds()
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
         
-        _sent, reply = await app.client.send_game_command_request_response(command, priority=0)
+        command = game_adaptor.buy_item(listing_id)
+        priority = 0 if is_focus_fire else 1
+        format_and_log(LogType.TASK, "协同任务-购买", {'阶段': '开始执行', '指令': command, '优先级': '最高' if priority == 0 else '普通'})
+        
+        _sent, reply = await app.client.send_game_command_request_response(command, priority=priority)
         
         if "交易成功" not in reply.text:
              format_and_log(LogType.WARNING, "协同任务-购买失败", {'回复': reply.text})
 
+        # --- [核心修复 #2] 修复回执发送逻辑 ---
         if crafting_session_id := payload.get("crafting_session_id"):
-            receipt_task = {
-                "task_type": "crafting_material_delivered",
-                "payload": {
-                    "session_id": crafting_session_id,
-                    "supplier_id": str(app.client.me.id)
-                },
-                "target_account_id": crafting_session_id.split('_')[1]
-            }
-            await publish_task(receipt_task)
+            # 从会话ID中解析出发起者的ID (格式: craft_{initiator_id}_{timestamp})
+            try:
+                initiator_id = crafting_session_id.split('_')[1]
+                receipt_task = {
+                    "task_type": "crafting_material_delivered",
+                    "payload": {
+                        "session_id": crafting_session_id,
+                        "supplier_id": str(app.client.me.id)
+                    },
+                    "target_account_id": initiator_id # 确保目标是发起者
+                }
+                await publish_task(receipt_task)
+            except IndexError:
+                 format_and_log(LogType.ERROR, "智能炼制回执失败", {'原因': '无法从session_id解析发起者ID', 'session_id': crafting_session_id})
+
     except Exception as e:
         format_and_log(LogType.ERROR, "协同购买异常", {'错误': str(e)})

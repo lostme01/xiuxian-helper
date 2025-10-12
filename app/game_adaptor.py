@@ -32,6 +32,9 @@ game_adaptor = _create_adaptor()
 # 我们将实例的方法暴露在模块级别。
 # 注意：这是一种为了保持向后兼容的技巧，新代码应优先使用 game_adaptor 实例。
 
+# --- [核心修复] 新增 divination 指令的代理 ---
+divination = game_adaptor.divination
+
 parse_profile = game_adaptor.parse_profile
 list_item = game_adaptor.list_item
 buy_item = game_adaptor.buy_item
