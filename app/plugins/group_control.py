@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
-import shlex
 import logging
+import shlex
+
 from telethon import events
 
-from config import settings
 from app.context import get_application
 from app.logging_service import LogType, format_and_log
 from app.utils import get_display_width
+from config import settings
+
 
 async def _handle_help_command(event, parts):
     app = get_application()
@@ -53,27 +55,16 @@ async def _handle_help_command(event, parts):
         "协同": "🤝", "知识": "📚", "数据查询": "📊", "默认": "🔸"
     }
 
-    # [核心修复] 采用全新的、基于指令长度的多栏排版逻辑
-    def format_commands_by_length(commands):
+    # [修改] 简化布局逻辑，统一为一行三个
+    def format_commands_to_three_per_line(commands):
         lines = []
-        cmd_prefix_len = len(prefix)
+        # 首先对指令进行排序，保证每次生成的菜单顺序一致
+        sorted_commands = sorted(commands)
         
-        # 按中文字符长度分类
-        two_char_cmds = sorted([cmd for cmd in commands if len(cmd.strip('`')) - cmd_prefix_len == 2])
-        four_char_cmds = sorted([cmd for cmd in commands if len(cmd.strip('`')) - cmd_prefix_len == 4])
-        other_cmds = sorted([cmd for cmd in commands if cmd not in two_char_cmds and cmd not in four_char_cmds])
-
-        # 两字指令，每行4个
-        for i in range(0, len(two_char_cmds), 4):
-            lines.append("  ".join(two_char_cmds[i:i+4]))
-
-        # 四字指令，每行3个
-        for i in range(0, len(four_char_cmds), 3):
-            lines.append("  ".join(four_char_cmds[i:i+3]))
-
-        # 其他长指令，每行2个
-        for i in range(0, len(other_cmds), 2):
-            lines.append("  ".join(other_cmds[i:i+2]))
+        # 将排序后的指令列表，每3个一组进行切分
+        for i in range(0, len(sorted_commands), 3):
+            # 将每组的3个指令用空格连接成一行
+            lines.append("  ".join(sorted_commands[i:i+3]))
             
         return lines
 
@@ -82,12 +73,12 @@ async def _handle_help_command(event, parts):
         if category in categorized_cmds:
             icon = category_icons.get(category, "🔸")
             help_lines.append(f"**{icon} {category}**")
-            # 使用新的排版函数
-            formatted_lines = format_commands_by_length(categorized_cmds[category])
+            # 使用新的、统一的布局函数
+            formatted_lines = format_commands_to_three_per_line(categorized_cmds[category])
             help_lines.extend(formatted_lines)
             help_lines.append("")
     
-    help_lines.append(f"**使用 `{prefix}帮助 <指令名>` 查看具体用法。**")
+    help_lines.append(f"**使用 `{prefix}获取帮助 <指令名>` 查看具体用法。**")
     await client.reply_to_admin(event, "\n".join(help_lines))
 
 async def execute_command(event):
@@ -152,18 +143,19 @@ async def execute_command(event):
 def initialize(app):
     client = app.client
     
-    listen_chats = [settings.ADMIN_USER_ID, 'me']
+    # 确保ID是整数类型
+    listen_chats = [int(settings.ADMIN_USER_ID), 'me']
     if settings.CONTROL_GROUP_ID:
-        listen_chats.append(settings.CONTROL_GROUP_ID)
+        listen_chats.append(int(settings.CONTROL_GROUP_ID))
     
     listen_chats = list(set(listen_chats))
 
     app.register_command(
-        "帮助", 
+        "获取帮助", 
         _handle_help_command, 
         help_text="ℹ️ 显示此帮助菜单。", 
         category="系统", 
-        aliases=["help", "菜单", "menu"]
+        aliases=["help", "菜单", "menu", "帮助"]
     )
 
     @client.client.on(events.NewMessage(chats=listen_chats))

@@ -1,21 +1,22 @@
 # -*- coding: utf-8 -*-
 import logging
 import random
-import pytz
-import asyncio
-import sys
 import re
-from datetime import datetime, timedelta, date, time
-from app.utils import parse_cooldown_time, parse_inventory_text, resilient_task
-from config import settings
-from app.logging_service import LogType, format_and_log
-from app.task_scheduler import scheduler
+import sys
+from datetime import date, datetime, time, timedelta
+
+import pytz
 from telethon.tl.functions.account import UpdateStatusRequest
-from app.telegram_client import CommandTimeoutError
-from app.context import get_application
+
 from app import game_adaptor
+from app.context import get_application
 from app.data_manager import data_manager
 from app.inventory_manager import inventory_manager
+from app.logging_service import LogType, format_and_log
+from app.task_scheduler import scheduler
+from app.telegram_client import CommandTimeoutError
+from app.utils import parse_cooldown_time, parse_inventory_text, resilient_task
+from config import settings
 
 TASK_ID_BIGUAN = 'biguan_xiulian_task'
 STATE_KEY_BIGUAN = "biguan"
@@ -30,7 +31,9 @@ async def trigger_dianmao_chuangong(force_run=False):
     format_and_log(LogType.TASK, "宗门点卯", {'阶段': '任务开始', '强制执行': force_run})
     sent_dianmao = None
     try:
-        sent_dianmao, reply_dianmao = await client.send_game_command_long_task(game_adaptor.sect_check_in())
+        # NOTE: send_game_command_long_task is not a standard method. Assuming it exists.
+        _sent, reply_dianmao = await client.send_game_command_request_response(game_adaptor.sect_check_in())
+        sent_dianmao = _sent
         client.pin_message(sent_dianmao)
         format_and_log(LogType.TASK, "宗门点卯", {'阶段': '点卯指令', '返回': reply_dianmao.text.replace('\n', ' ')})
         
@@ -61,7 +64,7 @@ async def update_inventory_cache(force_run=False):
             await inventory_manager.set_inventory(inventory)
             format_and_log(LogType.TASK, "刷新背包", {'阶段': '任务成功', '详情': f'解析并校准了 {len(inventory)} 种物品。'})
             if force_run:
-                return f"✅ **[立即刷新背包]** 任务完成，已校准 {len(inventory)} 种物品。"
+                return f"✅ **[校准背包]** 任务完成，已校准 {len(inventory)} 种物品。"
         else:
             raise ValueError("未能从游戏返回信息中解析到任何物品。")
     finally:
@@ -77,7 +80,6 @@ async def trigger_chuang_ta(force_run=False):
     client = app.client
     format_and_log(LogType.TASK, "自动闯塔", {'阶段': '任务开始', '强制执行': force_run})
     try:
-        # [核心修复] V9.0 - 升级为新的、安全的高层函数
         _sent, final_reply = await client.send_and_wait_for_edit(
             command=game_adaptor.challenge_tower(), 
             final_pattern=r"【试炼古塔 - 战报】",
@@ -191,7 +193,8 @@ def initialize(app):
     app.register_task(task_key="biguan", function=trigger_biguan_xiulian, command_name="立即闭关", help_text="...")
     app.register_task(task_key="dianmao", function=trigger_dianmao_chuangong, command_name="立即点卯", help_text="...")
     app.register_task(task_key="chuang_ta", function=trigger_chuang_ta, command_name="立即闯塔", help_text="...")
-    app.register_task(task_key="update_inventory", function=update_inventory_cache, command_name="立即刷新背包", help_text="...")
+    # [修改] 指令名改为 "校准背包"，更清晰
+    app.register_task(task_key="update_inventory", function=update_inventory_cache, command_name="校准背包", help_text="...")
     
     app.startup_checks.extend([
         check_biguan_startup, check_dianmao_startup, check_chuang_ta_startup, 

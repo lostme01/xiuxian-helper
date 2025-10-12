@@ -53,7 +53,6 @@ def format_and_log(log_type: LogType, title: str, data: dict, level=logging.INFO
     统一的日志格式化与输出函数。
     它会检查配置中的开关，决定是否记录该类型的日志。
     """
-    # Check if this log type is enabled in settings
     log_switch_name = log_type.value
     if not settings.LOGGING_SWITCHES.get(log_switch_name, True):
         return
@@ -92,7 +91,6 @@ async def log_telegram_event(client, log_type: LogType, event, **kwargs):
     """
     处理来自 Telegram 的事件，并将其格式化后记录。
     """
-    # Raw logging (optional)
     raw_logger = logging.getLogger('raw_messages')
     if settings.LOGGING_SWITCHES.get('original_log_enabled'):
         chat_title = client.group_name_cache.get(event.chat_id, f"ID:{event.chat_id}")
@@ -112,7 +110,6 @@ async def log_telegram_event(client, log_type: LogType, event, **kwargs):
                 log_lines.append(f"内容:\n{event.text}")
         raw_logger.info("\n".join(log_lines))
 
-    # Formatted logging
     log_data = {}
     chat_info = client.group_name_cache.get(event.chat_id, f"ID:{event.chat_id}")
     event_time = getattr(event, 'date', datetime.now(pytz.timezone(settings.TZ)))

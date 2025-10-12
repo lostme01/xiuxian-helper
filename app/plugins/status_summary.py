@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 from app.context import get_application
 from app.plugins.character_info import _format_profile_reply
-from app.plugins.sect_treasury import _cmd_view_cached_treasury as view_treasury
 from app.plugins.data_management import _cmd_view_inventory as view_inventory
 from app.plugins.formation_info import _cmd_view_cached_formation as view_formation
-from app.utils import create_error_reply
+from app.plugins.sect_treasury import _cmd_view_cached_treasury as view_treasury
 # [重构] 直接导入全局单例
+from app.character_stats_manager import stats_manager
 from app.data_manager import data_manager
 from app.inventory_manager import inventory_manager
-from app.character_stats_manager import stats_manager
+from app.utils import create_error_reply
 
 HELP_TEXT_STATUS = """📊 **统一状态查询**
 **说明**: 融合了多个查询指令，提供一站式状态概览。
-**用法 1 (总览)**: `,状态`
+**用法 1 (总览)**: `,查询状态`
   *显示角色核心信息摘要。*
-**用法 2 (分项查询)**: `,状态 <模块>`
+**用法 2 (分项查询)**: `,查询状态 <模块>`
   *模块可选: `背包`, `宝库`, `角色`, `阵法`*
-**示例**: `,状态 背包`
+**示例**: `,查询状态 背包`
 """
 
 async def _cmd_status(event, parts):
@@ -40,7 +40,7 @@ async def _cmd_status(event, parts):
             f"- **修为**: `{profile_data.get('修为', 'N/A')} / {profile_data.get('修为上限', 'N/A')}`\n"
             f"- **灵石**: `{ling_shi_count}`\n"
             f"- **贡献**: `{contribution}`\n\n"
-            f"**使用 `,状态 <模块>` 查看更多详情。**\n"
+            f"**使用 `,查询状态 <模块>` 查看更多详情。**\n"
             f"**可用模块**: `背包`, `宝库`, `角色`, `阵法`"
         )
         await app.client.reply_to_admin(event, summary)
@@ -61,18 +61,21 @@ async def _cmd_status(event, parts):
         elif sub_command == "阵法":
             await view_formation(event, parts)
         else:
-            error_msg = create_error_reply("状态", "未知的模块", details=f"可用模块: 背包, 宝库, 角色, 阵法", usage_text=HELP_TEXT_STATUS)
+            error_msg = create_error_reply("查询状态", "未知的模块", details=f"可用模块: 背包, 宝库, 角色, 阵法", usage_text=HELP_TEXT_STATUS)
             await app.client.reply_to_admin(event, error_msg)
     else:
-        usage = app.commands.get('状态', {}).get('usage')
-        error_msg = create_error_reply("状态", "参数格式错误", usage_text=usage)
+        usage = app.commands.get('查询状态', {}).get('usage')
+        error_msg = create_error_reply("查询状态", "参数格式错误", usage_text=usage)
         await app.client.reply_to_admin(event, error_msg)
 
 def initialize(app):
     app.register_command(
-        name="状态",
+        # [修改] 指令名改为4个字
+        name="查询状态",
         handler=_cmd_status,
         help_text="📊 统一的状态查询入口。",
         category="数据查询",
+        # [修改] 将旧名称加入别名
+        aliases=["状态"],
         usage=HELP_TEXT_STATUS
     )

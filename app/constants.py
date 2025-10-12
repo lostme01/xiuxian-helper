@@ -21,9 +21,10 @@ STATE_KEY_FORMATION_LAST_RUN = "formation_last_run"
 
 # Standalone Redis keys
 CRAFTING_RECIPES_KEY = "crafting_recipes"
-KNOWLEDGE_BASE_KEY = "tg_helper:knowledge_base"
 CRAFTING_SESSIONS_KEY = "crafting_sessions"
 KNOWLEDGE_SESSIONS_KEY = "knowledge_sessions"
+# [新增] 用于存储持久化协同任务状态的键
+COORDINATION_SESSIONS_KEY = "coordination_sessions"
 
 # QA Database keys from config
 XUANGU_DB_NAME_KEY = "xuangu_db_name"
@@ -54,3 +55,5 @@ TASK_ID_AUTO_RESOURCE = 'auto_resource_management_task'
 TASK_ID_AUTO_KNOWLEDGE = 'auto_knowledge_sharing_task'
 TASK_ID_KNOWLEDGE_TIMEOUT = 'knowledge_timeout_checker_task'
 TASK_ID_CRAFTING_TIMEOUT = 'crafting_timeout_checker_task'
+# [新增] 用于清理过时协同任务的调度ID
+TASK_ID_SESSION_CLEANUP = 'session_cleanup_task'

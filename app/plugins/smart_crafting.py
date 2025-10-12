@@ -9,31 +9,26 @@ from app.constants import CRAFTING_SESSIONS_KEY
 from app.context import get_application
 from app.logging_service import LogType, format_and_log
 from app.plugins.logic import crafting_logic, trade_logic
-# [重构] 导入新的UI流程管理器
 from app.utils import create_error_reply, parse_item_and_quantity, progress_manager
 
-HELP_TEXT_SMART_CRAFT = """✨ **智能炼制 (v3.2 - 指令修正版)**
-**说明**: 修复了当需要向其他助手收集材料时，生成的`.上架`指令格式错误的BUG。
+HELP_TEXT_SMART_CRAFT = """✨ **智能炼制**
+**说明**: 自动检查、收集并炼制物品。
 **用法**: `,智能炼制 <物品名称> [数量]`
 **示例**: `,智能炼制 增元丹 2`
 """
 
-HELP_TEXT_GATHER_MATERIALS = """📦 **凑材料 (v3.2 - 指令修正版)**
-**说明**: 修复了当需要向其他助手收集材料时，生成的`.上架`指令格式错误的BUG。
-**用法**: `,凑材料 <物品名称> [数量]`
-**示例**: `,凑材料 增元丹 2`
+HELP_TEXT_GATHER_MATERIALS = """📦 **收集材料**
+**说明**: 自动检查并协同收集材料，但不执行最终的炼制步骤。
+**用法**: `,收集材料 <物品名称> [数量]`
+**示例**: `,收集材料 增元丹 2`
 """
 
 
 async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
-    """
-    [重构]
-    核心逻辑，处理智能炼制和凑材料两个指令，并使用 progress_manager。
-    """
     app = get_application()
     client = app.client
     my_id = str(client.me.id)
-    cmd_name = "智能炼制" if synthesize_after else "凑材料"
+    cmd_name = "智能炼制" if synthesize_after else "收集材料"
     usage_text = HELP_TEXT_SMART_CRAFT if synthesize_after else HELP_TEXT_GATHER_MATERIALS
 
     item_to_craft, quantity, error = parse_item_and_quantity(parts)
@@ -41,7 +36,6 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
         await client.reply_to_admin(event, create_error_reply(cmd_name, error, usage_text=usage_text))
         return
 
-    # [重构] 使用 progress_manager
     async with progress_manager(event, f"🧠 **{cmd_name}任务: {item_to_craft} x{quantity}**\n正在检查本地库存...") as progress:
         session_id = f"craft_{my_id}_{int(time.time())}"
         try:
@@ -54,8 +48,8 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
                     await progress.update(f"✅ **本地材料充足**\n正在为您执行炼制操作...")
                     from .crafting_actions import _cmd_craft_item as execute_craft_item
                     craft_parts = ["炼制物品", item_to_craft, str(quantity)]
+                    # Assuming execute_craft_item will handle its own final message
                     await execute_craft_item(event, craft_parts)
-                    # 炼制指令自己会发最终消息，这里我们更新一下状态即可
                     await progress.update(f"✅ **炼制指令已发送**\n任务完成。")
                 else:
                     await progress.update(f"✅ **本地材料充足**\n无需从网络收集材料。")
@@ -127,10 +121,8 @@ async def _execute_coordinated_crafting(event, parts, synthesize_after: bool):
             await progress.update(final_text)
 
         except Exception as e:
-            # 异常会被 progress_manager 捕获并显示
             if 'session_id' in locals() and app.redis_db and await app.redis_db.exists(CRAFTING_SESSIONS_KEY):
                 await app.redis_db.hdel(CRAFTING_SESSIONS_KEY, session_id)
-            # 将异常重新抛出，让上下文管理器处理
             raise e
 
 async def _cmd_smart_craft(event, parts):
@@ -148,9 +140,10 @@ def initialize(app):
         usage=HELP_TEXT_SMART_CRAFT
     )
     app.register_command(
-        name="凑材料",
+        name="收集材料",
         handler=_cmd_gather_materials,
-        help_text="📦 自动检查并收集材料，但不执行最终炼制。",
+        help_text="📦 自动检查并收集材料，但不炼制。",
         category="协同",
+        aliases=["凑材料"],
         usage=HELP_TEXT_GATHER_MATERIALS
     )

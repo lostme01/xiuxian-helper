@@ -49,7 +49,6 @@ class TelegramClient:
         self.pending_replies = {}
         self.pending_edits = {}
         
-        # [新增] 用于追踪发后不理任务的集合
         self.fire_and_forget_tasks = set()
 
         all_configured_groups = settings.GAME_GROUP_IDS + ([settings.CONTROL_GROUP_ID] if settings.CONTROL_GROUP_ID else [])
@@ -143,21 +142,17 @@ class TelegramClient:
                     except Exception as cb_e:
                         format_and_log(LogType.ERROR, "发送后回调执行失败", {'错误': str(cb_e)}, level=logging.ERROR)
                 
-                # [修改] 标记队列任务完成
                 self.message_queue.task_done()
 
     async def _send_command_and_get_message(self, command: str, reply_to: int = None,
                                            target_chat_id: int = None, post_send_callback=None) -> Message | asyncio.Task:
-        # [修改] 对于不需要 future 的调用，返回一个 task
         future = asyncio.Future()
         task = asyncio.create_task(self.message_queue.put((command, reply_to, future, target_chat_id, post_send_callback)))
 
-        # 如果需要等待消息对象（request-response模式），则等待 future
         if post_send_callback is None:
             await future
             return future.result()
         else:
-            # 否则（fire-and-forget模式），返回put操作的 task，以便追踪
             return task
 
     async def send_game_command_fire_and_forget(self, command: str, reply_to: int = None, target_chat_id: int = None):
@@ -166,7 +161,6 @@ class TelegramClient:
         def schedule_deletion_callback(message: Message):
             self._schedule_message_deletion(message, strategy['delay_self'], "游戏指令(发后不理)")
 
-        # [修改] 获取放入队列的 task，并将其添加到追踪集合中
         put_task = await self._send_command_and_get_message(
             command, reply_to, target_chat_id, post_send_callback=schedule_deletion_callback
         )
@@ -175,7 +169,8 @@ class TelegramClient:
 
 
     async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
-        strategy = settings.AUTO_DELETE_STRATEGIES['request_response']; sent_message = None
+        strategy = settings.AUTO_DELETE_STRATEGIES['request_response']
+        sent_message = None
         try:
             sent_message, reply_message = await self._send_and_wait_for_response(command, reply_to=reply_to, timeout=timeout, target_chat_id=target_chat_id)
             self._schedule_message_deletion(sent_message, strategy['delay_self_on_reply'], "游戏指令(问答-成功)")
@@ -203,7 +198,6 @@ class TelegramClient:
     async def _send_and_wait_for_response(self, command: str, final_pattern: str = ".*", timeout: int = None, reply_to: int = None, target_chat_id: int = None) -> tuple[Message, Message]:
         timeout = timeout or settings.COMMAND_TIMEOUT; sent_message = None
         try:
-            # [修改] 调用已更新的函数
             sent_message = await self._send_command_and_get_message(command, reply_to, target_chat_id, post_send_callback=None)
             future = asyncio.Future()
             self.pending_replies[sent_message.id] = {'future': future, 'pattern': final_pattern}
@@ -256,7 +250,10 @@ class TelegramClient:
     async def _sleep_and_delete(self, delay: int, message: Message):
         await asyncio.sleep(delay)
         task_key = (message.chat_id, message.id)
-        if task_key in self._pinned_messages: self.deletion_tasks.pop(task_key, None); return
+        # [修改] 增加对 pinned_messages 的检查
+        if task_key in self._pinned_messages or task_key not in self.deletion_tasks:
+            self.deletion_tasks.pop(task_key, None)
+            return
         try:
             await self.client.delete_messages(entity=message.chat_id, message_ids=[message.id])
         except MessageDeleteForbiddenError:
@@ -278,15 +275,27 @@ class TelegramClient:
         if not message: return
         if task := self.deletion_tasks.pop((message.chat_id, message.id), None): task.cancel()
 
-    def pin_message(self, message: Message):
+    def pin_message(self, message: Message, permanent: bool = False):
         if not message: return
-        task_key = (message.chat_id, message.id); self._pinned_messages.add(task_key)
-        if task := self.deletion_tasks.pop(task_key, None): task.cancel()
+        task_key = (message.chat_id, message.id)
+        self._pinned_messages.add(task_key)
+        if task := self.deletion_tasks.pop(task_key, None):
+            task.cancel()
+            # [新增] 如果是永久保留，则不重新安排删除
+            if not permanent:
+                self.unpin_message(message)
 
     def unpin_message(self, message: Message):
         if not message: return
-        task_key = (message.chat_id, message.id); self._pinned_messages.discard(task_key)
+        task_key = (message.chat_id, message.id)
+        self._pinned_messages.discard(task_key)
         self._schedule_message_deletion(message, settings.AUTO_DELETE.get('delay_admin_command'), "解钉后自动清理")
+
+    # [新增] 为`,保留`指令提供底层支持
+    async def cancel_message_deletion_permanently(self, message: Message):
+        """永久取消一条消息的自动删除计划。"""
+        if not message: return
+        self.pin_message(message, permanent=True)
 
     async def _unified_event_handler(self, event):
         if not hasattr(event, 'message') or not hasattr(event.message, 'text') or not event.message.text: return

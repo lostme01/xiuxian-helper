@@ -23,6 +23,13 @@ from app.telegram_client import CommandTimeoutError, TelegramClient
 from app.utils import create_error_reply, progress_manager
 from config import settings
 
+# [新增] 导入新的事件分发器
+from app import event_dispatcher
+
+class UnbufferedStreamHandler(logging.StreamHandler):
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
 
 class Application:
     def __init__(self):
@@ -43,7 +50,6 @@ class Application:
         set_scheduler(scheduler)
 
         self.setup_logging()
-        # [新增] 在初始化时设置全局异常处理器
         self.setup_exception_handler()
         
         format_and_log(LogType.SYSTEM, "应用初始化", {'阶段': '开始...'})
@@ -51,18 +57,11 @@ class Application:
         self.client = TelegramClient()
         format_and_log(LogType.SYSTEM, "组件初始化", {'组件': 'Telegram 客户端', '状态': '实例化完成'})
     
-    # [新增] 全局异常处理模块
     def _handle_uncaught_exception(self, exc_type, exc_value, exc_traceback):
-        """全局异常钩子的处理函数"""
-        # 确保日志记录器可用
         if logging.getLogger("app").handlers:
-            # 格式化异常信息
             error_message = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-            
-            # 使用CRITICAL级别记录未捕获的异常
             logging.critical(f"捕获到未处理的全局异常:\n{error_message}", extra={'log_type_key': 'ERROR'})
 
-            # 准备通过Telegram发送通知
             if self.client and self.client.is_connected():
                 notification_message = (
                     f"🆘 **严重警报：捕获到未处理的全局异常**\n\n"
@@ -70,50 +69,22 @@ class Application:
                     f"**信息**: `{exc_value}`\n\n"
                     f"程序可能处于不稳定状态，请立即检查 `error.log` 文件获取详细的堆栈跟踪信息。"
                 )
-                
-                # 从同步函数安全地调用异步代码
-                # 获取正在运行的事件循环
-                loop = asyncio.get_running_loop()
-                if loop and loop.is_running():
-                    # 在事件循环中安排协程的执行
-                    asyncio.run_coroutine_threadsafe(
-                        self.client.send_admin_notification(notification_message), 
-                        loop
-                    )
+                try:
+                    loop = asyncio.get_running_loop()
+                    if loop and loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            self.client.send_admin_notification(notification_message), 
+                            loop
+                        )
+                except RuntimeError:
+                    pass
 
     def setup_exception_handler(self):
-        """设置sys.excepthook来捕获所有未处理的异常"""
         sys.excepthook = self._handle_uncaught_exception
         format_and_log(LogType.SYSTEM, "核心服务", {'阶段': '已设置全局异常处理器'})
 
-
-    async def _redis_listener_loop(self):
-        from app.plugins.trade_coordination import redis_message_handler
-        while True:
-            if not self.redis_db or not self.redis_db.is_connected:
-                if settings.REDIS_CONFIG.get('enabled'):
-                    format_and_log(LogType.WARNING, "Redis 监听器", {'状态': '暂停', '原因': 'Redis 未连接'})
-                    await asyncio.sleep(15)
-                else:
-                    return
-            try:
-                async with self.redis_db.pubsub() as pubsub:
-                    await pubsub.subscribe(TASK_CHANNEL, GAME_EVENTS_CHANNEL)
-                    format_and_log(LogType.SYSTEM, "核心服务",
-                                   {'服务': 'Redis 监听器', '状态': '已订阅', '频道': f"{TASK_CHANNEL}, {GAME_EVENTS_CHANNEL}"})
-                    async for message in pubsub.listen():
-                        if not self.redis_db.is_connected:
-                            format_and_log(LogType.WARNING, "Redis 监听器", {'状态': '中断', '原因': '连接在监听时丢失'})
-                            break
-                        if message and message.get('type') == 'message':
-                            format_and_log(LogType.DEBUG, "Redis 监听器", {'阶段': '收到消息', '原始返回': str(message)})
-                            asyncio.create_task(redis_message_handler(message))
-            except Exception as e:
-                format_and_log(LogType.ERROR, "Redis 监听循环异常", {'错误': str(e)}, level=logging.CRITICAL)
-                await asyncio.sleep(15)
-
     def setup_logging(self):
-        print("开始配置日志系统...")
+        print("开始配置日志系统...", flush=True)
         app_logger = logging.getLogger("app")
         if app_logger.hasHandlers(): app_logger.handlers.clear()
         
@@ -124,11 +95,11 @@ class Application:
         console_formatter = logging.Formatter(fmt='%(message)s')
         file_formatter = TimezoneFormatter(
             fmt='%(asctime)s - %(levelname)s - %(message)s',
-            datefmt='%Y-m-d %H:%M:%S %Z',
+            datefmt='%Y-%m-%d %H:%M:%S %Z',
             tz_name=settings.TZ
         )
 
-        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler = UnbufferedStreamHandler(sys.stdout)
         stream_handler.setFormatter(console_formatter)
         app_logger.addHandler(stream_handler)
         
@@ -174,7 +145,7 @@ class Application:
         logging.getLogger('telethon').setLevel(logging.WARNING)
         logging.getLogger('asyncio').setLevel(logging.WARNING)
         
-        print(f"日志系统配置完成。常规日志输出到 {settings.LOG_FILE}，错误日志输出到 {settings.ERROR_LOG_FILE}。")
+        print(f"日志系统配置完成。常规日志输出到 {settings.LOG_FILE}，错误日志输出到 {settings.ERROR_LOG_FILE}。", flush=True)
 
     def load_plugins_and_commands(self, is_reload=False):
         if is_reload:
@@ -194,7 +165,6 @@ class Application:
     async def run(self):
         background_tasks = set()
         try:
-            # Pydantic 验证已在 settings.py 中完成
             self.redis_db = await initialize_redis()
             self.data_manager.initialize(self.redis_db)
             self.inventory_manager.initialize(self.data_manager)
@@ -216,7 +186,8 @@ class Application:
                     format_and_log(LogType.ERROR, "身份注册失败", {'错误': str(e)})
             self.load_plugins_and_commands()
             if self.redis_db.is_connected:
-                redis_task = asyncio.create_task(self._redis_listener_loop())
+                # [修改] 调用新的、集中的事件监听循环
+                redis_task = asyncio.create_task(event_dispatcher.redis_listener_loop())
                 background_tasks.add(redis_task)
             await asyncio.sleep(2)
             await self.client._cache_chat_info()
@@ -229,22 +200,17 @@ class Application:
         except Exception as e:
             logging.critical(f"应用主流程发生严重错误: {e}", exc_info=True)
         finally:
-            # [修改] 优雅关机流程
             format_and_log(LogType.SYSTEM, "核心服务", {'阶段': '开始优雅关机...'})
 
-            # 1. 等待所有发后不理任务完成
             if self.client and self.client.fire_and_forget_tasks:
                 format_and_log(LogType.SYSTEM, "关机流程", {'状态': f'等待 {len(self.client.fire_and_forget_tasks)} 个发后不理任务完成...'})
                 await asyncio.gather(*self.client.fire_and_forget_tasks, return_exceptions=True)
 
-            # 2. 取消其他后台任务
             for task in background_tasks: task.cancel()
             await asyncio.gather(*background_tasks, return_exceptions=True)
             
-            # 3. 断开客户端连接
             if self.client and self.client.is_connected(): await self.client.disconnect()
             
-            # 4. 关闭调度器
             shutdown()
             
             format_and_log(LogType.SYSTEM, "核心服务", {'阶段': '应用已关闭'})
@@ -290,4 +256,3 @@ class Application:
         self.load_plugins_and_commands(is_reload=True)
         asyncio.create_task(self._run_startup_checks())
         format_and_log(LogType.SYSTEM, "热重载", {'阶段': '完成'})
-

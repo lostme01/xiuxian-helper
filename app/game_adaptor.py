@@ -1,169 +1,59 @@
 # -*- coding: utf-8 -*-
 """
-游戏行为适配层 (Game Adaptor)
+游戏行为适配层 (Game Adaptor) - 工厂模块
 
-该模块的目标是将游戏相关的具体指令与插件的核心逻辑解耦。
-所有插件都应调用此模块中的函数来执行游戏操作，而不是手动拼接指令字符串。
+该模块作为适配器的统一入口。它会根据配置动态加载并实例化
+一个具体功能的游戏适配器类，供项目中所有插件统一调用。
 """
-import re
 from config import settings
+from app.game_adaptors.mortal_cultivation_adaptor import MortalCultivationAdaptor
 
-# --- 角色信息解析 ---
-PROFILE_PATTERN = re.compile(
-    r"\*\*@([^\*]+)\*\*.*?天命玉牒.*?"
-    r"(?:\*\*称号\*\*[:：]?\s*【?([^】\n]+)】?.*?)?"
-    r"\*\*宗门\*\*[:：]?\s*[【]?([^】\n]+)[】]?\s*"
-    r"\*\*道号\*\*[:：]?\s*([^\n]+)\s*"
-    r"\*\*灵根\*\*[:：]?\s*([^\n]+)\s*"
-    r"\*\*境界\*\*[:：]?\s*([^\n]+)\s*"
-    r"\*\*修为\*\*[:：]?\s*(-?\d+)\s*/\s*(\d+)\s*"
-    r"\*\*丹毒\*\*[:：]?\s*(-?\d+)\s*点.*?"
-    r"(?:\*\*杀戮\*\*[:：]?\s*(\d+)\s*人.*?)?"
-    , re.S | re.I
-)
-
-def parse_profile(text: str) -> dict | None:
+def _create_adaptor():
     """
-    从文本中解析角色信息。
-    如果解析失败，返回 None。
+    工厂函数，根据配置创建并返回一个游戏适配器实例。
+    未来可在此处扩展，以支持加载不同的适配器。
     """
-    match = PROFILE_PATTERN.search(text)
-    if not match:
-        return None
+    # 当前只支持一个适配器，未来可以从 settings.py 读取配置来决定加载哪个
+    # game_adaptor_name = settings.GAME_ADAPTOR
+    # if game_adaptor_name == 'MortalCultivation':
+    #     return MortalCultivationAdaptor()
+    # else:
+    #     raise NotImplementedError(f"未实现的游戏适配器: {game_adaptor_name}")
     
-    groups = match.groups()
-    
-    profile_data = {
-        "用户": groups[0], "称号": groups[1], "宗门": groups[2], "道号": groups[3],
-        "灵根": groups[4], "境界": groups[5], "修为": int(groups[6]), "修为上限": int(groups[7]),
-        "丹毒": int(groups[8]), "杀戮": int(groups[9]) if groups[9] else 0,
-    }
+    return MortalCultivationAdaptor()
 
-    return {k: v.strip() if isinstance(v, str) else v for k, v in profile_data.items() if v is not None}
+# --- 全局单例 ---
+# 在模块加载时，立即创建一个适配器实例，项目中所有地方都将导入并使用这个实例。
+# 这确保了所有插件调用的都是同一个对象，且符合我们之前函数式调用的习惯。
+game_adaptor = _create_adaptor()
 
+# --- 动态代理 ---
+# 为了让插件的代码完全无需修改 (例如，继续使用 `game_adaptor.get_profile()`)
+# 我们将实例的方法暴露在模块级别。
+# 注意：这是一种为了保持向后兼容的技巧，新代码应优先使用 game_adaptor 实例。
 
-# --- 交易行为 ---
-
-def list_item(sell_item: str, sell_quantity: int, buy_item: str, buy_quantity: int) -> str:
-    """
-    生成上架物品的指令。
-    """
-    sell_str = f"{sell_item}*{sell_quantity}"
-    buy_str = f"{buy_item}*{buy_quantity}"
-    return f".上架 {sell_str} 换 {buy_str}"
-
-def buy_item(listing_id: str) -> str:
-    """
-    生成购买物品的指令。
-    """
-    return f".购买 {listing_id}"
-
-def unlist_item(listing_id: str) -> str:
-    """
-    生成下架物品的指令。
-    """
-    return f".下架 {listing_id}"
-
-def get_my_stall() -> str:
-    """
-    [新增] 生成查询货摊的指令。
-    """
-    return ".我的货摊"
-
-# --- 炼制与学习行为 ---
-
-def craft_item(item_name: str, quantity: int) -> str:
-    """
-    生成炼制物品的指令。
-    """
-    quantity_str = str(quantity) if quantity > 1 else ""
-    return f".炼制 {item_name} {quantity_str}".strip()
-
-def get_crafting_list() -> str:
-    """
-    生成获取可炼制列表的指令 (不带参数的炼制指令)。
-    """
-    return ".炼制"
-
-def learn_recipe(recipe_name: str) -> str:
-    """
-    生成学习配方/图纸的指令。
-    """
-    return f".学习 {recipe_name}"
-
-# --- 角色与宗门行为 ---
-
-def get_inventory() -> str:
-    """获取储物袋指令"""
-    return ".储物袋"
-
-def meditate() -> str:
-    """闭关修炼指令"""
-    return ".闭关修炼"
-
-def challenge_tower() -> str:
-    """闯塔指令"""
-    return ".闯塔"
-    
-def get_profile() -> str:
-    """获取角色信息指令"""
-    return ".我的灵根"
-
-def get_formation_info() -> str:
-    """获取阵法信息指令"""
-    return ".我的阵法"
-
-def get_sect_treasury() -> str:
-    """获取宗门宝库指令"""
-    return ".宗门宝库"
-
-def sect_check_in() -> str:
-    """宗门点卯指令"""
-    return ".宗门点卯"
-
-def sect_contribute_skill() -> str:
-    """宗门传功指令"""
-    return ".宗门传功"
-
-def sect_donate(item_name: str, quantity: int) -> str:
-    """宗门捐献指令"""
-    return f".宗门捐献 {item_name} {quantity}"
-
-def sect_exchange(item_name: str, quantity: int) -> str:
-    """宗门兑换指令"""
-    command = f".兑换 {item_name}"
-    if quantity > 1:
-        command += f" {quantity}"
-    return command
-
-# --- 宗门专属：黄枫谷 ---
-
-def huangfeng_garden() -> str:
-    """黄枫谷小药园指令"""
-    return ".小药园"
-
-def huangfeng_water() -> str:
-    """黄枫谷浇水指令"""
-    return ".浇水"
-
-def huangfeng_remove_pests() -> str:
-    """黄枫谷除虫指令"""
-    return ".除虫"
-
-def huangfeng_weed() -> str:
-    """黄枫谷除草指令"""
-    return ".除草"
-
-def huangfeng_harvest() -> str:
-    """黄枫谷采药指令"""
-    return ".采药"
-
-# [重构] 适配新版的一键播种指令
-def huangfeng_sow(seed_name: str) -> str:
-    """黄枫谷一键播种指令"""
-    return f".播种 {seed_name}"
-
-# --- 事件行为 ---
-def mojun_hide_presence() -> str:
-    """魔君降临事件中收敛气息的指令"""
-    return ".收敛气息"
+parse_profile = game_adaptor.parse_profile
+list_item = game_adaptor.list_item
+buy_item = game_adaptor.buy_item
+unlist_item = game_adaptor.unlist_item
+get_my_stall = game_adaptor.get_my_stall
+craft_item = game_adaptor.craft_item
+get_crafting_list = game_adaptor.get_crafting_list
+learn_recipe = game_adaptor.learn_recipe
+get_inventory = game_adaptor.get_inventory
+meditate = game_adaptor.meditate
+challenge_tower = game_adaptor.challenge_tower
+get_profile = game_adaptor.get_profile
+get_formation_info = game_adaptor.get_formation_info
+get_sect_treasury = game_adaptor.get_sect_treasury
+sect_check_in = game_adaptor.sect_check_in
+sect_contribute_skill = game_adaptor.sect_contribute_skill
+sect_donate = game_adaptor.sect_donate
+sect_exchange = game_adaptor.sect_exchange
+huangfeng_garden = game_adaptor.huangfeng_garden
+huangfeng_water = game_adaptor.huangfeng_water
+huangfeng_remove_pests = game_adaptor.huangfeng_remove_pests
+huangfeng_weed = game_adaptor.huangfeng_weed
+huangfeng_harvest = game_adaptor.huangfeng_harvest
+huangfeng_sow = game_adaptor.huangfeng_sow
+mojun_hide_presence = game_adaptor.mojun_hide_presence

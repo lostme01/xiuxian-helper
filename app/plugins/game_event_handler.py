@@ -1,48 +1,44 @@
 # -*- coding: utf-8 -*-
-import json
 import logging
-import re
 
 from telethon import events
 from telethon.utils import get_display_name
 
-from app import game_adaptor
 from app.constants import GAME_EVENTS_CHANNEL
 from app.context import get_application
 from app.logging_service import LogType, format_and_log
+# [重构] 导入新的解析器模块
+from app import event_parsers
 from app.plugins.logic.trade_logic import publish_task
 from config import settings
 
 
-async def _handle_parsing_error(client, event_name: str, error: Exception, raw_text: str):
+async def _handle_parsing_error(client, event_name: str, raw_text: str):
     """
     统一的解析失败处理器。
     """
-    log_data = {'事件': event_name, '错误': str(error), '原始文本': raw_text}
+    log_data = {'事件': event_name, '原始文本': raw_text}
     format_and_log(LogType.ERROR, "游戏事件解析失败", log_data, level=logging.ERROR)
     await client.send_admin_notification(
-        f"⚠️ **严重警报：游戏事件解析失败**\n\n"
+        f"⚠️ **警报：游戏事件解析失败**\n\n"
         f"**事件类型**: `{event_name}`\n"
-        f"**失败原因**: `{str(error)}`\n\n"
         f"请根据以下原文修正解析逻辑：\n`{raw_text}`"
     )
 
 async def handle_game_report(event):
     app = get_application()
     client = app.client
-    my_id = str(client.me.id)
-    my_username = client.me.username if client.me else None
     
     if not hasattr(event, 'text') or not event.text:
         return
 
+    # 检查消息是否与本机相关
     my_display_name = get_display_name(client.me)
-    is_mentioning_me = (my_username and f"@{my_username}" in event.text) or \
+    is_mentioning_me = (client.me.username and f"@{client.me.username}" in event.text) or \
                        (my_display_name and my_display_name in event.text)
 
-    is_reply_to_me = False
     original_message = None
-
+    is_reply_to_me = False
     if event.is_reply:
         try:
             reply_to_msg = await event.get_reply_message()
@@ -50,7 +46,9 @@ async def handle_game_report(event):
                 is_reply_to_me = True
                 original_message = reply_to_msg
         except Exception:
-            pass
+            pass # 忽略获取被回复消息的错误
+    
+    # 编辑事件也视为一种回复
     elif hasattr(event, 'message') and event.message.edit_date:
         is_reply_to_me = True
 
@@ -59,110 +57,32 @@ async def handle_game_report(event):
 
     text = event.text
     event_payload = None
-    event_name_for_error = "未知"
+    event_name = "未知"
 
     try:
-        # [核心修复] 采用“指令-回复”匹配模式来精确识别下架事件
-        if original_message and ".下架" in original_message.text and "从万宝楼下架" in text:
-            event_name_for_error = "下架成功"
-            match = re.search(r"你已成功将 \*\*【(.+?)】\*\*x([\d,]+)", text)
-            if match:
-                item_name = match.group(1)
-                quantity = int(match.group(2).replace(',', ''))
-                event_payload = {
-                    "event_type": "DELIST_COMPLETED",
-                    "gained_items": {item_name: quantity}
-                }
+        # --- [重构] 统一调用解析调度器 ---
+        original_message_text = original_message.text if original_message else None
+        event_payload = event_parsers.dispatch_and_parse(text, original_message_text=original_message_text)
         
-        elif "【万宝楼快报】" in text:
-            event_name_for_error = "万宝楼快报"
-            gained_items, sold_items = {}, {}
-            gained_match = re.search(r"你获得了：\s*(.*)", text, re.DOTALL)
-            if gained_match:
-                for item, quantity in re.findall(r"【(.+?)】x([\d,]+)", gained_match.group(1)):
-                    gained_items[item] = int(quantity.replace(',', ''))
-            sold_match = re.search(r"你成功出售了【(.+?)】x([\d,]+)", text)
-            if sold_match:
-                sold_items[sold_match.group(1)] = int(sold_match.group(2).replace(',', ''))
-            if gained_items or sold_items:
-                event_payload = {"event_type": "TRADE_COMPLETED", "gained": gained_items, "sold": sold_items}
-
-        elif "你向宗门捐献了" in text:
-            event_name_for_error = "宗门捐献"
-            consumed_match = re.search(r"捐献了 \*\*【(.+?)】\*\*x([\d,]+)", text)
-            contrib_match = re.search(r"获得了 \*\*([\d,]+)\*\* 点宗门贡献", text)
-            if consumed_match and contrib_match:
-                event_payload = {
-                    "event_type": "DONATION_COMPLETED",
-                    "consumed_item": {consumed_match.group(1): int(consumed_match.group(2).replace(',', ''))},
-                    "gained_contribution": int(contrib_match.group(1).replace(',', ''))
-                }
-
-        elif "**兑换成功！**" in text:
-            event_name_for_error = "宗门兑换"
-            gain_match = re.search(r"获得了【(.+?)】x([\d,]+)", text)
-            cost_match = re.search(r"消耗了 \*\*([\d,]+)\*\* 点贡献", text)
-            if gain_match and cost_match:
-                event_payload = {
-                    "event_type": "EXCHANGE_COMPLETED",
-                    "gained_item": {gain_match.group(1): int(gain_match.group(2).replace(',', ''))},
-                    "consumed_contribution": int(cost_match.group(1).replace(',', ''))
-                }
-
-        elif original_message and ("获得了" in text and "点宗门贡献" in text) and \
-                (game_adaptor.sect_check_in() in original_message.text or game_adaptor.sect_contribute_skill() in original_message.text):
-            event_name_for_error = "点卯或传功"
-            contrib_match = re.search(r"获得了 \*\*([\d,]+)\*\* 点宗门贡献", text)
-            if contrib_match:
-                event_payload = {"event_type": "CONTRIBUTION_GAINED",
-                                 "gained_contribution": int(contrib_match.group(1).replace(',', ''))}
-
-        elif "【试炼古塔 - 战报】" in text and "总收获" in text:
-            event_name_for_error = "闯塔战报"
-            gained_items = {item: int(q.replace(',', '')) for item, q in re.findall(r"获得了【(.+?)】x([\d,]+)", text)}
-            if gained_items:
-                event_payload = {"event_type": "TOWER_CHALLENGE_COMPLETED", "gained_items": gained_items}
-
-        elif "炼制结束！" in text and "最终获得" in text:
-            event_name_for_error = "炼制结束"
-            gained_items = {item: int(q.replace(',', '')) for item, q in
-                            re.findall(r"最终获得【(.+?)】x\*\*([\d,]+)\*\*", text)}
-            if gained_items and original_message:
-                command_parts = original_message.text.split()
-                crafted_quantity = 1
-                if len(command_parts) > 2 and command_parts[-1].isdigit():
-                    crafted_quantity = int(command_parts[-1])
-                event_payload = {
-                    "event_type": "CRAFTING_COMPLETED",
-                    "crafted_item": {"name": next(iter(gained_items)), "quantity": crafted_quantity},
-                    "gained_items": gained_items
-                }
-
-        elif "一键采药完成！" in text:
-            event_name_for_error = "一键采药"
-            gained_items = {item: int(q.replace(',', '')) for item, q in re.findall(r"【(.+?)】x([\d,]+)", text)}
-            if gained_items:
-                event_payload = {"event_type": "HARVEST_COMPLETED", "gained_items": gained_items}
-
-        elif "成功领悟了" in text:
-            event_name_for_error = "学习成功"
-            consumed_match = re.search(r"消耗了【(.+?)】", text)
-            if consumed_match:
-                event_payload = {"event_type": "LEARNING_COMPLETED", "consumed_item": {consumed_match.group(1): 1}}
-
-        elif "你已成功在" in text and "播下" in text:
-            event_name_for_error = "播种成功"
-            consumed_match = re.search(r"播下【(.+?)】", text)
-            if consumed_match:
-                event_payload = {"event_type": "SOWING_COMPLETED", "consumed_item": {consumed_match.group(1): 1}}
+        # --- 特殊事件处理：需要结合原始消息进行“指纹识别” ---
+        if not event_payload:
+            # “下架”事件的指纹是：回复了.下架指令 + 包含“从万宝楼下架”
+            if original_message_text and ".下架" in original_message_text and "从万宝楼下架" in text:
+                event_name = "下架成功"
+                event_payload = event_parsers.parse_delist_completed(text)
+            # “点卯/传功”事件的指纹是：回复了.宗门点卯或.宗门传功 + 包含“点宗门贡献”
+            elif original_message_text and (".宗门点卯" in original_message_text or ".宗门传功" in original_message_text) and "点宗门贡献" in text:
+                 # 这个事件只是贡献值变化，由其他更通用的解析器处理，此处忽略
+                 pass
 
         if event_payload:
-            format_and_log(LogType.SYSTEM, "事件总线", {'监听到': event_name_for_error})
-            event_payload.update({"account_id": my_id, "raw_text": text})
+            format_and_log(LogType.SYSTEM, "事件总线", {'监听到': event_payload.get("event_type", "未知类型")})
+            event_payload.update({"account_id": str(client.me.id), "raw_text": text})
             await publish_task(event_payload, channel=GAME_EVENTS_CHANNEL)
-
+        
     except Exception as e:
-        await _handle_parsing_error(client, event_name_for_error, e, text)
+        # 全局捕获，以防调度器本身出错
+        await _handle_parsing_error(client, f"调度器异常: {e}", text)
 
 
 def initialize(app):

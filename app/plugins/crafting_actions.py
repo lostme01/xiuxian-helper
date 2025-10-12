@@ -5,7 +5,6 @@ import re
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 
 from app.context import get_application
-# [重构] 导入新的UI流程管理器
 from app.plugins.logic.crafting_logic import logic_execute_crafting
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply, progress_manager, send_paginated_message
@@ -35,13 +34,10 @@ async def _cmd_craft_item(event, parts):
     else:
         item_name = " ".join(parts[1:])
     
-    # [重构] 使用 progress_manager 自动处理UI流程
     async with progress_manager(event, f"⏳ 正在准备炼制任务: `{item_name} x{quantity}`...") as progress:
-        # 定义一个内联的 feedback_handler，它会调用 progress.update
         async def feedback_handler(text):
             await progress.update(text)
         
-        # 调用核心逻辑，并传入新的 feedback_handler
         await logic_execute_crafting(item_name, quantity, feedback_handler)
 
 
@@ -86,8 +82,11 @@ def initialize(app):
         usage=HELP_TEXT_CRAFT_ITEM
     )
     app.register_command(
-        name="可炼制列表",
+        # [修改] 指令名改为4个字
+        name="可炼列表",
         handler=_cmd_list_craftable_items,
         help_text="查看所有已知的可炼制物品",
+        # [修改] 将旧名称加入别名
+        aliases=["可炼制列表"],
         category="查询"
     )
