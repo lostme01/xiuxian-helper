@@ -5,7 +5,6 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
-# [新增] 导入NTP相关库
 import ntplib
 
 from app import game_adaptor
@@ -23,14 +22,45 @@ from app.utils import create_error_reply, progress_manager
 from config import settings
 from app.session_manager import get_session_manager
 
-# --- [v2.0 优化] 针对韩国和日本优化的NTP服务器列表 ---
+# --- [v3.0 最终优化] ---
+# 针对韩国和日本优化的NTP服务器列表
 NTP_SERVERS = [
-    'kr.pool.ntp.org', # 韩国NTP服务器池 (最高优先级)
-    'jp.pool.ntp.org', # 日本NTP服务器池 (次高优先级)
-    'asia.pool.ntp.org', # 亚洲NTP服务器池 (区域备用)
-    'time.cloudflare.com', # 全球知名服务商 (全球备用)
-    'ntp.aliyun.com', # 国内服务商 (备用)
+    'kr.pool.ntp.org', 'jp.pool.ntp.org', 'asia.pool.ntp.org',
+    'time.cloudflare.com', 'ntp.aliyun.com',
 ]
+# 全局变量，用于缓存本机与NTP时间的偏移量
+NTP_TIME_OFFSET = 0.0
+TASK_ID_NTP_SYNC = 'ntp_sync_task'
+
+
+async def _update_ntp_offset():
+    """
+    [v3.0 新增]
+    后台周期性任务：连接NTP服务器，计算并缓存本机时间与标准时间的偏移量。
+    """
+    global NTP_TIME_OFFSET
+    ntp_client = ntplib.NTPClient()
+    
+    for server in NTP_SERVERS:
+        try:
+            response = await asyncio.to_thread(ntp_client.request, server, version=3)
+            ntp_time_utc = datetime.fromtimestamp(response.tx_time, timezone.utc)
+            local_time_utc = datetime.now(timezone.utc)
+            current_offset = (ntp_time_utc - local_time_utc).total_seconds()
+            
+            # 使用滑动平均，防止单次网络抖动造成巨大偏移
+            # 第一次运行时直接赋值
+            if NTP_TIME_OFFSET == 0.0:
+                NTP_TIME_OFFSET = current_offset
+            else:
+                NTP_TIME_OFFSET = (NTP_TIME_OFFSET * 0.7) + (current_offset * 0.3)
+
+            format_and_log(LogType.SYSTEM, "NTP后台同步", {'服务器': server, '当前偏移(秒)': f'{current_offset:.4f}', '平滑后偏移(秒)': f'{NTP_TIME_OFFSET:.4f}'})
+            return # 同步成功一次即可
+        except Exception:
+            continue # 失败则尝试下一个
+            
+    format_and_log(LogType.ERROR, "NTP后台同步失败", {'原因': '所有NTP服务器均无法访问'})
 
 
 # --- 用户指令处理 ---
@@ -254,7 +284,7 @@ async def handle_ff_listing_successful(app, data):
 
 
 async def handle_ff_report_state(app, data):
-    """处理集火任务中的“状态回报”事件"""
+    """[v3.0 最终优化] 处理集火任务中的“状态回报”事件"""
     payload = data.get("payload", {})
     session_id = payload.get("session_id")
     session_manager = get_session_manager()
@@ -269,54 +299,44 @@ async def handle_ff_report_state(app, data):
         executor_id = session['executor_id']
         listing_id = session['listing_id']
         
-        # --- [核心修改 v2.0] ---
-        ntp_client = ntplib.NTPClient()
-        time_offset = 0
-        ntp_server_used = "本地时钟 (回退)"
+        # 1. 瞬间读取后台缓存的NTP时间偏移量
+        time_offset = NTP_TIME_OFFSET
         
-        # 1. 自动故障切换，尝试从优化列表中获取NTP时间
-        for server in NTP_SERVERS:
-            try:
-                response = await asyncio.to_thread(ntp_client.request, server, version=3)
-                ntp_time_utc = datetime.fromtimestamp(response.tx_time, timezone.utc)
-                local_time_utc = datetime.now(timezone.utc)
-                time_offset = (ntp_time_utc - local_time_utc).total_seconds()
-                ntp_server_used = server
-                format_and_log(LogType.DEBUG, "NTP同步成功", {'服务器': ntp_server_used, '时间偏移': f'{time_offset:.4f}s'})
-                break # 成功获取后即中断循环
-            except Exception as ntp_e:
-                format_and_log(LogType.WARNING, "NTP同步尝试失败", {'服务器': server, '错误': str(ntp_e)})
-                continue # 尝试下一个服务器
-        
-        if ntp_server_used == "本地时钟 (回退)":
-            format_and_log(LogType.ERROR, "NTP同步失败", {'原因': '所有NTP服务器均无法访问', '操作': '回退至使用本地时间'})
-        
-        # 2. 使用获取到的时间（无论是NTP还是本地）作为基准来计算go_time
+        # 2. 计算双方的就绪时间
         buyer_ready_time = await client.get_next_sendable_time(settings.GAME_GROUP_IDS[0])
         seller_ready_time = datetime.fromisoformat(payload["ready_time_iso"])
         
+        # 3. 将本机（买家）的就绪时间应用NTP校准
         corrected_buyer_ready_time = buyer_ready_time + timedelta(seconds=time_offset)
         
-        latest_ready_time = max(corrected_buyer_ready_time, seller_ready_time)
+        # 4. 判断并记录延迟来源
+        now_corrected = datetime.now(timezone.utc) + timedelta(seconds=time_offset)
+        buyer_wait = (corrected_buyer_ready_time - now_corrected).total_seconds()
+        seller_wait = (seller_ready_time - now_corrected).total_seconds()
         
-        buffer_seconds = settings.TRADE_COORDINATION_CONFIG.get('focus_fire_sync_buffer_seconds', 3)
+        delay_reason = "无"
+        if buyer_wait > 1: delay_reason = f"买家慢速模式 ({buyer_wait:.1f}s)"
+        if seller_wait > buyer_wait and seller_wait > 1: delay_reason = f"卖家慢速模式 ({seller_wait:.1f}s)"
+
+        # 5. 计算最终执行时间
+        latest_ready_time = max(corrected_buyer_ready_time, seller_ready_time)
+        buffer_seconds = settings.TRADE_COORDINATION_CONFIG.get('focus_fire_sync_buffer_seconds', 1.5) # 可以适当减小
         go_time = latest_ready_time + timedelta(seconds=buffer_seconds)
         
-        await session_manager.update_session(session_id, {
-            "status": "EXECUTED",
-            "go_time_iso": go_time.isoformat()
-        })
+        await session_manager.update_session(session_id, {"status": "EXECUTED", "go_time_iso": go_time.isoformat()})
 
+        # 6. 更新UI，明确告知延迟原因
+        wait_duration = (go_time - now_corrected).total_seconds()
         progress_info = session['progress_message_info']
-        current_corrected_time = datetime.now(timezone.utc) + timedelta(seconds=time_offset)
-        wait_duration = (go_time - current_corrected_time).total_seconds()
-        
         await client.client.edit_message(
             progress_info['chat_id'],
             progress_info['message_id'],
-            f"✅ `状态同步完成 (NTP: {ntp_server_used})`\n将在 **{max(0, wait_duration):.2f}** 秒后执行。"
+            f"✅ `状态同步完成!`\n"
+            f"- **主要延迟**: `{delay_reason}`\n"
+            f"- **将在**: `{max(0, wait_duration):.2f}` 秒后执行"
         )
 
+        # 7. 分派最终指令
         buyer_task = {"task_type": "execute_purchase", "target_account_id": requester_id, "payload": {"listing_id": listing_id, "go_time_iso": go_time.isoformat()}}
         seller_task = {"task_type": "execute_synced_delist", "target_account_id": executor_id, "payload": {"listing_id": listing_id, "go_time_iso": go_time.isoformat()}}
         
@@ -431,6 +451,9 @@ def initialize(app):
     app.register_command("集火购买", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="协同", aliases=["集火"], usage=HELP_TEXT_FOCUS_FIRE)
     app.register_command("收货上架", _cmd_receive_goods, help_text="📦 协同助手接收物品。", category="协同", aliases=["收货"], usage=HELP_TEXT_RECEIVE_GOODS)
     
+    # 注册后台NTP同步任务
+    scheduler.add_job(_update_ntp_offset, 'interval', minutes=10, id=TASK_ID_NTP_SYNC, replace_existing=True)
+
     if scheduler.get_job(TASK_ID_CRAFTING_TIMEOUT):
         scheduler.remove_job(TASK_ID_CRAFTING_TIMEOUT)
     scheduler.add_job(_check_stale_sessions, 'interval', minutes=1, id=TASK_ID_SESSION_CLEANUP, replace_existing=True)
