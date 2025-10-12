@@ -17,7 +17,7 @@ if not os.path.isdir('config') or not os.path.isdir('app'):
 # --- 模拟加载项目常量 ---
 from app.constants import CRAFTING_RECIPES_KEY
 
-print("--- TG Game Helper 配方更新工具 ---")
+print("--- TG Game Helper 配方更新工具 (v3.0 最终修正版) ---")
 
 # ==============================================================================
 # 将您提供的配方文本粘贴到这里
@@ -51,13 +51,11 @@ RECIPE_TEXT = """
 
 def parse_recipes(text: str) -> dict:
     """
-    智能解析配方文本，返回一个字典。
+    [最终修正版]
+    彻底重写解析逻辑，确保名称干净、准确。
     """
     parsed_data = {}
     lines = text.strip().split('\n')
-    
-    # 正则表达式，用于匹配 "材料名x数量"
-    material_pattern = re.compile(r"【?([^】x]+?)】?x(\d+)")
 
     for line in lines:
         if '：' not in line:
@@ -67,16 +65,37 @@ def parse_recipes(text: str) -> dict:
         item_name = parts[0].replace('【', '').replace('】', '').strip()
         materials_text = parts[1]
         
+        # 移除末尾的需求说明
+        if '需' in materials_text:
+            materials_text = materials_text.split('需')[0]
+
         materials = {}
-        matches = material_pattern.findall(materials_text)
+        # 按逗号分割成独立的材料部分
+        material_parts = materials_text.split(',')
         
-        for name, quantity in matches:
-            materials[name.strip()] = int(quantity)
+        for part in material_parts:
+            if 'x' not in part:
+                continue
+            
+            # 从后向前按'x'分割，确保物品名称中的 'x' 不会造成问题
+            name_part, quantity_part = part.rsplit('x', 1)
+            
+            try:
+                # 彻底清理名称和数量
+                clean_name = name_part.replace('【', '').replace('】', '').strip()
+                quantity = int(quantity_part.strip().replace('。', ''))
+                
+                if clean_name:
+                    materials[clean_name] = quantity
+            except (ValueError, IndexError):
+                # 如果数量部分不是数字，则安全地忽略这一部分
+                continue
             
         if materials:
             parsed_data[item_name] = materials
             
     return parsed_data
+
 
 async def main():
     # --- 加载配置 ---
@@ -117,7 +136,7 @@ async def main():
         sys.exit(1)
 
     # --- 解析配方 ---
-    print("[步骤 3/4] 正在解析配方文本...")
+    print("[步骤 3/4] 正在使用最终修正版逻辑解析配方文本...")
     recipes_to_update = parse_recipes(RECIPE_TEXT)
     if not recipes_to_update:
         print("  - ❌ 错误: 未能从提供的文本中解析出任何配方。")
@@ -130,6 +149,10 @@ async def main():
     print("[步骤 4/4] 正在将配方写入数据库...")
     updated_count = 0
     try:
+        # 在写入前，先清空旧的配方哈希表，确保完全清除脏数据
+        await db.delete(CRAFTING_RECIPES_KEY)
+        print(f"  - 已清空旧的 '{CRAFTING_RECIPES_KEY}' 数据。")
+
         # 使用 pipeline 提高写入效率
         async with db.pipeline(transaction=False) as pipe:
             for item_name, materials in recipes_to_update.items():
@@ -138,7 +161,7 @@ async def main():
                 updated_count += 1
             await pipe.execute()
         
-        print(f"\n  - ✅ 操作完成！成功更新或覆盖了 {updated_count} 条配方到数据库。")
+        print(f"\n  - ✅ 操作完成！成功将 {updated_count} 条干净的配方数据写入数据库。")
     except Exception as e:
         print(f"  - ❌ 错误: 写入 Redis 时发生错误: {e}")
     finally:
