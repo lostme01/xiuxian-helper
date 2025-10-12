@@ -67,7 +67,6 @@ async def find_best_executor(item_name: str, required_quantity: int, exclude_id:
 
 
 # --- 具体的任务执行逻辑 ---
-# 这些函数现在由 event_dispatcher 调用
 
 async def execute_broadcast_command(app, data):
     my_id = str(app.client.me.id);
@@ -97,11 +96,11 @@ async def execute_listing_task(app, requester_account_id: str, **kwargs):
             if not match_id:
                 raise ValueError("上架成功但无法解析挂单ID。")
 
-            item_id = match_id.group(1)
-            format_and_log(LogType.TASK, "集火-上架", {'阶段': '成功', '物品ID': item_id})
+            listing_id = match_id.group(1)
+            format_and_log(LogType.TASK, "集火-上架", {'阶段': '成功', '物品ID': listing_id})
 
             result_payload = {
-                "item_id": item_id,
+                "listing_id": listing_id,
                 "executor_id": str(app.client.me.id)
             }
             if 'session_id' in kwargs:
@@ -120,9 +119,10 @@ async def execute_listing_task(app, requester_account_id: str, **kwargs):
 
 
 async def execute_synced_unlisting_task(app, **payload):
-    item_id = payload.get("item_id")
+    # [修复] 统一使用 listing_id
+    listing_id = payload.get("listing_id")
     go_time_iso = payload.get("go_time_iso")
-    if not item_id or not go_time_iso:
+    if not listing_id or not go_time_iso:
         return
 
     try:
@@ -133,14 +133,16 @@ async def execute_synced_unlisting_task(app, **payload):
         if wait_seconds > 0:
             await asyncio.sleep(wait_seconds)
 
-        command = game_adaptor.unlist_item(item_id)
+        command = game_adaptor.unlist_item(listing_id)
         await app.client.send_game_command_fire_and_forget(command)
     except Exception as e:
         format_and_log(LogType.ERROR, "同步下架异常", {'错误': str(e)})
 
 
 async def execute_purchase_task(app, **payload):
-    command = game_adaptor.buy_item(payload.get("item_id"))
+    # [修复] 统一使用 listing_id，并增加对旧 item_id 的兼容
+    listing_id = payload.get("listing_id") or payload.get("item_id")
+    command = game_adaptor.buy_item(listing_id)
     format_and_log(LogType.TASK, "协同任务-购买", {'阶段': '开始执行', '指令': command})
     try:
         _sent, reply = await app.client.send_game_command_request_response(command)

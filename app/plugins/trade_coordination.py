@@ -19,7 +19,6 @@ from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply, progress_manager
 from config import settings
-# [新增] 导入新的会话管理器
 from app.session_manager import get_session_manager
 
 # --- 用户指令处理 ---
@@ -131,13 +130,18 @@ async def _cmd_receive_goods(event, parts):
             if "上架成功" in reply.text:
                 match_id = re.search(r"挂单ID\D+(\d+)", reply.text)
                 if not match_id: raise ValueError("无法解析挂单ID。")
-                item_id = match_id.group(1)
+                listing_id = match_id.group(1)
                 
-                await progress.update(f"✅ `上架成功` (ID: `{item_id}`)\n⏳ `正在通知购买...`")
-                task = {"task_type": "purchase_item", "target_account_id": executor_id, "payload": {"item_id": item_id, "cost": {"name": item_name, "quantity": quantity}}}
+                await progress.update(f"✅ `上架成功` (ID: `{listing_id}`)\n⏳ `正在通知购买...`")
+                # [修复] 统一使用 listing_id
+                task = {
+                    "task_type": "purchase_item", 
+                    "target_account_id": executor_id, 
+                    "payload": {"listing_id": listing_id, "cost": {"name": item_name, "quantity": quantity}}
+                }
                 
                 if await trade_logic.publish_task(task):
-                    await progress.update(f"✅ **收货任务已分派**\n已通知目标助手购买挂单 `{item_id}`。")
+                    await progress.update(f"✅ **收货任务已分派**\n已通知目标助手购买挂单 `{listing_id}`。")
                 else:
                     raise ConnectionError("发布Redis任务失败。")
             else:
@@ -215,15 +219,16 @@ async def handle_ff_listing_successful(app, data):
     try:
         await session_manager.update_session(session_id, {
             "status": "AWAITING_SYNC",
-            "listing_id": payload["item_id"],
-            "executor_id": payload["executor_id"] # 确认最终执行者
+            # [修复] 统一使用 listing_id
+            "listing_id": payload["listing_id"],
+            "executor_id": payload["executor_id"]
         })
         
         progress_info = session['progress_message_info']
         await app.client.client.edit_message(
             progress_info['chat_id'],
             progress_info['message_id'],
-            f"✅ `已收到挂单ID`: `{payload['item_id']}`\n⏳ 正在进行状态质询 (阶段3)..."
+            f"✅ `已收到挂单ID`: `{payload['listing_id']}`\n⏳ 正在进行状态质询 (阶段3)..."
         )
         
         query_task = {
@@ -271,8 +276,9 @@ async def handle_ff_report_state(app, data):
             f"✅ `状态同步完成!`\n将在 **{max(0, wait_duration):.1f}** 秒后执行。"
         )
 
+        # [修复] 统一使用 listing_id
         buyer_task = {"task_type": "execute_purchase", "target_account_id": requester_id, "payload": {"listing_id": listing_id, "go_time_iso": go_time.isoformat()}}
-        seller_task = {"task_type": "execute_synced_delist", "target_account_id": executor_id, "payload": {"item_id": listing_id, "go_time_iso": go_time.isoformat()}}
+        seller_task = {"task_type": "execute_synced_delist", "target_account_id": executor_id, "payload": {"listing_id": listing_id, "go_time_iso": go_time.isoformat()}}
         
         await trade_logic.publish_task(buyer_task)
         await trade_logic.publish_task(seller_task)
@@ -375,7 +381,6 @@ async def _check_stale_sessions():
                                 create_error_reply("集火购买", "任务超时", details=f"任务（ID: ...{session_id[-6:]}）在 {timeout_seconds} 秒内未完成。")
                             )
                         except Exception:
-                            # 忽略编辑失败，例如消息已被删除
                             pass
         except Exception as e:
             format_and_log(LogType.ERROR, "协同任务-超时检查异常", {'会话ID': session_id, '错误': str(e)})
