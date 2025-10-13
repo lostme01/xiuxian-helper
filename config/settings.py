@@ -5,11 +5,9 @@ import os
 import json
 import sys
 from dotenv import load_dotenv
-# [新增] 导入 Pydantic 验证模型和异常
 from app.config_validator import ConfigModel
 from pydantic import ValidationError
 
-# Load environment variables from .env file
 load_dotenv()
 
 CONFIG_FILE_PATH = 'config/prod.yaml'
@@ -38,7 +36,9 @@ def _merge_config(key: str, defaults: dict) -> dict:
         merged.update(user_config)
     return merged
 
-# --- 从配置文件或环境变量加载 ---
+# --- [新增] 全局总开关 ---
+MASTER_SWITCH = config.get('master_switch', True)
+
 API_ID = config.get('api_id', None)
 API_HASH = os.getenv('API_HASH') or config.get('api_hash', None)
 ADMIN_USER_ID = config.get('admin_user_id', None)
@@ -52,7 +52,6 @@ SECT_NAME = config.get('sect_name', None)
 TZ = config.get('timezone', 'Asia/Shanghai')
 COMMAND_TIMEOUT = config.get('command_timeout', 60)
 
-# [修改] 将环境变量注入到config字典中，以便Pydantic统一验证
 config['api_hash'] = API_HASH
 if 'exam_solver' in config and isinstance(config['exam_solver'], dict):
     gemini_keys_from_env = os.getenv('GEMINI_API_KEYS')
@@ -67,16 +66,9 @@ if 'exam_solver' in config and isinstance(config['exam_solver'], dict):
 if 'redis' in config and isinstance(config['redis'], dict):
     config['redis']['password'] = os.getenv('REDIS_PASSWORD') or config['redis'].get('password')
 
-
-# --- AI 配置 ---
 EXAM_SOLVER_CONFIG = _merge_config('exam_solver', {})
 GEMINI_MODEL_NAMES = EXAM_SOLVER_CONFIG.get('gemini_model_names', [])
-
-
-# --- Redis 配置 ---
 REDIS_CONFIG = _merge_config('redis', {})
-
-# --- 其他配置 ---
 AUTO_DELETE = _merge_config('auto_delete', {})
 AUTO_DELETE_STRATEGIES = _merge_config('auto_delete_strategies', {})
 TASK_SWITCHES = _merge_config('task_switches', {})
@@ -96,18 +88,13 @@ BROADCAST_CONFIG = config.get('broadcast', {})
 AUTO_RESOURCE_MANAGEMENT = config.get('auto_resource_management', {})
 AUTO_KNOWLEDGE_SHARING = config.get('auto_knowledge_sharing', {})
 
-
-# --- 路径常量 ---
 SESSION_FILE_PATH = f'{DATA_DIR}/user.session'
 SCHEDULER_DB = f'sqlite:///{DATA_DIR}/jobs.sqlite'
 
-# --- [重构] 使用 Pydantic 进行启动检查 ---
 def validate_config_with_pydantic():
     try:
-        # 使用 Pydantic 模型来解析和验证整个 config 字典
         ConfigModel(**config)
         
-        # 特殊逻辑检查
         if (XUANGU_EXAM_CONFIG.get('enabled') or TIANJI_EXAM_CONFIG.get('enabled')):
             if not EXAM_SOLVER_CONFIG.get('gemini_api_keys'):
                 raise ValueError("- 'exam_solver.gemini_api_keys' 未在 .env 文件 (GEMINI_API_KEYS) 或 prod.yaml 中配置，但AI答题功能已开启。")
@@ -116,14 +103,12 @@ def validate_config_with_pydantic():
         error_message = f"严重错误: 您的 `config/prod.yaml` 或 `.env` 配置文件存在以下问题：\n"
         error_message += "--------------------------------------------------\n"
         for error in e.errors():
-            # 格式化Pydantic的错误信息，使其更易读
             field_path = " -> ".join(map(str, error['loc']))
             error_message += f"- **字段 '{field_path}'**: {error['msg']}\n"
         error_message += "--------------------------------------------------\n程序无法启动。"
         print(error_message)
         sys.exit(1)
     except ValueError as e:
-        # 捕获我们自己抛出的特殊逻辑错误
         error_message = f"严重错误: 您的 `config/prod.yaml` 或 `.env` 配置文件存在以下问题：\n"
         error_message += "--------------------------------------------------\n"
         error_message += str(e)
@@ -131,5 +116,4 @@ def validate_config_with_pydantic():
         print(error_message)
         sys.exit(1)
 
-# 在文件加载后立即执行验证
 validate_config_with_pydantic()

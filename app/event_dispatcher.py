@@ -6,6 +6,7 @@ import logging
 from app.constants import GAME_EVENTS_CHANNEL, TASK_CHANNEL
 from app.context import get_application
 from app.logging_service import LogType, format_and_log
+from config import settings
 
 
 async def redis_message_handler(message):
@@ -14,51 +15,45 @@ async def redis_message_handler(message):
     """
     app = get_application()
     try:
+        # --- [核心修改] 全局总开关检查 ---
+        if not settings.MASTER_SWITCH:
+            return # 如果总开关关闭，则忽略所有来自Redis的任务
+
         data_str = message.get('data', '{}')
         data = json.loads(data_str)
         channel = message.get('channel')
         task_type = data.get("task_type")
         target_id = data.get("target_account_id")
 
-        # 1. 路由游戏事件
         if channel == GAME_EVENTS_CHANNEL:
             from app.plugins.trade_coordination import _handle_game_event
             await _handle_game_event(app, data)
             return
 
-        # 广播指令是例外，它没有target_id，需要所有非admin号执行
         if task_type == "broadcast_command":
             from app.plugins.logic.trade_logic import execute_broadcast_command
             await execute_broadcast_command(app, data)
             return
 
-        # 检查是否是针对本机的任务
         if str(app.client.me.id) != target_id:
             return
 
-        # --- 路由到插件的特定任务处理器 ---
         from app.plugins.trade_coordination import (
             handle_ff_listing_successful, handle_ff_report_state,
             handle_material_delivered, handle_query_state,
             handle_propose_knowledge_share
         )
         plugin_handlers = {
-            # 集火流程
             "listing_successful": handle_ff_listing_successful, 
             "report_state": handle_ff_report_state,
-            # 智能炼制流程
             "crafting_material_delivered": handle_material_delivered,
-            # 知识共享流程
             "propose_knowledge_share": handle_propose_knowledge_share,
-            # 通用
             "query_state": handle_query_state
         }
         if task_type in plugin_handlers:
-            # [修复] 使用正确的函数调用语法: plugin_handlers[task_type](...)
             await plugin_handlers[task_type](app, data)
             return
 
-        # --- 路由到通用的逻辑处理器 ---
         from app.plugins.logic import trade_logic
         from app.plugins.auto_management import handle_auto_management_tasks
         
@@ -81,7 +76,6 @@ async def redis_message_handler(message):
             return
 
     except (json.JSONDecodeError, TypeError):
-        # 忽略无法解析的非JSON消息
         pass
     except Exception as e:
         format_and_log(LogType.ERROR, "Redis 任务处理器异常", {'状态': '执行异常', '错误': str(e), '原始消息': message.get('data', '')})

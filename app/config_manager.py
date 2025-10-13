@@ -2,6 +2,7 @@
 import logging
 from functools import reduce
 import operator
+import sys
 
 import yaml
 
@@ -50,9 +51,21 @@ def _save_config(config_data: dict) -> bool:
 
 
 def _hot_reload_setting(path: str, value):
-    """在内存中热更新配置"""
+    """[修复版] 在内存中热更新配置，兼容顶级和嵌套配置"""
     keys = path.split('.')
     try:
+        # --- 核心修复：处理顶级配置项 ---
+        if len(keys) == 1:
+            key_name = keys[0].upper()
+            # 直接在 settings 模块上设置属性值
+            if hasattr(settings, key_name):
+                setattr(sys.modules['config.settings'], key_name, value)
+                format_and_log(LogType.SYSTEM, "配置热更新", {'状态': '成功', '路径': path, '新值': value})
+                return True, ""
+            else:
+                raise AttributeError(f"在 settings 模块中未找到顶层配置项: {key_name}")
+        
+        # --- 原有逻辑：处理嵌套配置项 ---
         settings_obj = _get_settings_object(keys[0])
         if settings_obj is None:
             raise AttributeError(f"在 settings 中未找到顶层配置对象: {keys[0]}")
@@ -100,9 +113,8 @@ async def update_nested_setting(path: str, value) -> str:
             else:
                 processed_value = value
     else:
-        processed_value = value  # 如果是列表/字典等，直接使用
+        processed_value = value
 
-    # --- 文件写入 ---
     config = _load_config()
     if config is None:
         return "❌ **修改失败**: 无法加载配置文件。"
@@ -115,7 +127,6 @@ async def update_nested_setting(path: str, value) -> str:
     if not _save_config(config):
         return "❌ **修改失败**: 写入配置文件时发生错误。"
 
-    # --- 内存热重载 ---
     success, err_msg = _hot_reload_setting(path, processed_value)
     if success:
         return f"✅ 配置 **{path}** 已更新为 `{value}`。"

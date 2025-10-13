@@ -45,7 +45,6 @@ class RedisModel(BaseModel):
     tianji_db_name: str
 
 class AutoDeleteStrategyModel(BaseModel):
-    # [修复] 将 delay_self 设为可选，以适应 request_response 这种没有该键的策略
     delay_self: Optional[int] = None
     delay_self_on_reply: Optional[int] = None
     delay_self_on_timeout: Optional[int] = None
@@ -101,6 +100,9 @@ class HeartbeatModel(BaseModel):
 # --- 顶层配置模型 ---
 
 class ConfigModel(BaseModel):
+    # [新增] 全局总开关
+    master_switch: bool = True
+    
     api_id: int
     api_hash: str
     admin_user_id: int

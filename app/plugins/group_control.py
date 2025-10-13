@@ -37,9 +37,13 @@ async def _handle_help_command(event, parts):
             continue
         handler = data.get('handler')
         if handler and handler not in unique_cmds:
+            category = data.get("category", "默认")
+            if category in ["查询", "数据查询"]:
+                category = "查询信息"
+            
             unique_cmds[handler] = {
                 "name": canonical_name, 
-                "category": data.get("category", "默认")
+                "category": category
             }
     
     for cmd_info in unique_cmds.values():
@@ -49,23 +53,17 @@ async def _handle_help_command(event, parts):
         categorized_cmds[category].append(f"`{prefix}{cmd_info['name']}`")
 
     help_lines = [f"🤖 **TG 游戏助手指令菜单**\n"]
-    category_order = ["系统", "查询", "动作", "协同", "知识", "数据查询"]
+    category_order = ["系统", "查询信息", "动作", "协同", "知识", "规则管理"]
     category_icons = {
-        "系统": "⚙️", "查询": "🔍", "动作": "⚡️",
-        "协同": "🤝", "知识": "📚", "数据查询": "📊", "默认": "🔸"
+        "系统": "⚙️", "查询信息": "🔍", "动作": "⚡️",
+        "协同": "🤝", "知识": "📚", "规则管理": "🔧", "默认": "🔸"
     }
 
-    # [修改] 简化布局逻辑，统一为一行三个
     def format_commands_to_three_per_line(commands):
         lines = []
-        # 首先对指令进行排序，保证每次生成的菜单顺序一致
         sorted_commands = sorted(commands)
-        
-        # 将排序后的指令列表，每3个一组进行切分
         for i in range(0, len(sorted_commands), 3):
-            # 将每组的3个指令用空格连接成一行
             lines.append("  ".join(sorted_commands[i:i+3]))
-            
         return lines
 
     all_categories = category_order + [cat for cat in sorted(categorized_cmds.keys()) if cat not in category_order]
@@ -73,7 +71,6 @@ async def _handle_help_command(event, parts):
         if category in categorized_cmds:
             icon = category_icons.get(category, "🔸")
             help_lines.append(f"**{icon} {category}**")
-            # 使用新的、统一的布局函数
             formatted_lines = format_commands_to_three_per_line(categorized_cmds[category])
             help_lines.extend(formatted_lines)
             help_lines.append("")
@@ -100,6 +97,12 @@ async def execute_command(event):
     if not parts: return
 
     cmd_name = parts[0].lower()
+    
+    # [核心修改] 更新豁免指令的名称
+    is_master_switch_cmd = cmd_name in ["全局开关", "masterswitch"] 
+    if not settings.MASTER_SWITCH and not is_master_switch_cmd:
+        return
+
     command_info = app.commands.get(cmd_name)
     
     if not command_info or not command_info.get("handler"):
@@ -143,7 +146,6 @@ async def execute_command(event):
 def initialize(app):
     client = app.client
     
-    # 确保ID是整数类型
     listen_chats = [int(settings.ADMIN_USER_ID), 'me']
     if settings.CONTROL_GROUP_ID:
         listen_chats.append(int(settings.CONTROL_GROUP_ID))
@@ -151,8 +153,8 @@ def initialize(app):
     listen_chats = list(set(listen_chats))
 
     app.register_command(
-        "获取帮助", 
-        _handle_help_command, 
+        name="获取帮助", 
+        handler=_handle_help_command, 
         help_text="ℹ️ 显示此帮助菜单。", 
         category="系统", 
         aliases=["help", "菜单", "menu", "帮助"]

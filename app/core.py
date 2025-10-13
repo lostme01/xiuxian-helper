@@ -23,7 +23,6 @@ from app.telegram_client import CommandTimeoutError, TelegramClient
 from app.utils import create_error_reply, progress_manager
 from config import settings
 
-# [新增] 导入新的事件分发器
 from app import event_dispatcher
 
 class UnbufferedStreamHandler(logging.StreamHandler):
@@ -172,7 +171,13 @@ class Application:
             if settings.REDIS_CONFIG.get('enabled') and not self.redis_db.is_connected:
                 format_and_log(LogType.SYSTEM, "启动失败", {'原因': 'Redis配置为启用，但连接失败，程序退出。'}, level=logging.CRITICAL)
                 sys.exit(1)
-            scheduler.start()
+            
+            # [核心修改] 启动时根据总开关状态决定是否暂停调度器
+            is_paused = not settings.MASTER_SWITCH
+            scheduler.start(paused=is_paused)
+            if is_paused:
+                format_and_log(LogType.SYSTEM, "核心服务", {'服务': '计划任务', '状态': '已暂停 (总开关关闭)'})
+
             await self.client.start()
             settings.ACCOUNT_ID = str(self.client.me.id)
             format_and_log(LogType.SYSTEM, "账户初始化", {'账户ID': settings.ACCOUNT_ID, '状态': '已设置为全局标识'})
@@ -186,7 +191,6 @@ class Application:
                     format_and_log(LogType.ERROR, "身份注册失败", {'错误': str(e)})
             self.load_plugins_and_commands()
             if self.redis_db.is_connected:
-                # [修改] 调用新的、集中的事件监听循环
                 redis_task = asyncio.create_task(event_dispatcher.redis_listener_loop())
                 background_tasks.add(redis_task)
             await asyncio.sleep(2)
@@ -194,7 +198,10 @@ class Application:
             await self.client.warm_up_entity_cache()
             startup_task = asyncio.create_task(self._run_startup_checks())
             background_tasks.add(startup_task)
-            await self.client.send_admin_notification("✅ **助手已成功启动并在线**")
+            
+            initial_status = "在线" if settings.MASTER_SWITCH else "暂停服务"
+            await self.client.send_admin_notification(f"✅ **助手已成功启动并处于 [{initial_status}] 状态**")
+
             format_and_log(LogType.SYSTEM, "核心服务", {'阶段': '所有服务已启动，进入主循环...'})
             await self.client.client.disconnected
         except Exception as e:

@@ -6,6 +6,7 @@ class MortalCultivationAdaptor(BaseGameAdaptor):
     """
     针对当前修仙游戏的具体适配器实现。
     """
+    # [恢复] 使用最初版本的正则表达式
     PROFILE_PATTERN = re.compile(
         r"\*\*@([^\*]+)\*\*.*?天命玉牒.*?"
         r"(?:\*\*称号\*\*[:：]?\s*【?([^】\n]+)】?.*?)?"
@@ -21,8 +22,9 @@ class MortalCultivationAdaptor(BaseGameAdaptor):
 
     def divination(self) -> str:
         return ".卜筮问天"
-
+        
     def parse_profile(self, text: str) -> dict | None:
+        """[恢复] 使用最初版本的解析逻辑"""
         match = self.PROFILE_PATTERN.search(text)
         if not match:
             return None

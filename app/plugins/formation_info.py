@@ -16,6 +16,10 @@ from app.data_manager import data_manager
 
 STATE_KEY_FORMATION = "formation_info"
 TASK_ID_FORMATION_BASE = 'formation_update_task_'
+HELP_TEXT_QUERY_FORMATION = """ T T T T**查询阵法信息**
+**说明**: 主动向游戏机器人查询最新的阵法信息，并更新本地缓存。
+**用法**: `,查询阵法`
+"""
 
 def _parse_formation_text(text: str) -> dict | None:
     if "的阵法心得" not in text:
@@ -88,7 +92,7 @@ async def _cmd_query_formation(event, parts):
 async def _cmd_view_cached_formation(event, parts):
     formation_data = await data_manager.get_value(STATE_KEY_FORMATION, is_json=True)
     if not formation_data:
-        await get_application().client.reply_to_admin(event, "ℹ️ 尚未缓存任何阵法信息，请先使用 `,我的阵法` 查询一次。")
+        await get_application().client.reply_to_admin(event, "ℹ️ 尚未缓存任何阵法信息，请先使用 `,查询阵法` 查询一次。")
         return
     reply_text = _format_formation_reply(formation_data, "📄 **已缓存的阵法信息**:")
     await get_application().client.reply_to_admin(event, reply_text)
@@ -139,7 +143,18 @@ async def check_formation_update_startup():
 
 
 def initialize(app):
-    app.register_command("我的阵法", _cmd_query_formation, help_text="查询并刷新当前角色的阵法信息。", category="查询")
-    app.register_command("查看阵法", _cmd_view_cached_formation, help_text="查看已缓存的最新阵法信息。", category="数据查询")
-    
+    app.register_command(
+        name="查询阵法", 
+        handler=_cmd_query_formation, 
+        help_text=" T T T T查询并刷新当前角色的阵法信息。", 
+        category="查询信息",
+        aliases=["我的阵法"],
+        usage=HELP_TEXT_QUERY_FORMATION
+    )
+    app.register_command(
+        "查看阵法", 
+        _cmd_view_cached_formation, 
+        help_text="📄 查看已缓存的最新阵法信息。", 
+        category="数据查询"
+    )
     app.startup_checks.append(check_formation_update_startup)

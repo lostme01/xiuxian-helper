@@ -36,7 +36,6 @@ async def _execute_resource_management():
         
         try:
             inv_json = await data_manager.db.hget(key, "inventory")
-            # This is not a direct value, need to get from sect_treasury, but for simplicity let's assume it's stored
             treasury_json = await data_manager.db.hget(key, "sect_treasury")
             treasury_data = json.loads(treasury_json) if treasury_json else {}
             contrib = treasury_data.get('contribution', 0)
@@ -117,20 +116,30 @@ async def _execute_knowledge_sharing():
             continue
         
         for recipe in needed_recipes:
+            # [核心修复] 查找拥有真实“丹方/图纸”的老师
             teacher_id = None
+            recipe_item_name = None 
+
             for tid, tdata in all_bots_data.items():
-                if tid != student_id and recipe in tdata['learned'] and tdata['inventory'].get(recipe, 0) > 0:
-                    teacher_id = tid
-                    break
+                if tid != student_id and recipe in tdata['learned']:
+                    possible_recipe_names = [f"{recipe}丹方", f"{recipe}图纸"]
+                    for name in possible_recipe_names:
+                        if tdata['inventory'].get(name, 0) > 0:
+                            teacher_id = tid
+                            recipe_item_name = name 
+                            break 
+                if teacher_id:
+                    break 
             
-            if teacher_id:
-                format_and_log(LogType.TASK, "知识共享", { '决策': '发送共享提议', '学生': f'...{student_id[-4:]}', '知识': recipe })
-                # [核心修复] 发送“提议”任务，而不是直接命令
+            if teacher_id and recipe_item_name:
+                format_and_log(LogType.TASK, "知识共享", { '决策': '发送共享提议', '学生': f'...{student_id[-4:]}', '知识': recipe_item_name })
+                
+                # [核心修复] 在任务中发送真实的“丹方/图纸”名称
                 task = {
                     "task_type": "propose_knowledge_share",
                     "target_account_id": student_id,
                     "payload": {
-                        "recipe_name": recipe,
+                        "recipe_name": recipe_item_name, 
                         "teacher_id": teacher_id
                     }
                 }
@@ -161,8 +170,6 @@ async def handle_auto_management_tasks(data):
     if task_type == "execute_game_command" and str(app.client.me.id) == data.get("target_account_id"):
         command = data.get("command")
         if command:
-            # --- [核心修改] 为后台任务的指令设置低优先级 ---
-            format_and_log(LogType.DEBUG, "后台任务执行", {'指令': command, '优先级': '低 (2)'})
             await app.client.send_game_command_fire_and_forget(command, priority=2)
             return True
             

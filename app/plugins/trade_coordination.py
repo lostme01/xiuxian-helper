@@ -22,22 +22,15 @@ from app.utils import create_error_reply, progress_manager
 from config import settings
 from app.session_manager import get_session_manager
 
-# --- [v3.0 最终优化] ---
-# 针对韩国和日本优化的NTP服务器列表
 NTP_SERVERS = [
     'kr.pool.ntp.org', 'jp.pool.ntp.org', 'asia.pool.ntp.org',
     'time.cloudflare.com', 'ntp.aliyun.com',
 ]
-# 全局变量，用于缓存本机与NTP时间的偏移量
 NTP_TIME_OFFSET = 0.0
 TASK_ID_NTP_SYNC = 'ntp_sync_task'
 
 
 async def _update_ntp_offset():
-    """
-    [v3.0 新增]
-    后台周期性任务：连接NTP服务器，计算并缓存本机时间与标准时间的偏移量。
-    """
     global NTP_TIME_OFFSET
     ntp_client = ntplib.NTPClient()
     
@@ -48,17 +41,15 @@ async def _update_ntp_offset():
             local_time_utc = datetime.now(timezone.utc)
             current_offset = (ntp_time_utc - local_time_utc).total_seconds()
             
-            # 使用滑动平均，防止单次网络抖动造成巨大偏移
-            # 第一次运行时直接赋值
             if NTP_TIME_OFFSET == 0.0:
                 NTP_TIME_OFFSET = current_offset
             else:
                 NTP_TIME_OFFSET = (NTP_TIME_OFFSET * 0.7) + (current_offset * 0.3)
 
             format_and_log(LogType.SYSTEM, "NTP后台同步", {'服务器': server, '当前偏移(秒)': f'{current_offset:.4f}', '平滑后偏移(秒)': f'{NTP_TIME_OFFSET:.4f}'})
-            return # 同步成功一次即可
+            return 
         except Exception:
-            continue # 失败则尝试下一个
+            continue 
             
     format_and_log(LogType.ERROR, "NTP后台同步失败", {'原因': '所有NTP服务器均无法访问'})
 
@@ -299,17 +290,13 @@ async def handle_ff_report_state(app, data):
         executor_id = session['executor_id']
         listing_id = session['listing_id']
         
-        # 1. 瞬间读取后台缓存的NTP时间偏移量
         time_offset = NTP_TIME_OFFSET
         
-        # 2. 计算双方的就绪时间
         buyer_ready_time = await client.get_next_sendable_time(settings.GAME_GROUP_IDS[0])
         seller_ready_time = datetime.fromisoformat(payload["ready_time_iso"])
         
-        # 3. 将本机（买家）的就绪时间应用NTP校准
         corrected_buyer_ready_time = buyer_ready_time + timedelta(seconds=time_offset)
         
-        # 4. 判断并记录延迟来源
         now_corrected = datetime.now(timezone.utc) + timedelta(seconds=time_offset)
         buyer_wait = (corrected_buyer_ready_time - now_corrected).total_seconds()
         seller_wait = (seller_ready_time - now_corrected).total_seconds()
@@ -318,14 +305,12 @@ async def handle_ff_report_state(app, data):
         if buyer_wait > 1: delay_reason = f"买家慢速模式 ({buyer_wait:.1f}s)"
         if seller_wait > buyer_wait and seller_wait > 1: delay_reason = f"卖家慢速模式 ({seller_wait:.1f}s)"
 
-        # 5. 计算最终执行时间
         latest_ready_time = max(corrected_buyer_ready_time, seller_ready_time)
-        buffer_seconds = settings.TRADE_COORDINATION_CONFIG.get('focus_fire_sync_buffer_seconds', 1.5) # 可以适当减小
+        buffer_seconds = settings.TRADE_COORDINATION_CONFIG.get('focus_fire_sync_buffer_seconds', 1.5)
         go_time = latest_ready_time + timedelta(seconds=buffer_seconds)
         
         await session_manager.update_session(session_id, {"status": "EXECUTED", "go_time_iso": go_time.isoformat()})
 
-        # 6. 更新UI，明确告知延迟原因
         wait_duration = (go_time - now_corrected).total_seconds()
         progress_info = session['progress_message_info']
         await client.client.edit_message(
@@ -336,7 +321,6 @@ async def handle_ff_report_state(app, data):
             f"- **将在**: `{max(0, wait_duration):.2f}` 秒后执行"
         )
 
-        # 7. 分派最终指令
         buyer_task = {"task_type": "execute_purchase", "target_account_id": requester_id, "payload": {"listing_id": listing_id, "go_time_iso": go_time.isoformat()}}
         seller_task = {"task_type": "execute_synced_delist", "target_account_id": executor_id, "payload": {"listing_id": listing_id, "go_time_iso": go_time.isoformat()}}
         
@@ -391,17 +375,23 @@ async def handle_query_state(app, data):
     })
 
 async def handle_propose_knowledge_share(app, data):
+    """[核心修复] 修正“知识共享”的接收逻辑"""
     payload = data.get("payload", {})
     recipe_name = payload.get("recipe_name")
     if not recipe_name: return
     
+    # 1. 将收到的丹方/图纸名转换为最终物品名，用于比对
+    base_item_name = recipe_name.replace("图纸", "").replace("丹方", "")
+    
+    # 2. 用最终物品名去查询“已学配方”列表
     learned_recipes = await data_manager.get_value("learned_recipes", is_json=True, default=[])
-    if recipe_name in learned_recipes:
+    if base_item_name in learned_recipes:
         format_and_log(LogType.TASK, "知识共享", {'状态': '提议已拒绝', '原因': '该知识已掌握', '知识': recipe_name})
         return
     
     format_and_log(LogType.TASK, "知识共享", {'状态': '提议已接受', '知识': recipe_name, '来源': f"...{payload.get('teacher_id', '')[-4:]}"})
     
+    # 3. 继续使用 `_cmd_receive_goods`，但现在传入的是正确的丹方/图纸全名
     class FakeEvent:
         def __init__(self, sender_id): 
             self.sender_id = sender_id
@@ -451,7 +441,6 @@ def initialize(app):
     app.register_command("集火购买", _cmd_focus_fire, help_text="🔥 协同助手上架并购买物品。", category="协同", aliases=["集火"], usage=HELP_TEXT_FOCUS_FIRE)
     app.register_command("收货上架", _cmd_receive_goods, help_text="📦 协同助手接收物品。", category="协同", aliases=["收货"], usage=HELP_TEXT_RECEIVE_GOODS)
     
-    # 注册后台NTP同步任务
     scheduler.add_job(_update_ntp_offset, 'interval', minutes=10, id=TASK_ID_NTP_SYNC, replace_existing=True)
 
     if scheduler.get_job(TASK_ID_CRAFTING_TIMEOUT):

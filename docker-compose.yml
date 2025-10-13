@@ -1,6 +1,7 @@
 services:
   tg-helper:
-    image: lostme01/tg-game-helper:latest
+    # [核心修改] 将镜像指向本地构建的镜像
+    image: tg-game-helper:local
     container_name: tg-game-helper-prod
     restart: unless-stopped
     tty: true
@@ -13,7 +14,7 @@ services:
       - ./config/prod.yaml:/app/config/prod.yaml
       - ./data:/app/data
       - ./logs:/app/logs
-      # [新增] 将主机时间同步到容器
+      # 将主机时间同步到容器
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
 networks:

@@ -13,12 +13,15 @@ from app.context import get_application
 from app.data_manager import data_manager
 from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
-# [重构] 导入新的UI流程管理器
 from app.utils import (create_error_reply, get_display_width,
                        progress_manager, send_paginated_message)
 
 STATE_KEY_TREASURY = "sect_treasury"
 TASK_ID_TREASURY = "sect_treasury_daily_task"
+HELP_TEXT_QUERY_TREASURY = """ T T T T**查询宗门宝库**
+**说明**: 主动向游戏机器人查询最新的宗门宝库信息，并更新本地缓存。
+**用法**: `,查询宝库`
+"""
 
 def _parse_treasury_text(text: str) -> dict:
     from app.logging_service import LogType, format_and_log
@@ -62,16 +65,14 @@ async def trigger_update_treasury(force_run=False):
              format_and_log(LogType.TASK, "更新宗门宝库", {'阶段': '任务异常', '错误': str(e)}, level=logging.CRITICAL)
 
 async def _cmd_query_treasury(event, parts):
-    # [重构] 使用 progress_manager
     async with progress_manager(event, "⏳ 正在查询宗门宝库...") as progress:
         final_text = ""
         try:
             final_text = await trigger_update_treasury(force_run=True)
         except CommandTimeoutError as e:
-            final_text = create_error_reply("宗门宝库", "游戏指令超时", details=str(e))
+            final_text = create_error_reply("查询宝库", "游戏指令超时", details=str(e))
         except Exception as e:
-            # 捕获 trigger_update_treasury 内部可能抛出的其他异常
-            final_text = create_error_reply("宗门宝库", "任务执行异常", details=str(e))
+            final_text = create_error_reply("查询宝库", "任务执行异常", details=str(e))
 
         await progress.update(final_text)
 
@@ -107,6 +108,18 @@ async def check_treasury_startup():
         format_and_log(LogType.SYSTEM, "任务调度", {'任务': '每日自动更新宗门宝库', '状态': '已计划', '预计时间': run_time.strftime('%H:%M')})
 
 def initialize(app):
-    app.register_command("宗门宝库", _cmd_query_treasury, help_text="主动查询并刷新宗门宝库的物品列表和贡献。", category="查询")
-    app.register_command("查看宝库", _cmd_view_cached_treasury, help_text="查看已缓存的宗门宝库信息。", category="数据查询")
+    app.register_command(
+        name="查询宝库", 
+        handler=_cmd_query_treasury, 
+        help_text=" T T T T查询并刷新宗门宝库的物品列表和贡献。", 
+        category="查询信息",
+        aliases=["宗门宝库"],
+        usage=HELP_TEXT_QUERY_TREASURY
+    )
+    app.register_command(
+        "查看宝库", 
+        _cmd_view_cached_treasury, 
+        help_text="📄 查看已缓存的宗门宝库信息。", 
+        category="数据查询"
+    )
     app.startup_checks.append(check_treasury_startup)

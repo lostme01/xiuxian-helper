@@ -131,3 +131,4 @@ heartbeat:
   passive_threshold_minutes: 30
   sync_enabled: true
   sync_run_time: 04:30
+master_switch: true

@@ -8,10 +8,14 @@ from app.context import get_application
 from app.data_manager import data_manager
 from app.logging_service import LogType, format_and_log
 from app.telegram_client import CommandTimeoutError
-# [重构] 导入新的UI流程管理器和错误回复生成器
 from app.utils import create_error_reply, progress_manager
 
 STATE_KEY_PROFILE = "character_profile"
+
+HELP_TEXT_QUERY_PROFILE = """ T T T T**查询角色信息**
+**说明**: 主动向游戏机器人查询最新的角色信息，并更新本地缓存。
+**用法**: `,查询角色`
+"""
 
 def _format_profile_reply(profile_data: dict, title: str) -> str:
     display_map = [
@@ -59,37 +63,44 @@ async def trigger_update_profile(force_run=False):
     except (CommandTimeoutError, asyncio.TimeoutError) as e:
         error_msg = f"等待游戏机器人响应或更新信息超时。"
         if force_run:
-            return create_error_reply("我的灵根", "游戏指令超时", details=error_msg)
+            return create_error_reply("查询角色", "游戏指令超时", details=error_msg)
         else:
             raise CommandTimeoutError(error_msg) from e
     except Exception as e:
         if force_run:
-            return create_error_reply("我的灵根", "任务执行异常", details=str(e))
+            return create_error_reply("查询角色", "任务执行异常", details=str(e))
         else:
             raise e
 
 
 async def _cmd_query_profile(event, parts):
-    """
-    [重构]
-    使用新的 progress_manager 上下文管理器来简化UI流程。
-    """
     async with progress_manager(event, "⏳ 正在发送指令并等待查询结果...") as progress:
-        # 在 'with' 块内，我们只关心核心业务逻辑
         final_text = await trigger_update_profile(force_run=True)
-        # 将最终结果交给 progress_manager 来更新消息
         await progress.update(final_text)
 
 
 async def _cmd_view_cached_profile(event, parts):
     profile_data = await data_manager.get_value(STATE_KEY_PROFILE, is_json=True)
     if not profile_data:
-        await get_application().client.reply_to_admin(event, "ℹ️ 尚未缓存任何角色信息，请先使用 `,我的灵根` 查询一次。")
+        await get_application().client.reply_to_admin(event, "ℹ️ 尚未缓存任何角色信息，请先使用 `,查询角色` 查询一次。")
         return
     reply_text = _format_profile_reply(profile_data, "📄 **已缓存的角色信息**:")
     await get_application().client.reply_to_admin(event, reply_text)
 
 
 def initialize(app):
-    app.register_command("我的灵根", _cmd_query_profile, help_text="查询并刷新当前角色的详细信息。", category="查询")
-    app.register_command("查看角色", _cmd_view_cached_profile, help_text="查看已缓存的最新角色信息。", category="数据查询")
+    app.register_command(
+        name="查询角色", 
+        handler=_cmd_query_profile, 
+        help_text=" T T T T查询并刷新当前角色的详细信息。", 
+        category="查询信息",
+        aliases=["我的灵根"],
+        usage=HELP_TEXT_QUERY_PROFILE
+    )
+    # 保持旧指令的入口，但指向新的缓存查看功能
+    app.register_command(
+        "查看角色", 
+        _cmd_view_cached_profile, 
+        help_text="📄 查看已缓存的最新角色信息。", 
+        category="数据查询" # 这个指令将被主菜单隐藏
+    )
