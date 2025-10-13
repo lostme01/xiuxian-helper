@@ -38,7 +38,11 @@ async def redis_message_handler(message):
             return
 
         # [核心修改] 注册全新、安全的知识共享处理器
-        from app.plugins.knowledge_sharing import handle_request_recipe_task, handle_fulfill_recipe_request_task
+        from app.plugins.knowledge_sharing import (
+            handle_request_recipe_task, 
+            handle_fulfill_recipe_request_task,
+            handle_learn_recipe_task
+        )
         from app.plugins.trade_coordination import (
             handle_ff_listing_successful, handle_ff_report_state,
             handle_material_delivered, handle_query_state
@@ -50,6 +54,7 @@ async def redis_message_handler(message):
             "query_state": handle_query_state,
             "request_recipe_from_teacher": handle_request_recipe_task,
             "fulfill_recipe_request": handle_fulfill_recipe_request_task,
+            "learn_recipe_after_trade": handle_learn_recipe_task,
         }
         if task_type in plugin_handlers:
             await plugin_handlers[task_type](app, data)

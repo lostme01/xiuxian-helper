@@ -5,6 +5,10 @@ import re
 import time
 import random
 from asteval import Interpreter
+# [核心修复] 导入缺失的模块
+from datetime import datetime, timedelta
+import pytz
+
 from app.context import get_application
 from app.logging_service import LogType, format_and_log
 from config import settings
@@ -16,6 +20,12 @@ from app.data_manager import data_manager
 
 async def _execute_resource_management():
     app = get_application()
+    
+    # [核心修复] 增加客户端就绪状态检查，防止启动时报错
+    if not app.client or not app.client.me:
+        format_and_log(LogType.DEBUG, "智能资源管理", {'状态': '跳过', '原因': '客户端尚未完全就绪'})
+        return
+
     if not settings.AUTO_RESOURCE_MANAGEMENT.get('enabled') or not data_manager.db or not data_manager.db.is_connected:
         return
 
@@ -94,10 +104,14 @@ def initialize(app):
     if not hasattr(app, 'extra_redis_handlers'): app.extra_redis_handlers = []
     app.extra_redis_handlers.append(handle_auto_management_tasks)
     if settings.AUTO_RESOURCE_MANAGEMENT.get('enabled'):
-        interval = settings.AUTO_RESOURCE_MANAGEMENT.get('interval_minutes', 120)
-        scheduler.add_job(_execute_resource_management, 'interval', id='auto_resource_management_task', replace_existing=True)
+        # [核心修复] 增加启动延迟，确保任务不会在启动瞬间执行
+        scheduler.add_job(_execute_resource_management, 'interval', 
+            minutes=settings.AUTO_RESOURCE_MANAGEMENT.get('interval_minutes', 120), 
+            id='auto_resource_management_task', 
+            replace_existing=True,
+            next_run_time=datetime.now(pytz.timezone(settings.TZ)) + timedelta(seconds=20)
+        )
     
-    # [核心修改] 移除所有旧的知识共享相关调度
     if scheduler.get_job('auto_knowledge_sharing_task'):
         scheduler.remove_job('auto_knowledge_sharing_task')
     if scheduler.get_job('knowledge_timeout_checker_task'):
