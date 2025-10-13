@@ -374,36 +374,7 @@ async def handle_query_state(app, data):
         "payload": {"session_id": payload.get("session_id"), "ready_time_iso": ready_time.isoformat()}
     })
 
-async def handle_propose_knowledge_share(app, data):
-    """[核心修复] 修正“知识共享”的接收逻辑"""
-    payload = data.get("payload", {})
-    recipe_name = payload.get("recipe_name")
-    if not recipe_name: return
-    
-    # 1. 将收到的丹方/图纸名转换为最终物品名，用于比对
-    base_item_name = recipe_name.replace("图纸", "").replace("丹方", "")
-    
-    # 2. 用最终物品名去查询“已学配方”列表
-    learned_recipes = await data_manager.get_value("learned_recipes", is_json=True, default=[])
-    if base_item_name in learned_recipes:
-        format_and_log(LogType.TASK, "知识共享", {'状态': '提议已拒绝', '原因': '该知识已掌握', '知识': recipe_name})
-        return
-    
-    format_and_log(LogType.TASK, "知识共享", {'状态': '提议已接受', '知识': recipe_name, '来源': f"...{payload.get('teacher_id', '')[-4:]}"})
-    
-    # 3. 继续使用 `_cmd_receive_goods`，但现在传入的是正确的丹方/图纸全名
-    class FakeEvent:
-        def __init__(self, sender_id): 
-            self.sender_id = sender_id
-            self.chat_id = sender_id
-            self.is_private = True
-            
-        async def reply(self, text): 
-            await app.client.send_admin_notification(f"【知识共享】: {text}")
-
-    fake_event = FakeEvent(app.client.me.id)
-    await _cmd_receive_goods(fake_event, ["收货上架", recipe_name, "1"])
-
+# --- [核心修改] 移除旧的 handle_propose_knowledge_share 处理器 ---
 
 # --- 周期性任务 ---
 

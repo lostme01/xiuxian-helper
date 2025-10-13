@@ -15,9 +15,8 @@ async def redis_message_handler(message):
     """
     app = get_application()
     try:
-        # --- [核心修改] 全局总开关检查 ---
         if not settings.MASTER_SWITCH:
-            return # 如果总开关关闭，则忽略所有来自Redis的任务
+            return 
 
         data_str = message.get('data', '{}')
         data = json.loads(data_str)
@@ -38,17 +37,19 @@ async def redis_message_handler(message):
         if str(app.client.me.id) != target_id:
             return
 
+        # [核心修改] 注册全新、安全的知识共享处理器
+        from app.plugins.knowledge_sharing import handle_request_recipe_task, handle_fulfill_recipe_request_task
         from app.plugins.trade_coordination import (
             handle_ff_listing_successful, handle_ff_report_state,
-            handle_material_delivered, handle_query_state,
-            handle_propose_knowledge_share
+            handle_material_delivered, handle_query_state
         )
         plugin_handlers = {
             "listing_successful": handle_ff_listing_successful, 
             "report_state": handle_ff_report_state,
             "crafting_material_delivered": handle_material_delivered,
-            "propose_knowledge_share": handle_propose_knowledge_share,
-            "query_state": handle_query_state
+            "query_state": handle_query_state,
+            "request_recipe_from_teacher": handle_request_recipe_task,
+            "fulfill_recipe_request": handle_fulfill_recipe_request_task,
         }
         if task_type in plugin_handlers:
             await plugin_handlers[task_type](app, data)
@@ -82,9 +83,6 @@ async def redis_message_handler(message):
 
 
 async def redis_listener_loop():
-    """
-    负责监听 Redis 频道的后台循环。
-    """
     app = get_application()
     while True:
         if not app.redis_db or not app.redis_db.is_connected:

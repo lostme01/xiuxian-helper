@@ -14,8 +14,6 @@ from app.telegram_client import CommandTimeoutError
 from app import game_adaptor
 from app.data_manager import data_manager
 
-KNOWLEDGE_SESSIONS_KEY = "knowledge_sessions"
-
 async def _execute_resource_management():
     app = get_application()
     if not settings.AUTO_RESOURCE_MANAGEMENT.get('enabled') or not data_manager.db or not data_manager.db.is_connected:
@@ -80,89 +78,6 @@ async def _execute_resource_management():
             except Exception as e:
                 format_and_log(LogType.ERROR, "智能资源管理", {'阶段': '规则执行异常', '规则': str(rule), '错误': str(e)})
 
-
-async def _execute_knowledge_sharing():
-    app = get_application()
-    if not settings.AUTO_KNOWLEDGE_SHARING.get('enabled') or not data_manager.db or not data_manager.db.is_connected:
-        return
-
-    my_id = str(app.client.me.id)
-    if my_id != str(settings.ADMIN_USER_ID):
-        return
-
-    format_and_log(LogType.TASK, "知识共享", {'阶段': '开始扫描'})
-
-    all_bots_data = {}
-    all_known_recipes = set()
-    all_keys = await data_manager.get_all_assistant_keys()
-
-    for key in all_keys:
-        try:
-            account_id = key.split(':')[-1]
-            learned_json = await data_manager.db.hget(key, "learned_recipes")
-            inv_json = await data_manager.db.hget(key, "inventory")
-            learned = set(json.loads(learned_json) if learned_json else [])
-            inv = json.loads(inv_json) if inv_json else {}
-            all_bots_data[account_id] = {'learned': learned, 'inventory': inv}
-            all_known_recipes.update(learned)
-        except (json.JSONDecodeError, TypeError):
-            continue
-
-    blacklist = set(settings.AUTO_KNOWLEDGE_SHARING.get('blacklist', []))
-    
-    for student_id, student_data in all_bots_data.items():
-        needed_recipes = (all_known_recipes - student_data['learned']) - blacklist
-        if not needed_recipes:
-            continue
-        
-        for recipe in needed_recipes:
-            # [核心修复] 查找拥有真实“丹方/图纸”的老师
-            teacher_id = None
-            recipe_item_name = None 
-
-            for tid, tdata in all_bots_data.items():
-                if tid != student_id and recipe in tdata['learned']:
-                    possible_recipe_names = [f"{recipe}丹方", f"{recipe}图纸"]
-                    for name in possible_recipe_names:
-                        if tdata['inventory'].get(name, 0) > 0:
-                            teacher_id = tid
-                            recipe_item_name = name 
-                            break 
-                if teacher_id:
-                    break 
-            
-            if teacher_id and recipe_item_name:
-                format_and_log(LogType.TASK, "知识共享", { '决策': '发送共享提议', '学生': f'...{student_id[-4:]}', '知识': recipe_item_name })
-                
-                # [核心修复] 在任务中发送真实的“丹方/图纸”名称
-                task = {
-                    "task_type": "propose_knowledge_share",
-                    "target_account_id": student_id,
-                    "payload": {
-                        "recipe_name": recipe_item_name, 
-                        "teacher_id": teacher_id
-                    }
-                }
-                await trade_logic.publish_task(task)
-                await asyncio.sleep(random.uniform(10, 20))
-
-
-async def _check_knowledge_session_timeouts():
-    if not data_manager.db or not data_manager.db.is_connected: return
-    if await data_manager.db.exists(KNOWLEDGE_SESSIONS_KEY):
-        sessions = await data_manager.db.hgetall(KNOWLEDGE_SESSIONS_KEY)
-        if not sessions: await data_manager.db.delete(KNOWLEDGE_SESSIONS_KEY); return
-        now = time.time()
-        for session_id, session_json in sessions.items():
-            try:
-                session_data = json.loads(session_json)
-                if now - session_data.get("timestamp", 0) > 300:
-                    format_and_log(LogType.TASK, "知识共享-超时检查", {'状态': '清理过时会话', '会话ID': session_id})
-                    await data_manager.db.hdel(KNOWLEDGE_SESSIONS_KEY, session_id)
-            except Exception:
-                await data_manager.db.hdel(KNOWLEDGE_SESSIONS_KEY, session_id)
-
-
 async def handle_auto_management_tasks(data):
     app = get_application()
     task_type = data.get("task_type")
@@ -180,8 +95,10 @@ def initialize(app):
     app.extra_redis_handlers.append(handle_auto_management_tasks)
     if settings.AUTO_RESOURCE_MANAGEMENT.get('enabled'):
         interval = settings.AUTO_RESOURCE_MANAGEMENT.get('interval_minutes', 120)
-        scheduler.add_job(_execute_resource_management, 'interval', minutes=interval, id='auto_resource_management_task', replace_existing=True)
-    if settings.AUTO_KNOWLEDGE_SHARING.get('enabled'):
-        interval = settings.AUTO_KNOWLEDGE_SHARING.get('interval_minutes', 240)
-        scheduler.add_job(_execute_knowledge_sharing, 'interval', minutes=interval, id='auto_knowledge_sharing_task', replace_existing=True)
-        scheduler.add_job(_check_knowledge_session_timeouts, 'interval', minutes=5, id='knowledge_timeout_checker_task', replace_existing=True)
+        scheduler.add_job(_execute_resource_management, 'interval', id='auto_resource_management_task', replace_existing=True)
+    
+    # [核心修改] 移除所有旧的知识共享相关调度
+    if scheduler.get_job('auto_knowledge_sharing_task'):
+        scheduler.remove_job('auto_knowledge_sharing_task')
+    if scheduler.get_job('knowledge_timeout_checker_task'):
+        scheduler.remove_job('knowledge_timeout_checker_task')
