@@ -65,7 +65,8 @@ TASK_SWITCHES_META = {
     '阵法': ('自动更新阵法', 'task_switches.formation_update'),
     '魔君': ('自动应对魔君', 'task_switches.mojun_arrival'),
     '自动删除': ('消息自动删除', 'auto_delete.enabled'),
-    # [修复] “集火下架”是一个详细配置，不应出现在任务开关中，已移除
     '智能资源': ('智能资源管理', 'auto_resource_management.enabled'),
     '知识共享': ('自动化知识共享', 'auto_knowledge_sharing.enabled'),
+    # [新增] 元婴出窍任务开关
+    '元婴': ('自动元婴出窍', 'task_switches.nascent_soul'),
 }

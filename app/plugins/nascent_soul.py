@@ -78,6 +78,9 @@ async def trigger_nascent_soul_egress(force_run=False):
     # 默认重试时间
     next_run_time = datetime.now(beijing_tz) + timedelta(minutes=random.randint(15, 30))
     
+    # [新增] 用于手动执行时返回更详细的信息
+    manual_run_report = []
+
     try:
         # 2. 查询当前元婴状态
         _sent_status, reply_status = await client.send_game_command_request_response(game_adaptor.get_nascent_soul_status())
@@ -85,6 +88,8 @@ async def trigger_nascent_soul_egress(force_run=False):
         current_state = parsed_info.get('state')
         
         format_and_log(LogType.TASK, "元婴出窍", {'阶段': '查询状态成功', '当前状态': current_state})
+        manual_run_report.append(f"- **查询状态**: 发现元婴当前为 `{current_state or '未知'}` 状态。")
+
 
         # 3. 根据状态决策
         if current_state == '元神出窍':
@@ -94,6 +99,7 @@ async def trigger_nascent_soul_egress(force_run=False):
                 next_run_time = datetime.now(beijing_tz) + cooldown + timedelta(minutes=5)
                 format_and_log(LogType.TASK, "元婴出窍", {'阶段': '决策', '详情': '元婴已出窍，等待归来', '预计归来时间': str(cooldown)})
                 await client.send_admin_notification(f"✅ **元婴状态同步**\n\n元婴已出窍，下次检查时间已更新为 `{next_run_time.strftime('%H:%M:%S')}`。")
+                manual_run_report.append(f"- **执行操作**: 无需操作，等待元婴归来。")
             else:
                 # [BUG 修正] 异常重试时间从1小时改为30分钟
                 next_run_time = datetime.now(beijing_tz) + timedelta(minutes=30)
@@ -103,6 +109,7 @@ async def trigger_nascent_soul_egress(force_run=False):
 
         elif current_state == '窍中温养':
             format_and_log(LogType.TASK, "元婴出窍", {'阶段': '决策', '详情': '元婴在窍，派遣出窍'})
+            manual_run_report.append(f"- **执行操作**: 发送 `.元婴出窍` 指令。")
             _sent_action, reply_action = await client.send_game_command_request_response(game_adaptor.send_nascent_soul_out())
             
             if "化作一道流光飞出" in reply_action.text:
@@ -128,6 +135,9 @@ async def trigger_nascent_soul_egress(force_run=False):
         # 超时后15分钟重试
         next_run_time = datetime.now(beijing_tz) + timedelta(minutes=15)
         await client.send_admin_notification(f"⚠️ **元婴任务警报**\n\n- **问题**: 与游戏机器人通信超时。\n- **操作**: 已安排在15分钟后重试。")
+        # [新增] 手动执行时返回超时信息
+        if force_run:
+            return "❌ **[立即出窍]** 任务失败：与游戏机器人通信超时。"
         
     finally:
         # 4. 调度下一次任务
@@ -135,7 +145,11 @@ async def trigger_nascent_soul_egress(force_run=False):
         await data_manager.save_value(STATE_KEY_NASCENT_SOUL, next_run_time.isoformat())
         format_and_log(LogType.TASK, "元婴出窍", {'阶段': '任务完成', '下次调度时间': next_run_time.strftime('%Y-%m-%d %H:%M:%S')})
         if force_run:
-            return f"✅ **[立即出窍]** 任务已成功触发。下次自动检查时间: `{next_run_time.strftime('%H:%M:%S')}`"
+            # [修改] 返回更详细的报告
+            report_header = "✅ **[立即出窍]** 任务已成功执行。\n\n**执行摘要**:\n"
+            report_body = "\n".join(manual_run_report)
+            report_footer = f"\n\n下次自动检查时间已规划在 `{next_run_time.strftime('%H:%M:%S')}` 左右。"
+            return report_header + report_body + report_footer
 
 async def check_nascent_soul_startup():
     """启动时检查并调度元婴出窍任务"""
