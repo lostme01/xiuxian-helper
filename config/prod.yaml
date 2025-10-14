@@ -40,6 +40,7 @@ task_switches:
   sect_treasury: true
   mojun_arrival: true
   formation_update: true
+  nascent_soul: true
 task_jitter:
   biguan:
     min: 30

@@ -60,3 +60,7 @@ huangfeng_weed = game_adaptor.huangfeng_weed
 huangfeng_harvest = game_adaptor.huangfeng_harvest
 huangfeng_sow = game_adaptor.huangfeng_sow
 mojun_hide_presence = game_adaptor.mojun_hide_presence
+
+# [新增] 元婴功能代理
+get_nascent_soul_status = game_adaptor.get_nascent_soul_status
+send_nascent_soul_out = game_adaptor.send_nascent_soul_out
