@@ -75,6 +75,12 @@ class MortalCultivationAdaptor(BaseGameAdaptor):
     def get_profile(self) -> str:
         return ".我的灵根"
 
+    def get_nascent_soul_status(self) -> str:
+        return ".元婴状态"
+
+    def send_nascent_soul_out(self) -> str:
+        return ".元婴出窍"
+
     def get_formation_info(self) -> str:
         return ".我的阵法"
 

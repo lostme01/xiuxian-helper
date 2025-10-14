@@ -28,6 +28,9 @@ class TaskSwitchesModel(BaseModel):
     mojun_arrival: bool
     sect_treasury: bool
     formation_update: bool
+    # [新增] 元婴功能开关
+    nascent_soul: bool = False
+
 
 class TaskJitterModel(BaseModel):
     biguan: DelayModel

@@ -32,7 +32,9 @@ def _parse_formation_text(text: str) -> dict | None:
     if learned_match:
         content = learned_match.group(1).strip()
         if "尚未学习" not in content:
-            learned_formations = re.findall(r"【([^】]+)】", content)
+            # [BUG 修正] 对解析出的每个阵法名称进行 strip() 清理
+            raw_names = re.findall(r"【([^】]+)】", content)
+            learned_formations = [name.strip() for name in raw_names]
 
     active_match = re.search(r"\*\*当前激活的防护阵:\*\*\s*\n\s*-\s*(.*)", text)
     if active_match:
@@ -40,7 +42,8 @@ def _parse_formation_text(text: str) -> dict | None:
         if content != "无":
             m = re.search(r"【([^】]+)】", content)
             if m:
-                active_formation = m.group(1)
+                # [BUG 修正] 对解析出的激活阵法名称进行 strip() 清理
+                active_formation = m.group(1).strip()
 
     return {"learned": learned_formations, "active": active_formation}
 

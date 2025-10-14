@@ -102,6 +102,17 @@ class BaseGameAdaptor(ABC):
         """宗门兑换指令。"""
         pass
 
+    # --- 元婴功能 ---
+    @abstractmethod
+    def get_nascent_soul_status(self) -> str:
+        """获取元婴状态指令。"""
+        pass
+
+    @abstractmethod
+    def send_nascent_soul_out(self) -> str:
+        """元婴出窍指令。"""
+        pass
+
     # --- 宗门专属 ---
     @abstractmethod
     def huangfeng_garden(self) -> str:

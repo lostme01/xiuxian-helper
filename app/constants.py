@@ -18,6 +18,9 @@ STATE_KEY_CHUANG_TA = "chuang_ta"
 STATE_KEY_TAIYI_YINDAO = "taiyi_yindao"
 STATE_KEY_LAST_TIMESTAMPS = "last_message_timestamps"
 STATE_KEY_FORMATION_LAST_RUN = "formation_last_run"
+# [新增] 元婴功能状态键
+STATE_KEY_NASCENT_SOUL = "nascent_soul"
+
 
 # Standalone Redis keys
 CRAFTING_RECIPES_KEY = "crafting_recipes"
@@ -44,6 +47,9 @@ TASK_ID_FORMATION_BASE = 'formation_update_task_'
 TASK_ID_DIANMAO_BASE = 'zongmen_dianmao_task_'
 TASK_ID_YINDAO = 'taiyi_yindao_task'
 TASK_ID_GARDEN = 'huangfeng_garden_task'
+# [新增] 元婴功能任务ID
+TASK_ID_NASCENT_SOUL = 'nascent_soul_egress_task'
+
 
 # Heartbeat tasks
 TASK_ID_ACTIVE_HEARTBEAT = 'active_heartbeat_task'

@@ -12,7 +12,8 @@ def _normalize_formation_name(name: str) -> str:
     标准化阵法名称，去除常见的后缀。
     例如: "三才微尘阵图" -> "三才微尘阵"
     """
-    return name.replace("阵图", "").replace("阵法", "").replace("图", "")
+    # [BUG 修正] 增加 strip() 作为防御性编程，防止意外的空格
+    return name.strip().replace("阵图", "").replace("阵法", "").replace("图", "")
 
 async def logic_check_knowledge_all_accounts() -> str:
     """
