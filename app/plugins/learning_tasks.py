@@ -36,11 +36,15 @@ async def trigger_learn_recipes(force_run=False):
         
         # [核心修复 v3.1] 使用新的正则表达式来匹配 "- **物品名** (来自: ...)" 格式
         # 这个表达式会查找以"- "开头，后跟两个星号，然后捕获直到下一个星号对的所有内容
-        learned_from_command = set(re.findall(r'-\s*\*\*([^\*]+)\*\*', reply.text))
+        # [BUG 修正] 对解析出的每个名称进行 strip() 清理，防止因空格导致不匹配
+        learned_from_command_raw = re.findall(r'-\s*\*\*([^\*]+)\*\*', reply.text)
+        learned_from_command = {name.strip() for name in learned_from_command_raw}
         
         # 作为备用，如果上面的正则没匹配到，尝试旧的【】格式
         if not learned_from_command:
-            learned_from_command = set(re.findall(r'【([^】]+)】', reply.text))
+            learned_from_command_raw = re.findall(r'【([^】]+)】', reply.text)
+            learned_from_command = {name.strip() for name in learned_from_command_raw}
+
 
     except (CommandTimeoutError, ValueError):
         format_and_log(LogType.ERROR, "自动学习", {'阶段': '任务中止', '原因': '无法从游戏获取或解析可炼制列表。'})
@@ -60,7 +64,8 @@ async def trigger_learn_recipes(force_run=False):
     for item in inventory:
         if item.endswith(("图纸", "丹方")):
             # 从图纸名推断出【物品名称】
-            base_item_name = item.replace("图纸", "").replace("丹方", "")
+            # [BUG 修正] 对推导出的基础物品名进行 strip() 清理
+            base_item_name = item.replace("图纸", "").replace("丹方", "").strip()
             # 用【物品名称】去比对权威列表
             if base_item_name not in learned_from_command:
                 recipes_to_learn.append(item)
@@ -84,7 +89,7 @@ async def trigger_learn_recipes(force_run=False):
             
             if "成功领悟了它的炼制之法" in reply_learn.text:
                 # 学习成功后，将【物品名称】加入内存中的权威列表
-                base_item_name = recipe.replace("图纸", "").replace("丹方", "")
+                base_item_name = recipe.replace("图纸", "").replace("丹方", "").strip()
                 format_and_log(LogType.TASK, "自动学习-知识库更新", {'阶段': '学习成功', '物品': base_item_name})
                 learned_from_command.add(base_item_name)
                 newly_learned_in_session = True
