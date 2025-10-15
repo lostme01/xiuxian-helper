@@ -68,7 +68,18 @@ async def _execute_resource_management():
                 if condition_met:
                     action = rule.get("action")
                     amount = rule.get("amount")
-                    
+                    dynamic_amount_expr = rule.get("dynamic_amount")
+
+                    # [新增] 支持动态数量计算
+                    if dynamic_amount_expr:
+                        # 使用 asteval 安全地计算表达式
+                        calculated_amount = aeval.eval(dynamic_amount_expr)
+                        # 确保数量是正整数
+                        if isinstance(calculated_amount, (int, float)) and calculated_amount > 0:
+                            amount = int(calculated_amount)
+                        else:
+                            continue # 计算结果无效，跳过此规则
+
                     if not action_item_name:
                         format_and_log(LogType.ERROR, "智能资源管理", {'阶段': '规则跳过', '原因': '规则缺少 "item" 字段'})
                         continue

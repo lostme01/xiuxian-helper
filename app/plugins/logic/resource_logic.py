@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import yaml
+import re
 from config import settings
 from app.config_manager import update_nested_setting
 
@@ -11,49 +12,77 @@ def _format_rule_string(rule: dict, index: int) -> str:
     check_str = f"当 `{rule.get('check_resource', 'N/A')}`"
     condition_str = f"满足 `{rule.get('condition', 'N/A')}` 时"
     action_str = f"自动 `{rule.get('action', 'N/A')}`"
-    item_str = f"`{rule.get('item', 'N/A')}` x `{rule.get('amount', 'N/A')}`"
+    
+    if rule.get('dynamic_amount'):
+        item_str = f"`{rule.get('item', 'N/A')}` (超出 `{rule.get('threshold')}` 的部分)"
+    else:
+        item_str = f"`{rule.get('item', 'N/A')}` x `{rule.get('amount', 'N/A')}`"
+        
     return f"**{index}.** {check_str} {condition_str}，{action_str} {item_str}"
 
-def _parse_and_validate_rule(rule_str: str) -> tuple[dict | None, str | None]:
+def _parse_simplified_rule(parts: list) -> tuple[dict | None, str | None]:
     """
-    解析并验证单条规则字符串的正确性。
-    预期格式: "当 资源 条件, 执行 动作 物品 数量"
-    示例: "当 凝血草 >1000, 执行 donate 凝血草 500"
+    [新功能] 解析简化版的规则指令
     """
-    try:
-        # 1. 切分条件与动作
-        parts = re.match(r"当\s+(.+?)\s+([<>=!]+.+?),?\s+执行\s+(.+)", rule_str)
-        if not parts:
-            return None, "格式不匹配，请使用 `当 资源 条件, 执行 动作 物品 数量` 的格式。"
-        
-        check_resource, condition, action_part = parts.groups()
-        
-        # 2. 进一步解析动作部分
-        action_parts = action_part.strip().split()
-        if len(action_parts) < 3:
-            return None, "动作部分格式不完整，应为 `动作 物品 数量`。"
+    if len(parts) < 2:
+        return None, "指令不完整。"
+    
+    action = parts[1]
+
+    # 模式一: ,规则 捐献 <物品> 保留 <数量>
+    if action == "捐献" and "保留" in parts:
+        try:
+            preserve_index = parts.index("保留")
+            item_name = " ".join(parts[2:preserve_index])
+            threshold_str = parts[preserve_index + 1]
             
-        action, amount = action_parts[0], action_parts[-1]
-        item = " ".join(action_parts[1:-1])
+            if not item_name or not threshold_str.isdigit():
+                return None, "捐献指令格式错误。"
+            
+            threshold = int(threshold_str)
+            rule = {
+                "check_resource": item_name,
+                "condition": f"resource > {threshold}",
+                "action": "donate",
+                "item": item_name,
+                "amount": 0,  # 占位符，实际由 dynamic_amount 控制
+                "dynamic_amount": f"resource - {threshold}",
+                "threshold": threshold # 用于显示
+            }
+            return rule, None
+        except (ValueError, IndexError):
+            return None, "捐献指令格式错误。"
 
-        # 3. 校验各部分内容
-        if action not in ACTION_TYPES:
-            return None, f"无效的动作 `{action}`，只支持 `donate` 或 `exchange`。"
-        
-        if not amount.isdigit() or int(amount) <= 0:
-            return None, f"数量 `{amount}` 必须是一个正整数。"
+    # 模式二: ,规则 兑换 <物品> <数量> 当 <资源> <条件> <阈值>
+    elif action == "兑换" and "当" in parts:
+        try:
+            when_index = parts.index("当")
+            item_name = " ".join(parts[2:when_index-1])
+            amount_str = parts[when_index-1]
+            
+            condition_parts = parts[when_index+1:]
+            if len(condition_parts) != 3 or not amount_str.isdigit():
+                 return None, "兑换指令格式错误。"
 
-        # 4. 组合成规则字典
-        rule = {
-            "check_resource": check_resource.strip(),
-            "condition": f"resource {condition.strip()}",
-            "action": action,
-            "item": item,
-            "amount": int(amount)
-        }
-        return rule, None
-    except Exception as e:
-        return None, f"解析时发生未知错误: {e}"
+            check_resource = condition_parts[0]
+            operator = condition_parts[1]
+            threshold_str = condition_parts[2]
+
+            if operator not in ['>', '<', '>=', '<=', '==', '!='] or not threshold_str.isdigit():
+                return None, "兑换指令的条件部分格式错误。"
+
+            rule = {
+                "check_resource": check_resource,
+                "condition": f"resource {operator} {threshold_str}",
+                "action": "exchange",
+                "item": item_name,
+                "amount": int(amount_str)
+            }
+            return rule, None
+        except (ValueError, IndexError):
+            return None, "兑换指令格式错误。"
+
+    return None, "无法识别的规则格式。"
 
 async def logic_get_rules() -> str:
     """获取并格式化所有当前规则"""
@@ -66,9 +95,9 @@ async def logic_get_rules() -> str:
     
     return header + "\n".join(rule_lines)
 
-async def logic_add_rule(rule_str: str) -> str:
-    """添加一条新规则"""
-    new_rule, error = _parse_and_validate_rule(rule_str)
+async def logic_add_rule(parts: list) -> str:
+    """添加一条新规则（简化版）"""
+    new_rule, error = _parse_simplified_rule(parts)
     if error:
         return f"❌ **添加失败**\n**原因**: {error}"
 
@@ -108,4 +137,3 @@ async def logic_delete_rule(index_str: str) -> str:
             
     except ValueError:
         return f"❌ **删除失败**: 请提供一个有效的规则编号数字。"
-
