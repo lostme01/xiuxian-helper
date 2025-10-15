@@ -197,7 +197,8 @@ async def _handle_game_event(app, event_data):
         "EXCHANGE_COMPLETED": "宗门兑换", "CONTRIBUTION_GAINED": "宗门任务", 
         "TOWER_CHALLENGE_COMPLETED": "闯塔", "CRAFTING_COMPLETED": "炼制", 
         "HARVEST_COMPLETED": "药园采药", "LEARNING_COMPLETED": "学习", 
-        "SOWING_COMPLETED": "药园播种", "DELIST_COMPLETED": "下架"
+        "SOWING_COMPLETED": "药园播种", "DELIST_COMPLETED": "下架",
+        "NASCENT_SOUL_RETURNED": "元婴出窍"
     }
     source = source_map.get(event_type, "未知来源")
 
@@ -226,6 +227,7 @@ async def _handle_game_event(app, event_data):
         if gained_contrib := event_data.get("gained_contribution"): 
             await stats_manager.add_contribution(gained_contrib)
             update_details.append(f"贡献+`{gained_contrib}` ({source})")
+    # [修改] 合并多个相似事件的处理
     elif event_type in ["TOWER_CHALLENGE_COMPLETED", "CRAFTING_COMPLETED", "HARVEST_COMPLETED", "DELIST_COMPLETED"]:
         for item, qty in event_data.get("gained_items", {}).items(): 
             await inventory_manager.add_item(item, qty)
@@ -234,9 +236,31 @@ async def _handle_game_event(app, event_data):
          for item, qty in event_data.get("consumed_item", {}).items(): 
             await inventory_manager.remove_item(item, qty)
             update_details.append(f"消耗`{item}`x{qty} ({source})")
+    # [新增] 处理元神归窍事件
+    elif event_type == "NASCENT_SOUL_RETURNED":
+        summary_lines = [f"**✨ 元婴归来 (@{my_username})**\n"]
+        gained_items = event_data.get("gained_items", {})
+        if gained_items:
+            summary_lines.append("**收获物品**:")
+            for item, qty in gained_items.items():
+                await inventory_manager.add_item(item, qty)
+                summary_lines.append(f"- `{item}` x {qty}")
+        
+        if gained_cult := event_data.get("gained_cultivation", 0):
+            summary_lines.append(f"**天道感悟**: 修为 +`{gained_cult}`")
+
+        if gained_exp := event_data.get("gained_exp", 0):
+            summary_lines.append(f"**元婴成长**: 经验 +`{gained_exp}`")
+        
+        if new_level := event_data.get("new_level"):
+            summary_lines.append(f"🎉 **元婴突破至 {new_level} 级！**")
+        
+        await client.send_admin_notification("\n".join(summary_lines))
+        return # 元婴事件使用独立的、更详细的通知，不走通用通知流程
+
 
     if update_details: 
-        await client.send_admin_notification(f"📦 **状态更新 (`@{my_username}`)**\n- {', '.join(update_details)}")
+        await client.send_admin_notification(f"📦 **状态更新 (@{my_username})**\n- {', '.join(update_details)}")
 
 async def handle_ff_listing_successful(app, data):
     """处理集火任务中的“上架成功”事件"""

@@ -35,6 +35,42 @@ def _parse_items_from_text(text: str) -> dict:
 
 # --- “域内解析” 函数 ---
 
+def parse_nascent_soul_return(text: str) -> dict | None:
+    """[新增] 解析“元神归窍”事件"""
+    payload = {
+        "event_type": "NASCENT_SOUL_RETURNED",
+        "gained_items": {},
+        "gained_cultivation": 0,
+        "gained_exp": 0,
+        "new_level": None
+    }
+    
+    # 提取物品
+    items_text_match = re.search(r"带回了：\s*(.*?)\s*\*?\*?元婴成长\*?\*?", text, re.DOTALL)
+    if items_text_match:
+        payload["gained_items"] = _parse_items_from_text(items_text_match.group(1))
+
+    # 提取修为增加
+    cultivation_match = re.search(r"修为直接增加了\s*\*\*(\d+)\*\*\s*点", text)
+    if cultivation_match:
+        payload["gained_cultivation"] = int(cultivation_match.group(1))
+        
+    # 提取经验获得
+    exp_match = re.search(r"获得了\s*\*\*(\d+)\*\*\s*点经验", text)
+    if exp_match:
+        payload["gained_exp"] = int(exp_match.group(1))
+        
+    # 提取等级突破
+    level_match = re.search(r"元婴突破至\s*(\d+)\s*级", text)
+    if level_match:
+        payload["new_level"] = int(level_match.group(1))
+
+    # 只要有任何收益，就认为事件有效
+    if payload["gained_items"] or payload["gained_cultivation"] or payload["gained_exp"]:
+        return payload
+        
+    return None
+
 def parse_tower_challenge(text: str) -> dict | None:
     """解析“闯塔”事件"""
     gained_items = _parse_items_from_text(text)
@@ -113,6 +149,8 @@ def parse_delist_completed(text: str) -> dict | None:
 
 # 定义事件指纹及其对应的解析函数
 EVENT_FINGERPRINTS = [
+    # [新增] 元神归窍事件，指纹最独特，放最前面
+    ({"【元神归窍】", "满载而归"}, parse_nascent_soul_return),
     # 指纹越独特，越应该放在前面
     ({"【试炼古塔 - 战报】", "总收获"}, parse_tower_challenge),
     ({"【万宝楼快报】"}, parse_trade_completed),
