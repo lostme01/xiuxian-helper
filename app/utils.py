@@ -29,7 +29,8 @@ async def progress_manager(event, initial_message: str):
     client = app.client
     progress_message = None
     try:
-        progress_message = await client.reply_to_admin(event, initial_message)
+        # [BUG 修正] 调用 reply_to_admin 时，禁止其立即调度删除
+        progress_message = await client.reply_to_admin(event, initial_message, schedule_deletion=False)
         if not progress_message:
             class DummyProgress:
                 async def update(self, text): pass
@@ -38,7 +39,8 @@ async def progress_manager(event, initial_message: str):
             yield DummyProgress()
             return
 
-        client.pin_message(progress_message)
+        # [BUG 修正] 移除 pin/unpin，因为删除调度权已转移
+        # client.pin_message(progress_message)
 
         class ProgressUpdater:
             def __init__(self, msg):
@@ -90,8 +92,14 @@ async def progress_manager(event, initial_message: str):
             await client.reply_to_admin(event, error_text)
         raise e
     finally:
+        # [BUG 修正] 在所有流程结束后，由 progress_manager 自己来调度删除
         if progress_message:
-            client.unpin_message(progress_message)
+            # client.unpin_message(progress_message)
+            client._schedule_message_deletion(
+                progress_message, 
+                settings.AUTO_DELETE.get('delay_admin_command'), 
+                "交互流程结束"
+            )
 
 
 def get_display_width(text: str) -> int:

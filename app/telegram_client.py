@@ -50,8 +50,6 @@ class TelegramClient:
         self.pending_replies = {}
         # [新增] 用于新的、更健壮的等待机制
         self.pending_mention_replies = {}
-        # [移除] 废弃旧的 pending_edits
-        # self.pending_edits = {}
         
         self.fire_and_forget_tasks = set()
 
@@ -98,10 +96,12 @@ class TelegramClient:
             earliest_time = slow_mode_until
         return earliest_time
 
-    async def reply_to_admin(self, event, text: str, **kwargs):
+    async def reply_to_admin(self, event, text: str, schedule_deletion=True, **kwargs):
         try:
             reply_message = await event.reply(text, **kwargs)
-            self._schedule_message_deletion(reply_message, settings.AUTO_DELETE.get('delay_admin_command'), "助手对管理员的回复")
+            # [BUG 修正] 仅在调用者允许时才调度删除
+            if schedule_deletion:
+                self._schedule_message_deletion(reply_message, settings.AUTO_DELETE.get('delay_admin_command'), "助手对管理员的回复")
             return reply_message
         except Exception as e:
             format_and_log(LogType.ERROR, "回复管理员失败", {'错误': str(e)}, level=logging.ERROR)
@@ -369,4 +369,3 @@ class TelegramClient:
             self.last_update_timestamp = datetime.now(pytz.timezone(settings.TZ))
             fake_event = type('FakeEvent', (object,), {'chat_id': chat_id})
             await log_telegram_event(self, LogType.MSG_DELETE, fake_event, deleted_ids=update.messages)
-
