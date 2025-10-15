@@ -43,10 +43,10 @@ async def trigger_update_profile(force_run=False):
     command = game_adaptor.get_profile()
     
     try:
-        _sent, final_message = await client.send_and_wait_for_edit(
+        # [修改] 使用新的、健壮的等待函数
+        _sent, final_message = await client.send_and_wait_for_mention_reply(
             command=command,
             final_pattern=r"\*\*境界\*\*",
-            initial_pattern=r"正在查询"
         )
 
         profile_data = game_adaptor.parse_profile(final_message.text)
