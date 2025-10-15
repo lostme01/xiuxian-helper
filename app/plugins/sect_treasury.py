@@ -101,11 +101,18 @@ async def _cmd_view_cached_treasury(event, parts):
     await send_paginated_message(event, reply_text)
 
 async def check_treasury_startup():
+    """[调度优化] 每日基础数据：每天凌晨4-5点之间随机执行一次"""
     from app.logging_service import LogType, format_and_log
     if settings.TASK_SWITCHES.get('sect_treasury') and not scheduler.get_job(TASK_ID_TREASURY):
-        run_time = time(hour=random.randint(2, 5), minute=random.randint(0, 59))
-        scheduler.add_job(trigger_update_treasury, 'cron', hour=run_time.hour, minute=run_time.minute, id=TASK_ID_TREASURY, jitter=600)
-        format_and_log(LogType.SYSTEM, "任务调度", {'任务': '每日自动更新宗门宝库', '状态': '已计划', '预计时间': run_time.strftime('%H:%M')})
+        # 将执行时间窗口调整为 4:00 - 4:59
+        run_time = time(hour=4, minute=random.randint(0, 59), tzinfo=pytz.timezone(settings.TZ))
+        scheduler.add_job(
+            trigger_update_treasury, 'cron', 
+            hour=run_time.hour, minute=run_time.minute, 
+            id=TASK_ID_TREASURY, 
+            jitter=600 # 增加10分钟随机抖动
+        )
+        format_and_log(LogType.SYSTEM, "任务调度", {'任务': '自动更新宗门宝库 (每日)', '状态': '已计划', '预计时间': run_time.strftime('%H:%M')})
 
 def initialize(app):
     app.register_command(

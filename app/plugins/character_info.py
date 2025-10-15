@@ -1,16 +1,23 @@
 # -*- coding: utf-8 -*-
 import asyncio
+import random
+from datetime import time
 
+import pytz
 from telethon.errors.rpcerrorlist import MessageEditTimeExpiredError
 
 from app import game_adaptor
 from app.context import get_application
 from app.data_manager import data_manager
 from app.logging_service import LogType, format_and_log
+from app.task_scheduler import scheduler
 from app.telegram_client import CommandTimeoutError
 from app.utils import create_error_reply, progress_manager
+from config import settings
 
 STATE_KEY_PROFILE = "character_profile"
+# [新增] 为任务定义一个唯一的ID
+TASK_ID_PROFILE_UPDATE = "profile_daily_update_task"
 
 HELP_TEXT_QUERY_PROFILE = """ T T T T**查询角色信息**
 **说明**: 主动向游戏机器人查询最新的角色信息，并更新本地缓存。
@@ -87,6 +94,18 @@ async def _cmd_view_cached_profile(event, parts):
     reply_text = _format_profile_reply(profile_data, "📄 **已缓存的角色信息**:")
     await get_application().client.reply_to_admin(event, reply_text)
 
+async def check_profile_update_startup():
+    """[调度优化] 每日基础数据：每天凌晨4-5点之间随机执行一次"""
+    if not scheduler.get_job(TASK_ID_PROFILE_UPDATE):
+        run_time = time(hour=4, minute=random.randint(0, 59), tzinfo=pytz.timezone(settings.TZ))
+        scheduler.add_job(
+            trigger_update_profile, 'cron', 
+            hour=run_time.hour, minute=run_time.minute, 
+            id=TASK_ID_PROFILE_UPDATE, 
+            jitter=600 # 增加10分钟随机抖动
+        )
+        format_and_log(LogType.SYSTEM, "任务调度", {'任务': '自动查询角色 (每日)', '状态': '已计划', '预计时间': run_time.strftime('%H:%M')})
+
 
 def initialize(app):
     app.register_command(
@@ -104,3 +123,5 @@ def initialize(app):
         help_text="📄 查看已缓存的最新角色信息。", 
         category="数据查询" # 这个指令将被主菜单隐藏
     )
+    # [新增] 将新的启动检查函数添加到启动项
+    app.startup_checks.append(check_profile_update_startup)

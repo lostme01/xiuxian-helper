@@ -6,6 +6,7 @@ from datetime import datetime
 from enum import Enum
 
 from telethon.utils import get_display_name
+from telethon.tl.types import Channel
 
 from config import settings
 
@@ -89,27 +90,60 @@ def format_and_log(log_type: LogType, title: str, data: dict, level=logging.INFO
 
 async def log_telegram_event(client, log_type: LogType, event, **kwargs):
     """
-    处理来自 Telegram 的事件，并将其格式化后记录。
+    [BUG 修正] 重构日志记录器，使其更健壮，能处理缓存未命中和话题消息。
     """
+    # --- 原始日志 (raw_logger) ---
     raw_logger = logging.getLogger('raw_messages')
     if settings.LOGGING_SWITCHES.get('original_log_enabled'):
+        log_lines = []
+        
+        # 1. 获取群组和话题信息
         chat_title = client.group_name_cache.get(event.chat_id, f"ID:{event.chat_id}")
-        log_lines = [f"群组: {chat_title} ({event.chat_id})"]
+        topic_title = ""
+        try:
+            if event.is_reply and hasattr(event.message.reply_to, 'forum_topic') and event.message.reply_to.forum_topic:
+                reply_to_msg = await event.get_reply_message()
+                if hasattr(reply_to_msg, 'reply_to') and reply_to_msg.reply_to and hasattr(reply_to_msg.reply_to, 'topic_title'):
+                     topic_title = reply_to_msg.reply_to.topic_title
+        except Exception:
+            pass # 获取话题失败不应阻塞日志
+        
+        group_info = f"群组: {chat_title} ({event.chat_id})"
+        if topic_title:
+            group_info += f" (话题: {topic_title})"
+        log_lines.append(group_info)
+
+        # 2. 处理删除事件
         if log_type == LogType.MSG_DELETE:
             log_lines.insert(0, "[消息删除]")
             log_lines.append(f"被删除消息ID: {kwargs.get('deleted_ids', [])}")
+        
+        # 3. 处理新消息和编辑事件
         else:
+            # 健壮地获取发送者信息
             sender = await event.get_sender()
-            sender_name = get_display_name(sender) if sender else "未知"
+            if sender is None and event.sender_id:
+                try: # 回退到网络查询
+                    sender = await client.client.get_entity(event.sender_id)
+                except Exception:
+                    sender = None
+            
+            sender_name = get_display_name(sender) if sender else "未知来源"
+            if isinstance(sender, Channel) and sender.megagroup: # 如果是群组本身发言
+                 sender_name = f"群组事件 ({sender.title})"
+
             log_lines.append(f"发送者: {sender_name} (ID: {event.sender_id})")
+            
             if log_type == LogType.CMD_SENT:
                 log_lines.insert(0, "[指令发送]")
                 log_lines.append(f"内容: {kwargs.get('command')}")
             else:
                 log_lines.insert(0, f"[{log_type.name}]")
                 log_lines.append(f"内容:\n{event.text}")
+        
         raw_logger.info("\n".join(log_lines))
 
+    # --- 格式化日志 (format_and_log) ---
     log_data = {}
     chat_info = client.group_name_cache.get(event.chat_id, f"ID:{event.chat_id}")
     event_time = getattr(event, 'date', datetime.now(pytz.timezone(settings.TZ)))
@@ -121,8 +155,21 @@ async def log_telegram_event(client, log_type: LogType, event, **kwargs):
         format_and_log(log_type, "消息已删除", log_data)
         return
 
+    # 健壮地获取发送者信息 (复用上面的逻辑)
     sender = await event.get_sender()
-    log_data['发送者'] = f"{get_display_name(sender)} (ID: {event.sender_id})" if sender else "未知"
+    if sender is None and event.sender_id:
+        try:
+            sender = await client.client.get_entity(event.sender_id)
+        except Exception:
+            sender = None
+    
+    sender_display = "未知来源"
+    if sender:
+        sender_display = f"{get_display_name(sender)} (ID: {event.sender_id})"
+        if isinstance(sender, Channel) and sender.megagroup:
+            sender_display = f"群组事件 ({sender.title})"
+            
+    log_data['发送者'] = sender_display
     log_data['消息ID'] = event.id
     content = event.text or "(无文本内容)"
 

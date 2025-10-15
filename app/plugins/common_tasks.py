@@ -68,11 +68,10 @@ async def update_inventory_cache(force_run=False):
         else:
             raise ValueError("未能从游戏返回信息中解析到任何物品。")
     finally:
-        if not force_run and settings.TASK_SWITCHES.get('inventory_refresh', True):
-            random_interval_hours = random.uniform(12, 24)
-            next_run_time = datetime.now(pytz.timezone(settings.TZ)) + timedelta(hours=random_interval_hours)
-            scheduler.add_job(update_inventory_cache, 'date', run_date=next_run_time, id=TASK_ID_INVENTORY_REFRESH, replace_existing=True)
-            format_and_log(LogType.TASK, "刷新背包", {'阶段': '任务完成', '详情': f'已计划下次校准时间: {next_run_time.strftime("%Y-%m-%d %H:%M:%S")}'})
+        # [逻辑修改] 移除此处的自调度逻辑，统一由 check_inventory_refresh_startup 管理
+        if not force_run:
+            format_and_log(LogType.TASK, "刷新背包", {'阶段': '任务完成'})
+
 
 @resilient_task()
 async def trigger_chuang_ta(force_run=False):
@@ -151,10 +150,17 @@ async def check_dianmao_startup():
                 format_and_log(LogType.SYSTEM, "配置错误", {'模块': '宗门点卯', '错误': f'时间格式不正确: {time_str}'}, level=logging.ERROR)
 
 async def check_inventory_refresh_startup():
+    """[调度优化] 刷新背包，作为高频核心数据，每天3-4次"""
     if settings.TASK_SWITCHES.get('inventory_refresh', True) and not scheduler.get_job(TASK_ID_INVENTORY_REFRESH):
-        first_run_time = datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=1)
-        scheduler.add_job(update_inventory_cache, 'date', run_date=first_run_time, id=TASK_ID_INVENTORY_REFRESH)
-        format_and_log(LogType.TASK, "刷新背包", {'阶段': '调度计划', '详情': '首次校准任务已计划在1分钟后运行'})
+        # 使用 interval 触发器，每 6-8 小时随机执行一次
+        scheduler.add_job(
+            update_inventory_cache, 'interval', 
+            hours=random.randint(6, 8), 
+            jitter=3600, # 增加1小时的随机抖动
+            id=TASK_ID_INVENTORY_REFRESH,
+            replace_existing=True
+        )
+        format_and_log(LogType.SYSTEM, "任务调度", {'任务': '自动刷新背包 (高频)', '状态': '已计划', '频率': '每6-8小时'})
 
 async def check_chuang_ta_startup():
     if not settings.TASK_SWITCHES.get('chuang_ta', True) or not data_manager.db: return

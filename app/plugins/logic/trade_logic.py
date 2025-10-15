@@ -142,7 +142,6 @@ async def execute_purchase_task(app, **payload):
     listing_id = payload.get("listing_id") or payload.get("item_id")
     go_time_iso = payload.get("go_time_iso")
 
-    # 根据是否存在 go_time_iso 判断是集火任务还是普通购买
     is_focus_fire = bool(go_time_iso)
 
     if not listing_id:
@@ -150,7 +149,6 @@ async def execute_purchase_task(app, **payload):
         return
 
     try:
-        # 如果是集火任务，则执行等待逻辑
         if is_focus_fire:
             go_time = datetime.fromisoformat(go_time_iso)
             now_utc = datetime.now(timezone.utc)
@@ -164,12 +162,38 @@ async def execute_purchase_task(app, **payload):
         
         _sent, reply = await app.client.send_game_command_request_response(command, priority=priority)
         
-        if "交易成功" not in reply.text:
+        # [BUG 修正] 主动处理买家侧的交易成功事件
+        if "交易成功" in reply.text:
+            # 1. 解析获得了什么
+            gained_items = {}
+            gained_match = re.search(r"成功购得\s*\*\*【(.+?)】x([\d,]+)\*\*", reply.text)
+            if gained_match:
+                item_name = gained_match.group(1)
+                quantity = int(gained_match.group(2).replace(',', ''))
+                gained_items[item_name] = quantity
+            
+            # 2. 从任务上下文中获取付出了什么
+            sold_items = {}
+            cost = payload.get("cost")
+            if isinstance(cost, dict) and 'name' in cost and 'quantity' in cost:
+                sold_items[cost['name']] = cost['quantity']
+
+            # 3. 构建并发布标准化的交易完成事件
+            trade_event = {
+                "event_type": "TRADE_COMPLETED",
+                "account_id": str(app.client.me.id),
+                "gained": gained_items,
+                "sold": sold_items,
+                "raw_text": reply.text
+            }
+            from app.constants import GAME_EVENTS_CHANNEL
+            await publish_task(trade_event, channel=GAME_EVENTS_CHANNEL)
+            format_and_log(LogType.TASK, "协同任务-购买", {'阶段': '成功', '详情': '已主动生成并发布交易事件'})
+        else:
              format_and_log(LogType.WARNING, "协同任务-购买失败", {'回复': reply.text})
 
-        # --- [核心修复 #2] 修复回执发送逻辑 ---
+        # --- 回执发送逻辑保持不变 ---
         if crafting_session_id := payload.get("crafting_session_id"):
-            # 从会话ID中解析出发起者的ID (格式: craft_{initiator_id}_{timestamp})
             try:
                 initiator_id = crafting_session_id.split('_')[1]
                 receipt_task = {
@@ -178,7 +202,7 @@ async def execute_purchase_task(app, **payload):
                         "session_id": crafting_session_id,
                         "supplier_id": str(app.client.me.id)
                     },
-                    "target_account_id": initiator_id # 确保目标是发起者
+                    "target_account_id": initiator_id
                 }
                 await publish_task(receipt_task)
             except IndexError:

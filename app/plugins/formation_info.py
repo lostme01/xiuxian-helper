@@ -15,7 +15,7 @@ from app import game_adaptor
 from app.data_manager import data_manager
 
 STATE_KEY_FORMATION = "formation_info"
-TASK_ID_FORMATION_BASE = 'formation_update_task_'
+TASK_ID_FORMATION_BASE = 'formation_update_task_daily' # 修改ID以避免冲突
 HELP_TEXT_QUERY_FORMATION = """ T T T T**查询阵法信息**
 **说明**: 主动向游戏机器人查询最新的阵法信息，并更新本地缓存。
 **用法**: `,查询阵法`
@@ -101,48 +101,16 @@ async def _cmd_view_cached_formation(event, parts):
     await get_application().client.reply_to_admin(event, reply_text)
 
 async def check_formation_update_startup():
-    if not settings.TASK_SWITCHES.get('formation_update', True) or not data_manager.db: return
-    
-    last_run_json = await data_manager.get_value("formation_last_run", is_json=True, default={})
-    today_str = date.today().isoformat()
-    if last_run_json.get("date") == today_str and last_run_json.get("count", 0) >= 2:
-        format_and_log(LogType.TASK, "查询阵法", {'阶段': '调度跳过', '原因': '今日任务已完成'})
-        return
-
-    for job in scheduler.get_jobs():
-        if job.id.startswith(TASK_ID_FORMATION_BASE):
-            job.remove()
-            
-    beijing_tz = pytz.timezone(settings.TZ)
-    now = datetime.now(beijing_tz)
-    
-    time_windows = [(8, 12), (14, 22)]
-    
-    for i, (start_h, end_h) in enumerate(time_windows):
-        run_time = None
-        for _ in range(10):
-            temp_run_time = now.replace(hour=random.randint(start_h, end_h-1), minute=random.randint(0, 59))
-            if temp_run_time > now:
-                run_time = temp_run_time
-                break
-        
-        if not run_time:
-            run_time = (now + timedelta(days=1)).replace(hour=random.randint(start_h, end_h-1), minute=random.randint(0, 59))
-
-        job_id = f"{TASK_ID_FORMATION_BASE}{i}"
-        
-        async def job_wrapper():
-            await trigger_update_formation()
-            current_run_info = await data_manager.get_value("formation_last_run", is_json=True, default={"date": "1970-01-01", "count": 0})
-            today_str_inner = date.today().isoformat()
-            if current_run_info.get("date") != today_str_inner:
-                current_run_info = {"date": today_str_inner, "count": 1}
-            else:
-                current_run_info["count"] = current_run_info.get("count", 0) + 1
-            await data_manager.save_value("formation_last_run", current_run_info)
-
-        scheduler.add_job(job_wrapper, 'date', run_date=run_time, id=job_id)
-        format_and_log(LogType.TASK, "查询阵法", {'阶段': '调度计划', '任务': f'每日第{i+1}次', '运行时间': run_time.strftime('%Y-%m-%d %H:%M:%S')})
+    """[调度优化] 低频校验数据：每天中午12-14点之间随机执行一次"""
+    if settings.TASK_SWITCHES.get('formation_update', True) and not scheduler.get_job(TASK_ID_FORMATION_BASE):
+        run_time = time(hour=random.randint(12, 13), minute=random.randint(0, 59), tzinfo=pytz.timezone(settings.TZ))
+        scheduler.add_job(
+            trigger_update_formation, 'cron', 
+            hour=run_time.hour, minute=run_time.minute, 
+            id=TASK_ID_FORMATION_BASE, 
+            jitter=1800 # 增加30分钟随机抖动
+        )
+        format_and_log(LogType.SYSTEM, "任务调度", {'任务': '自动查询阵法 (低频)', '状态': '已计划', '预计时间': run_time.strftime('%H:%M')})
 
 
 def initialize(app):
