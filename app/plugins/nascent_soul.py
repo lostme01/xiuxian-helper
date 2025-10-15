@@ -18,7 +18,8 @@ from config import settings
 
 def _parse_countdown_from_text(text: str) -> timedelta | None:
     """从元婴状态文本中解析归来倒计时"""
-    countdown_match = re.search(r"归来倒计时\s*:\s*(.*)", text)
+    # [BUG 修正] 使用更健壮的正则表达式，兼容带或不带 ** 的情况
+    countdown_match = re.search(r"\*?\*?归来倒计时\*?\*?\s*:\s*(.*)", text)
     if not countdown_match:
         return None
     
