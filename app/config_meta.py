@@ -67,6 +67,7 @@ TASK_SWITCHES_META = {
     '自动删除': ('消息自动删除', 'auto_delete.enabled'),
     '智能资源': ('智能资源管理', 'auto_resource_management.enabled'),
     '知识共享': ('自动化知识共享', 'auto_knowledge_sharing.enabled'),
-    # [新增] 元婴出窍任务开关
     '元婴': ('自动元婴出窍', 'task_switches.nascent_soul'),
+    # [新增] 卜筮功能开关
+    '卜筮': ('自动卜筮问天', 'task_switches.divination'),
 }

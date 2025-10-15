@@ -10,7 +10,7 @@ import ntplib
 from app import game_adaptor
 from app.character_stats_manager import stats_manager
 from app.constants import (CRAFTING_SESSIONS_KEY, TASK_ID_CRAFTING_TIMEOUT,
-                           TASK_ID_SESSION_CLEANUP)
+                           TASK_ID_SESSION_CLEANUP, STATE_KEY_PROFILE)
 from app.context import get_application
 from app.data_manager import data_manager
 from app.inventory_manager import inventory_manager
@@ -198,7 +198,10 @@ async def _handle_game_event(app, event_data):
         "TOWER_CHALLENGE_COMPLETED": "闯塔", "CRAFTING_COMPLETED": "炼制", 
         "HARVEST_COMPLETED": "药园采药", "LEARNING_COMPLETED": "学习", 
         "SOWING_COMPLETED": "药园播种", "DELIST_COMPLETED": "下架",
-        "NASCENT_SOUL_RETURNED": "元婴出窍"
+        "NASCENT_SOUL_RETURNED": "元婴出窍",
+        "DIVINATION_COMPLETED": "卜筮问天",
+        "MEDITATION_COMPLETED": "闭关成功",
+        "MEDITATION_FAILED": "闭关失败"
     }
     source = source_map.get(event_type, "未知来源")
 
@@ -227,7 +230,6 @@ async def _handle_game_event(app, event_data):
         if gained_contrib := event_data.get("gained_contribution"): 
             await stats_manager.add_contribution(gained_contrib)
             update_details.append(f"贡献+`{gained_contrib}` ({source})")
-    # [修改] 合并多个相似事件的处理
     elif event_type in ["TOWER_CHALLENGE_COMPLETED", "CRAFTING_COMPLETED", "HARVEST_COMPLETED", "DELIST_COMPLETED"]:
         for item, qty in event_data.get("gained_items", {}).items(): 
             await inventory_manager.add_item(item, qty)
@@ -236,7 +238,6 @@ async def _handle_game_event(app, event_data):
          for item, qty in event_data.get("consumed_item", {}).items(): 
             await inventory_manager.remove_item(item, qty)
             update_details.append(f"消耗`{item}`x{qty} ({source})")
-    # [新增] 处理元神归窍事件
     elif event_type == "NASCENT_SOUL_RETURNED":
         summary_lines = [f"**✨ 元婴归来 (@{my_username})**\n"]
         gained_items = event_data.get("gained_items", {})
@@ -247,6 +248,7 @@ async def _handle_game_event(app, event_data):
                 summary_lines.append(f"- `{item}` x {qty}")
         
         if gained_cult := event_data.get("gained_cultivation", 0):
+            await stats_manager.add_cultivation(gained_cult)
             summary_lines.append(f"**天道感悟**: 修为 +`{gained_cult}`")
 
         if gained_exp := event_data.get("gained_exp", 0):
@@ -256,8 +258,55 @@ async def _handle_game_event(app, event_data):
             summary_lines.append(f"🎉 **元婴突破至 {new_level} 级！**")
         
         await client.send_admin_notification("\n".join(summary_lines))
-        return # 元婴事件使用独立的、更详细的通知，不走通用通知流程
+        return 
+    elif event_type == "DIVINATION_COMPLETED":
+        result_name = event_data.get("result_name")
+        if gained := event_data.get("gained_spirit_stones"):
+            await inventory_manager.add_item("灵石", gained)
+            update_details.append(f"灵石+`{gained}` ({result_name})")
+        if lost := event_data.get("lost_spirit_stones"):
+            await inventory_manager.remove_item("灵石", lost)
+            update_details.append(f"灵石-`{lost}` ({result_name})")
+        if gained_cult := event_data.get("gained_cultivation"):
+            await stats_manager.add_cultivation(gained_cult)
+            update_details.append(f"修为+`{gained_cult}` ({result_name})")
+        
+        if result_name == "古井无波" and not update_details:
+             await client.send_admin_notification(f"☯️ **卜筮结果 (@{my_username})**: 古井无波，无事发生。")
+             return
 
+    elif event_type == "DIVINATION_OPPORTUNITY":
+        item_to_get = event_data.get("item_to_get")
+        cost_str = ", ".join([f"`{k}`x`{v}`" for k, v in event_data.get("cost", {}).items()])
+        await client.send_admin_notification(f"🚨 **卜筮机遇 (@{my_username})**\n\n**神物现世**! 消耗 {cost_str} 即可换取 **`{item_to_get}`**。\n请在5分钟内手动 `.换取`。")
+        return
+        
+    elif event_type == "MEDITATION_COMPLETED":
+        if gained_cult := event_data.get("gained_cultivation"):
+            await stats_manager.add_cultivation(gained_cult)
+            update_details.append(f"修为+`{gained_cult}` ({source})")
+        # [新增] 遍历并添加奇遇物品
+        for item, qty in event_data.get("gained_items", {}).items():
+            await inventory_manager.add_item(item, qty)
+            update_details.append(f"获得`{item}`x`{qty}` (奇遇)")
+    
+    elif event_type == "MEDITATION_FAILED":
+        if lost_cult := event_data.get("lost_cultivation"):
+            await stats_manager.remove_cultivation(lost_cult)
+            update_details.append(f"修为-`{lost_cult}` ({source})")
+
+    elif event_type == "REALM_BREAKTHROUGH":
+        new_realm = event_data.get("new_realm")
+        profile = await data_manager.get_value(STATE_KEY_PROFILE, is_json=True, default={})
+        profile['境界'] = new_realm
+        await data_manager.save_value(STATE_KEY_PROFILE, profile)
+        await client.send_admin_notification(f"🎉 **境界突破 (@{my_username})**\n\n恭喜您成功突破至 **`{new_realm}`**！")
+        return
+
+    elif event_type == "RESIDENCE_VISITOR":
+        visitor_name = event_data.get("visitor_name")
+        await client.send_admin_notification(f"🚪 **洞府访客提醒 (@{my_username})**\n\n有位 **`{visitor_name}`** 前来拜访，请在5分钟内使用 `.接待访客` 或 `.驱逐访客` 做出决定。")
+        return
 
     if update_details: 
         await client.send_admin_notification(f"📦 **状态更新 (@{my_username})**\n- {', '.join(update_details)}")

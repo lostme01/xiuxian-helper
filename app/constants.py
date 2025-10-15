@@ -20,6 +20,8 @@ STATE_KEY_LAST_TIMESTAMPS = "last_message_timestamps"
 STATE_KEY_FORMATION_LAST_RUN = "formation_last_run"
 # [新增] 元婴功能状态键
 STATE_KEY_NASCENT_SOUL = "nascent_soul"
+# [新增] 卜筮功能状态键
+STATE_KEY_DIVINATION = "divination_state"
 
 
 # Standalone Redis keys
@@ -49,6 +51,8 @@ TASK_ID_YINDAO = 'taiyi_yindao_task'
 TASK_ID_GARDEN = 'huangfeng_garden_task'
 # [新增] 元婴功能任务ID
 TASK_ID_NASCENT_SOUL = 'nascent_soul_egress_task'
+# [新增] 卜筮功能任务ID
+TASK_ID_DIVINATION_BASE = 'divination_daily_task_'
 
 
 # Heartbeat tasks

@@ -99,21 +99,45 @@ async def trigger_chuang_ta(force_run=False):
 
 @resilient_task()
 async def trigger_biguan_xiulian(force_run=False):
+    """[重构] 完善闭关逻辑，使其能解析所有返回结果"""
     app = get_application()
     client = app.client
     format_and_log(LogType.TASK, "闭关修炼", {'阶段': '任务开始', '强制执行': force_run})
+    
     beijing_tz = pytz.timezone(settings.TZ)
-    next_run_time = datetime.now(beijing_tz) + timedelta(minutes=15)
+    next_run_time = datetime.now(beijing_tz) + timedelta(minutes=15) # 默认15分钟后重试
+    
     try:
         _sent_msg, reply = await client.send_game_command_request_response(game_adaptor.meditate())
+        reply_text = reply.text
+        
+        # 尝试从任何回复中解析冷却时间
         cooldown = parse_cooldown_time(reply)
+        
+        # 场景1：成功、失败、冷却中，且能解析出精确时间
         if cooldown:
             jitter_config = settings.TASK_JITTER['biguan']
             jitter = random.uniform(jitter_config['min'], jitter_config['max'])
             next_run_time = datetime.now(beijing_tz) + cooldown + timedelta(seconds=jitter)
-            format_and_log(LogType.TASK, "闭关修炼", {'阶段': '解析成功', '冷却时间': str(cooldown), '下次运行': next_run_time.strftime('%Y-%m-%d %H:%M:%S')})
+            
+            status = "未知"
+            if "【闭关成功】" in reply_text:
+                status = "成功"
+            elif "灵气尚未平复" in reply_text:
+                status = "冷却中"
+            elif "【闭关失败】" in reply_text or "【走火入魔】" in reply_text:
+                status = "失败"
+
+            format_and_log(LogType.TASK, "闭关修炼", {'阶段': '解析成功', '状态': status, '冷却时间': str(cooldown), '下次运行': next_run_time.strftime('%Y-%m-%d %H:%M:%S')})
+        
+        # 场景2：任何其他无法解析出时间的回复
         else:
-            format_and_log(LogType.TASK, "闭关修炼", {'阶段': '解析失败', '详情': '未找到冷却时间，将在15分钟后重试。'})
+            format_and_log(LogType.WARNING, "闭关修炼", {'阶段': '解析失败', '详情': '未找到冷却时间，将在15分钟后重试。', '原始返回': reply_text})
+
+    except CommandTimeoutError:
+        format_and_log(LogType.WARNING, "闭关修炼", {'阶段': '任务异常', '原因': '游戏指令超时'})
+        # 超时后也按默认时间重试
+    
     finally:
         if data_manager.db:
             scheduler.add_job(trigger_biguan_xiulian, 'date', run_date=next_run_time, id=TASK_ID_BIGUAN, replace_existing=True)

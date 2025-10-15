@@ -35,8 +35,116 @@ def _parse_items_from_text(text: str) -> dict:
 
 # --- “域内解析” 函数 ---
 
+def parse_realm_breakthrough(text: str) -> dict | None:
+    """[新增] 解析境界突破事件"""
+    match = re.search(r"成功突破至【([^】]+)】", text)
+    if match:
+        return {
+            "event_type": "REALM_BREAKTHROUGH",
+            "new_realm": match.group(1)
+        }
+    return None
+
+def parse_residence_visitor(text: str) -> dict | None:
+    """[新增] 解析洞府访客事件"""
+    match = re.search(r"你的洞府外似乎有位\*\*“([^”]+)”\*\*前来拜访", text)
+    if match:
+        return {
+            "event_type": "RESIDENCE_VISITOR",
+            "visitor_name": match.group(1)
+        }
+    return None
+
+def parse_meditation_result(text: str) -> dict | None:
+    """[修改] 解析闭关的最终结果，增加奇遇物品解析"""
+    if "【闭关成功】" in text:
+        payload = {"event_type": "MEDITATION_COMPLETED", "gained_cultivation": 0, "gained_items": {}}
+        
+        # 解析最终增加的修为
+        cult_match = re.search(r"修为最终增加了\s*\*\*([\d,]+)\*\*\s*点", text)
+        if cult_match:
+            payload["gained_cultivation"] = int(cult_match.group(1).replace(',', ''))
+            
+        # [新增] 解析奇遇获得的物品
+        if "【奇遇】" in text:
+            payload["gained_items"] = _parse_items_from_text(text)
+            
+        if payload["gained_cultivation"] > 0 or payload["gained_items"]:
+            return payload
+            
+    elif "【闭关失败】" in text or "【走火入魔】" in text:
+        payload = {"event_type": "MEDITATION_FAILED", "lost_cultivation": 0}
+        
+        # 解析倒退的修为
+        cult_match = re.search(r"修为倒退了\s*\*\*(-?\d+)\*\*\s*点", text)
+        if cult_match:
+            payload["lost_cultivation"] = abs(int(cult_match.group(1))) # 确保是正数
+            
+        if payload["lost_cultivation"] > 0:
+            return payload
+            
+    return None
+
+
+def parse_divination_result(text: str) -> dict | None:
+    """解析“卜筮问天”的各种结果"""
+    
+    # 1. 检查是否是“神物现世”特殊事件
+    if "【神物现世】" in text and "请在" in text and ".换取" in text:
+        opportunity = {
+            "event_type": "DIVINATION_OPPORTUNITY",
+            "item_to_get": None,
+            "cost": {}
+        }
+        item_match = re.search(r"卦象显示，【(.+?)】的机缘已降临", text)
+        if item_match:
+            opportunity["item_to_get"] = item_match.group(1)
+        
+        cost_text_match = re.search(r"消耗\s*\*\*(.*?)\*\*\s*来换取", text, re.DOTALL)
+        if cost_text_match:
+            opportunity["cost"] = _parse_items_from_text(cost_text_match.group(1))
+
+        if opportunity["item_to_get"]:
+            return opportunity
+    
+    # 2. 处理其他所有一次性结果
+    payload = {
+        "event_type": "DIVINATION_COMPLETED",
+        "result_name": None,
+        "gained_spirit_stones": 0,
+        "lost_spirit_stones": 0,
+        "gained_cultivation": 0
+    }
+
+    if "【天降横财】" in text or "“金玉满堂”" in text:
+        payload["result_name"] = "获得灵石"
+        match = re.search(r"获得了?\s*\*\*([\d,]+)\*\*\s*块灵石", text)
+        if match:
+            payload["gained_spirit_stones"] = int(match.group(1).replace(',', ''))
+    
+    elif "“道心通明”" in text:
+        payload["result_name"] = "获得修为"
+        match = re.search(r"修为增加了\s*\*\*([\d,]+)\*\*\s*点", text)
+        if match:
+            payload["gained_cultivation"] = int(match.group(1).replace(',', ''))
+
+    elif "“小有破财”" in text:
+        payload["result_name"] = "遗失灵石"
+        match = re.search(r"遗失了\s*\*\*([\d,]+)\*\*\s*块灵石", text)
+        if match:
+            payload["lost_spirit_stones"] = int(match.group(1).replace(',', ''))
+    
+    elif "“古井无波”" in text:
+        payload["result_name"] = "古井无波"
+
+    # 只有在识别出具体事件时才返回 payload
+    if payload["result_name"]:
+        return payload
+
+    return None
+
 def parse_nascent_soul_return(text: str) -> dict | None:
-    """[新增] 解析“元神归窍”事件"""
+    """解析“元神归窍”事件"""
     payload = {
         "event_type": "NASCENT_SOUL_RETURNED",
         "gained_items": {},
@@ -65,7 +173,6 @@ def parse_nascent_soul_return(text: str) -> dict | None:
     if level_match:
         payload["new_level"] = int(level_match.group(1))
 
-    # 只要有任何收益，就认为事件有效
     if payload["gained_items"] or payload["gained_cultivation"] or payload["gained_exp"]:
         return payload
         
@@ -149,15 +256,15 @@ def parse_delist_completed(text: str) -> dict | None:
 
 # 定义事件指纹及其对应的解析函数
 EVENT_FINGERPRINTS = [
-    # [新增] 元神归窍事件，指纹最独特，放最前面
+    ({"灵光一闪！恭喜", "成功突破至"}, parse_realm_breakthrough),
+    ({"【洞府传音】", "前来拜访"}, parse_residence_visitor),
+    ({"【闭关"}, parse_meditation_result),
+    ({"【卦象："}, parse_divination_result),
     ({"【元神归窍】", "满载而归"}, parse_nascent_soul_return),
-    # 指纹越独特，越应该放在前面
     ({"【试炼古塔 - 战报】", "总收获"}, parse_tower_challenge),
     ({"【万宝楼快报】"}, parse_trade_completed),
     ({"炼制结束！", "最终获得"}, parse_crafting_completed),
     ({"**兑换成功！**", "消耗了"}, parse_exchange_completed),
-    # 对于下架，需要结合原始指令判断，所以放在handler里特殊处理
-    # ({"从万宝楼下架"}, parse_delist_completed),
     ({"你向宗门捐献了", "获得了"}, parse_donation_completed),
 ]
 

@@ -30,6 +30,8 @@ class TaskSwitchesModel(BaseModel):
     formation_update: bool
     # [新增] 元婴功能开关
     nascent_soul: bool = False
+    # [新增] 卜筮功能开关
+    divination: bool = False
 
 
 class TaskJitterModel(BaseModel):
