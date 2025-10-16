@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+import re
 
 from telethon import events
 from telethon.utils import get_display_name
@@ -31,21 +32,9 @@ async def handle_game_report(event):
     if not hasattr(event, 'text') or not event.text:
         return
 
-    # [核心修复] 检查事件是否由正在等待的特定任务触发。
-    # 这是最精确的归属判断，能确保只有发起者才能处理其等待的事件。
-    is_awaited_by_task = False
-    if isinstance(event, events.MessageEdited.Event):
-        for waiter in client.pending_edits.values():
-            # 检查这个编辑事件是否是某个等待器正在寻找的“最终候选”
-            if re.search(waiter['final_pattern'], event.text, re.DOTALL):
-                 is_awaited_by_task = True
-                 break
-    elif isinstance(event, events.NewMessage.Event):
-         for waiter in client.pending_edits.values():
-            # 检查这个新消息事件是否是某个等待器正在寻找的“初始候选”
-            if event.sender_id in waiter['from_user_ids'] and re.search(waiter['initial_pattern'], event.text, re.DOTALL):
-                is_awaited_by_task = True
-                break
+    # [核心修复] 首先，判断这个事件是否由一个正在等待的任务（如闯塔）主动上报的。
+    # 我们通过检查 event 对象是否有一个特殊的 `is_awaited_by_task` 标志来判断。
+    is_awaited_by_task = getattr(event, 'is_awaited_by_task', False)
 
     # 检查消息是否@我
     my_display_name = get_display_name(client.me)
@@ -55,7 +44,7 @@ async def handle_game_report(event):
     # 检查消息是否直接回复我
     original_message = None
     is_reply_to_me = False
-    if event.is_reply:
+    if hasattr(event, 'is_reply') and event.is_reply:
         try:
             reply_to_msg = await event.get_reply_message()
             if reply_to_msg and reply_to_msg.sender_id == client.me.id:

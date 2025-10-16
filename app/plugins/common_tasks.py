@@ -83,11 +83,20 @@ async def trigger_chuang_ta(force_run=False):
             initial_pattern=r"踏入了古塔的第",
             final_pattern=r"【试炼古塔 - 战报】"
         )
-        # 成功的后续处理将由全局事件处理器 `game_event_handler` 负责，这里只需记录成功即可
-        if "【试炼古塔 - 战报】" in final_reply.text and "总收获" in final_reply.text:
-            format_and_log(LogType.TASK, "自动闯塔", {'阶段': '成功', '详情': '事件将由事件总线处理'})
-        else:
-            format_and_log(LogType.WARNING, "自动闯塔", {'阶段': '解析失败', '原因': '未收到预期的战报格式', '返回': final_reply.text})
+
+        # [核心修复] 主动将获取到的最终结果交给事件处理器
+        from app.plugins.game_event_handler import handle_game_report
+        # 模拟一个 event 对象
+        class FakeEvent:
+            def __init__(self, message):
+                self.message = message
+                self.text = message.text
+                self.is_reply = False # 这是一个编辑事件，不是回复
+                self.sender_id = message.sender_id
+
+        await handle_game_report(FakeEvent(final_reply))
+        format_and_log(LogType.TASK, "自动闯塔", {'阶段': '成功', '详情': '已将最终结果主动上报至事件总线。'})
+
     finally:
         if not force_run and data_manager.db:
             today_str = date.today().isoformat()
