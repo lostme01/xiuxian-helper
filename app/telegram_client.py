@@ -42,14 +42,14 @@ class TelegramClient:
         self.slowmode_cache = {}
         self.last_message_timestamps = {}
 
-        # --- [核心修改 v1.0] 使用优先级队列 ---
         self.message_queue = asyncio.PriorityQueue()
         self.deletion_tasks = {}
         self._pinned_messages = set()
 
         self.pending_replies = {}
-        # [新增] 用于新的、更健壮的等待机制
         self.pending_mention_replies = {}
+        # [核心修改] 用于全新的、健壮的“先回复后编辑”等待机制
+        self.pending_edits = {}
         
         self.fire_and_forget_tasks = set()
 
@@ -99,7 +99,6 @@ class TelegramClient:
     async def reply_to_admin(self, event, text: str, schedule_deletion=True, **kwargs):
         try:
             reply_message = await event.reply(text, **kwargs)
-            # [BUG 修正] 仅在调用者允许时才调度删除
             if schedule_deletion:
                 self._schedule_message_deletion(reply_message, settings.AUTO_DELETE.get('delay_admin_command'), "助手对管理员的回复")
             return reply_message
@@ -109,8 +108,6 @@ class TelegramClient:
 
     async def _message_sender_loop(self):
         while True:
-            # --- [核心修改 v1.1] 从优先级队列中解包 ---
-            # 优先级数字越小，越先被执行
             priority, (command, reply_to, future, target_chat_id, post_send_callback) = await self.message_queue.get()
             sent_message = None
             try:
@@ -152,12 +149,7 @@ class TelegramClient:
 
     async def _send_command_and_get_message(self, command: str, reply_to: int = None,
                                            target_chat_id: int = None, post_send_callback=None, priority: int = 1):
-        """
-        [核心修改 v1.2] 内部发送接口增加 priority 参数
-        - priority: 0=紧急, 1=普通, 2=后台
-        """
         future = asyncio.Future()
-        # 封装成 (priority, item) 元组放入队列
         item = (command, reply_to, future, target_chat_id, post_send_callback)
         task = asyncio.create_task(self.message_queue.put((priority, item)))
 
@@ -168,7 +160,6 @@ class TelegramClient:
             return task
 
     async def send_game_command_fire_and_forget(self, command: str, reply_to: int = None, target_chat_id: int = None, priority: int = 1):
-        """[核心修改 v1.3] 对外接口透出 priority 参数"""
         strategy = settings.AUTO_DELETE_STRATEGIES['fire_and_forget']
         
         def schedule_deletion_callback(message: Message):
@@ -184,7 +175,6 @@ class TelegramClient:
 
 
     async def send_game_command_request_response(self, command: str, reply_to: int = None, timeout: int = None, target_chat_id: int = None, priority: int = 1) -> tuple[Message, Message]:
-        """[核心修改 v1.3] 对外接口透出 priority 参数"""
         strategy = settings.AUTO_DELETE_STRATEGIES['request_response']
         sent_message = None
         try:
@@ -196,10 +186,6 @@ class TelegramClient:
             raise e
 
     async def send_and_wait_for_mention_reply(self, command: str, final_pattern: str, timeout: int = None, target_chat_id: int = None, priority: int = 1) -> tuple[Message, Message]:
-        """
-        [新增] 健壮的等待函数，用于替代 send_and_wait_for_edit。
-        它只关心最终结果，能抵抗事件乱序。
-        """
         strategy = settings.AUTO_DELETE_STRATEGIES['request_response']
         sent_message = None
         waiter_id = None
@@ -207,11 +193,9 @@ class TelegramClient:
             sent_message = await self._send_command_and_get_message(command, target_chat_id=target_chat_id, priority=priority)
             
             future = asyncio.Future()
-            # 使用时间戳和随机数创建唯一ID
             waiter_id = f"{time.time()}-{random.randint(1000, 9999)}"
 
             my_display_name = get_display_name(self.me)
-            # 构造一个能匹配 @username 或显示名称的正则表达式
             mention_pattern = f"@{self.me.username}" if self.me.username else re.escape(my_display_name)
 
             self.pending_mention_replies[waiter_id] = {
@@ -233,8 +217,43 @@ class TelegramClient:
             if waiter_id:
                 self.pending_mention_replies.pop(waiter_id, None)
 
+    async def send_and_wait_for_channel_edit(self, command: str, initial_pattern: str, final_pattern: str, from_user_ids: list = None, timeout: int = None, target_chat_id: int = None, priority: int = 1) -> tuple[Message, Message]:
+        """
+        [v2.0 最终版] 专为"先回复后编辑"场景设计的、能抵抗事件乱序的健壮等待函数。
+        """
+        strategy = settings.AUTO_DELETE_STRATEGIES['request_response']
+        sent_message = None
+        waiter_id = None
+        
+        try:
+            sent_message = await self._send_command_and_get_message(command, target_chat_id=target_chat_id, priority=priority)
+            
+            future = asyncio.Future()
+            waiter_id = f"edit_{time.time()}-{random.randint(1000, 9999)}"
+
+            self.pending_edits[waiter_id] = {
+                'future': future,
+                'initial_pattern': initial_pattern,
+                'final_pattern': final_pattern,
+                'from_user_ids': from_user_ids or settings.GAME_BOT_IDS,
+                'initial_candidate': None,
+                'final_candidate': None,
+            }
+            
+            final_message = await asyncio.wait_for(future, timeout=timeout or settings.COMMAND_TIMEOUT)
+            
+            self._schedule_message_deletion(sent_message, strategy['delay_self_on_reply'], "游戏指令(编辑-成功)")
+            return sent_message, final_message
+
+        except (asyncio.TimeoutError, CommandTimeoutError) as e:
+            if sent_message:
+                self._schedule_message_deletion(sent_message, strategy['delay_self_on_timeout'], "游戏指令(编辑-超时)")
+            raise CommandTimeoutError(f"等待指令 '{command}' 的编辑回复超时。", sent_message) from e
+        finally:
+            if waiter_id:
+                self.pending_edits.pop(waiter_id, None)
+
     async def _send_and_wait_for_response(self, command: str, final_pattern: str = ".*", timeout: int = None, reply_to: int = None, target_chat_id: int = None, priority: int = 1) -> tuple[Message, Message]:
-        """[核心修改 v1.3] 对外接口透出 priority 参数"""
         timeout = timeout or settings.COMMAND_TIMEOUT; sent_message = None
         try:
             sent_message = await self._send_command_and_get_message(command, reply_to, target_chat_id, post_send_callback=None, priority=priority)
@@ -340,24 +359,46 @@ class TelegramClient:
         
         # --- 统一的等待任务处理器 ---
         
-        # 1. 处理旧的、基于 reply_to_msg_id 的等待
+        # 1. 处理基于 reply_to_msg_id 的等待
         if isinstance(event, events.NewMessage.Event) and event.is_reply:
             if wait_obj := self.pending_replies.get(event.reply_to_msg_id):
                 if not wait_obj['future'].done() and re.search(wait_obj['pattern'], event.text, re.DOTALL):
                     wait_obj['future'].set_result(event.message)
         
-        # 2. 处理新的、基于 @提及 的等待（对新消息和编辑事件都有效）
-        waiters_to_remove = []
+        # 2. 处理基于 @提及 的等待
+        waiters_to_remove_mention = []
         for waiter_id, wait_obj in self.pending_mention_replies.items():
             if not wait_obj['future'].done():
-                # 检查是否 @自己 并且内容匹配最终模式
                 if re.search(wait_obj['mention_pattern'], event.text) and re.search(wait_obj['final_pattern'], event.text, re.DOTALL):
                     wait_obj['future'].set_result(event.message)
-                    waiters_to_remove.append(waiter_id)
-        
-        # 清理已完成的等待任务
-        for waiter_id in waiters_to_remove:
+                    waiters_to_remove_mention.append(waiter_id)
+        for waiter_id in waiters_to_remove_mention:
             self.pending_mention_replies.pop(waiter_id, None)
+
+        # 3. [核心修改] 处理新的、能抵抗乱序的编辑等待
+        waiters_to_remove_edit = []
+        for waiter_id, wait_obj in list(self.pending_edits.items()):
+            if wait_obj['future'].done():
+                continue
+
+            # 检查事件是否是初始回复的候选者
+            if isinstance(event, events.NewMessage.Event) and not wait_obj['initial_candidate']:
+                if event.sender_id in wait_obj['from_user_ids'] and re.search(wait_obj['initial_pattern'], event.text, re.DOTALL):
+                    wait_obj['initial_candidate'] = event.message
+            
+            # 检查事件是否是最终编辑的候选者
+            if isinstance(event, events.MessageEdited.Event):
+                if re.search(wait_obj['final_pattern'], event.text, re.DOTALL):
+                    wait_obj['final_candidate'] = event.message
+            
+            # 双向匹配检查
+            if wait_obj['initial_candidate'] and wait_obj['final_candidate']:
+                if wait_obj['initial_candidate'].id == wait_obj['final_candidate'].id:
+                    wait_obj['future'].set_result(wait_obj['final_candidate'])
+                    waiters_to_remove_edit.append(waiter_id)
+
+        for waiter_id in waiters_to_remove_edit:
+            self.pending_edits.pop(waiter_id, None)
 
 
     async def _deleted_message_handler(self, update):

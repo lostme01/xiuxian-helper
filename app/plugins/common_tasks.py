@@ -31,7 +31,6 @@ async def trigger_dianmao_chuangong(force_run=False):
     format_and_log(LogType.TASK, "宗门点卯", {'阶段': '任务开始', '强制执行': force_run})
     sent_dianmao = None
     try:
-        # NOTE: send_game_command_long_task is not a standard method. Assuming it exists.
         _sent, reply_dianmao = await client.send_game_command_request_response(game_adaptor.sect_check_in())
         sent_dianmao = _sent
         client.pin_message(sent_dianmao)
@@ -68,7 +67,6 @@ async def update_inventory_cache(force_run=False):
         else:
             raise ValueError("未能从游戏返回信息中解析到任何物品。")
     finally:
-        # [逻辑修改] 移除此处的自调度逻辑，统一由 check_inventory_refresh_startup 管理
         if not force_run:
             format_and_log(LogType.TASK, "刷新背包", {'阶段': '任务完成'})
 
@@ -79,11 +77,13 @@ async def trigger_chuang_ta(force_run=False):
     client = app.client
     format_and_log(LogType.TASK, "自动闯塔", {'阶段': '任务开始', '强制执行': force_run})
     try:
-        # [修改] 使用新的、健壮的等待函数
-        _sent, final_reply = await client.send_and_wait_for_mention_reply(
+        # [核心修复] 使用全新的、专为编辑场景设计的健壮等待函数
+        _sent, final_reply = await client.send_and_wait_for_channel_edit(
             command=game_adaptor.challenge_tower(), 
+            initial_pattern=r"踏入了古塔的第",
             final_pattern=r"【试炼古塔 - 战报】"
         )
+        # 成功的后续处理将由全局事件处理器 `game_event_handler` 负责，这里只需记录成功即可
         if "【试炼古塔 - 战报】" in final_reply.text and "总收获" in final_reply.text:
             format_and_log(LogType.TASK, "自动闯塔", {'阶段': '成功', '详情': '事件将由事件总线处理'})
         else:
@@ -111,10 +111,8 @@ async def trigger_biguan_xiulian(force_run=False):
         _sent_msg, reply = await client.send_game_command_request_response(game_adaptor.meditate())
         reply_text = reply.text
         
-        # 尝试从任何回复中解析冷却时间
         cooldown = parse_cooldown_time(reply)
         
-        # 场景1：成功、失败、冷却中，且能解析出精确时间
         if cooldown:
             jitter_config = settings.TASK_JITTER['biguan']
             jitter = random.uniform(jitter_config['min'], jitter_config['max'])
@@ -130,13 +128,11 @@ async def trigger_biguan_xiulian(force_run=False):
 
             format_and_log(LogType.TASK, "闭关修炼", {'阶段': '解析成功', '状态': status, '冷却时间': str(cooldown), '下次运行': next_run_time.strftime('%Y-%m-%d %H:%M:%S')})
         
-        # 场景2：任何其他无法解析出时间的回复
         else:
             format_and_log(LogType.WARNING, "闭关修炼", {'阶段': '解析失败', '详情': '未找到冷却时间，将在15分钟后重试。', '原始返回': reply_text})
 
     except CommandTimeoutError:
         format_and_log(LogType.WARNING, "闭关修炼", {'阶段': '任务异常', '原因': '游戏指令超时'})
-        # 超时后也按默认时间重试
     
     finally:
         if data_manager.db:
@@ -174,13 +170,11 @@ async def check_dianmao_startup():
                 format_and_log(LogType.SYSTEM, "配置错误", {'模块': '宗门点卯', '错误': f'时间格式不正确: {time_str}'}, level=logging.ERROR)
 
 async def check_inventory_refresh_startup():
-    """[调度优化] 刷新背包，作为高频核心数据，每天3-4次"""
     if settings.TASK_SWITCHES.get('inventory_refresh', True) and not scheduler.get_job(TASK_ID_INVENTORY_REFRESH):
-        # 使用 interval 触发器，每 6-8 小时随机执行一次
         scheduler.add_job(
             update_inventory_cache, 'interval', 
             hours=random.randint(6, 8), 
-            jitter=3600, # 增加1小时的随机抖动
+            jitter=3600,
             id=TASK_ID_INVENTORY_REFRESH,
             replace_existing=True
         )
@@ -223,7 +217,6 @@ def initialize(app):
     app.register_task(task_key="biguan", function=trigger_biguan_xiulian, command_name="立即闭关", help_text="...")
     app.register_task(task_key="dianmao", function=trigger_dianmao_chuangong, command_name="立即点卯", help_text="...")
     app.register_task(task_key="chuang_ta", function=trigger_chuang_ta, command_name="立即闯塔", help_text="...")
-    # [修改] 指令名改为 "校准背包"，更清晰
     app.register_task(task_key="update_inventory", function=update_inventory_cache, command_name="校准背包", help_text="...")
     
     app.startup_checks.extend([
