@@ -17,8 +17,8 @@ CRAFTING_RECIPES_KEY = "crafting_recipes"
 
 async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler):
     """
-    [v2.1 最终优化版]
-    核心炼制逻辑，增加自动学习配方及缓存自我修正功能。
+    [v2.2 最终优化版]
+    核心炼制逻辑，增加自动学习配方及缓存自我修正功能，并替换为更健壮的交互模式。
     """
     app = get_application()
     client = app.client
@@ -28,10 +28,10 @@ async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler
         command = game_adaptor.craft_item(item_name, quantity)
         await feedback_handler(f"⏳ 正在执行指令: `{command}`\n正在等待游戏机器人返回最终结果...")
         
-        _sent, final_reply = await client.send_and_wait_for_edit(
+        # [核心修改] 使用更健壮的 send_and_wait_for_mention_reply 替换 send_and_wait_for_edit
+        _sent, final_reply = await client.send_and_wait_for_mention_reply(
             command=command,
             final_pattern=r"炼制结束|尚未习得|材料不足", # 等待任意一个结束标志
-            initial_pattern=r"你凝神静气"
         )
         return final_reply.text
 
@@ -69,7 +69,7 @@ async def logic_execute_crafting(item_name: str, quantity: int, feedback_handler
                 else:
                     await feedback_handler(f"❓ **重试炼制失败**\n\n**游戏回复**:\n`{raw_text_retry}`")
             
-            # 场景 1.2: [v2.1 新增] 学习因“物品不存在”失败 -> 缓存不一致，触发自我修正
+            # 场景 1.2: 学习因“物品不存在”失败 -> 缓存不一致，触发自我修正
             elif f"你的储物袋中没有【{recipe_name}】" in reply_learn.text:
                 await feedback_handler(f"⚠️ **学习失败**: 缓存与实际背包不符。\n正在自动校准背包缓存，请稍后重试...")
                 # 触发一次强制后台背包刷新
@@ -187,3 +187,4 @@ async def logic_plan_crafting_session(missing_materials: dict, initiator_id: str
 
     format_and_log(LogType.TASK, "炼制规划", {'物品': '...', '缺失': missing_materials, '最终分配方案': json.dumps(contribution_plan, indent=2)})
     return dict(contribution_plan)
+
