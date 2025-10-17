@@ -98,9 +98,8 @@ async def execute_command(event):
 
     cmd_name = parts[0].lower()
     
-    # [核心修改] 更新豁免指令的名称
     is_master_switch_cmd = cmd_name in ["全局开关", "masterswitch"] 
-    if not settings.MASTER_SWITCH and not is_master_switch_cmd:
+    if not app.master_switch and not is_master_switch_cmd:
         return
 
     command_info = app.commands.get(cmd_name)
@@ -163,3 +162,4 @@ def initialize(app):
     @client.client.on(events.NewMessage(chats=listen_chats))
     async def unified_command_handler(event):
         await execute_command(event)
+

@@ -44,6 +44,7 @@ class Application:
         self.commands = {}
         self.task_functions = {}
         self.last_redis_error_notice_time = 0
+        self.master_switch = settings.MASTER_SWITCH
 
         set_application(self)
         set_scheduler(scheduler)
@@ -172,8 +173,7 @@ class Application:
                 format_and_log(LogType.SYSTEM, "启动失败", {'原因': 'Redis配置为启用，但连接失败，程序退出。'}, level=logging.CRITICAL)
                 sys.exit(1)
             
-            # [核心修改] 启动时根据总开关状态决定是否暂停调度器
-            is_paused = not settings.MASTER_SWITCH
+            is_paused = not self.master_switch
             scheduler.start(paused=is_paused)
             if is_paused:
                 format_and_log(LogType.SYSTEM, "核心服务", {'服务': '计划任务', '状态': '已暂停 (总开关关闭)'})
@@ -199,7 +199,7 @@ class Application:
             startup_task = asyncio.create_task(self._run_startup_checks())
             background_tasks.add(startup_task)
             
-            initial_status = "在线" if settings.MASTER_SWITCH else "暂停服务"
+            initial_status = "在线" if self.master_switch else "暂停服务"
             await self.client.send_admin_notification(f"✅ **助手已成功启动并处于 [{initial_status}] 状态**")
 
             format_and_log(LogType.SYSTEM, "核心服务", {'阶段': '所有服务已启动，进入主循环...'})
@@ -263,3 +263,4 @@ class Application:
         self.load_plugins_and_commands(is_reload=True)
         asyncio.create_task(self._run_startup_checks())
         format_and_log(LogType.SYSTEM, "热重载", {'阶段': '完成'})
+

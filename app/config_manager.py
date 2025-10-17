@@ -8,6 +8,7 @@ import yaml
 
 from app.logging_service import LogType, format_and_log
 from config import settings
+from app.context import get_application
 
 
 def _get_settings_object(root_key: str):
@@ -52,6 +53,15 @@ def _save_config(config_data: dict) -> bool:
 
 def _hot_reload_setting(path: str, value):
     """[修复版] 在内存中热更新配置，兼容顶级和嵌套配置"""
+    if path == 'master_switch':
+        try:
+            app = get_application()
+            app.master_switch = value
+            format_and_log(LogType.SYSTEM, "配置热更新 (App State)", {'状态': '成功', '路径': path, '新值': value})
+            return True, ""
+        except Exception as e:
+            return False, f"更新 App.master_switch 失败: {e}"
+
     keys = path.split('.')
     try:
         # --- 核心修复：处理顶级配置项 ---
@@ -132,3 +142,4 @@ async def update_nested_setting(path: str, value) -> str:
         return f"✅ 配置 **{path}** 已更新为 `{value}`。"
     else:
         return f"⚠️ 配置文件已更新，但内存热重载失败: {err_msg}。配置将在下次重启后生效。"
+

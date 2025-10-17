@@ -15,7 +15,7 @@ async def redis_message_handler(message):
     """
     app = get_application()
     try:
-        if not settings.MASTER_SWITCH:
+        if not app.master_switch:
             return 
 
         data_str = message.get('data', '{}')
@@ -111,3 +111,4 @@ async def redis_listener_loop():
         except Exception as e:
             format_and_log(LogType.ERROR, "Redis 监听循环异常", {'错误': str(e)}, level=logging.CRITICAL)
             await asyncio.sleep(15)
+

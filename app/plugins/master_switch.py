@@ -10,11 +10,12 @@ HELP_TEXT_MASTER_SWITCH = """ T T T T**全局开关**
 """
 
 async def _cmd_toggle_master_switch(event, parts):
-    client = get_application().client
+    app = get_application()
+    client = app.client
     scheduler = get_scheduler()
 
     if len(parts) != 2 or parts[1] not in ["开", "关"]:
-        is_enabled = settings.MASTER_SWITCH
+        is_enabled = app.master_switch
         status = "✅ 开启中" if is_enabled else "❌ 已关闭"
         await client.reply_to_admin(event, f"ℹ️ **当前全局开关状态**: {status}\n\n{HELP_TEXT_MASTER_SWITCH}")
         return
@@ -47,3 +48,4 @@ def initialize(app):
         aliases=["masterswitch"],
         usage=HELP_TEXT_MASTER_SWITCH
     )
+
