@@ -39,9 +39,9 @@ async def trigger_garden_check(force_run=False):
 
     format_and_log(LogType.TASK, "小药园", {'阶段': '解析初始状态', '解析结果': str(initial_status)})
 
-    matured_plots = {pid for pid, s in initial_status.items() if s == '已成熟'}
-    empty_plots = {pid for pid, s in initial_status.items() if s == '空闲'}
-    plots_to_sow = set(empty_plots) # plots_to_sow 现在是一个包含地块ID的集合
+    matured_plots_exist = any(s == '已成熟' for s in initial_status.values())
+    empty_plots_exist = any(s == '空闲' for s in initial_status.values())
+    sowing_needed = empty_plots_exist # 初始时，只要有空地就需要播种
 
     problems_to_handle = {
         '灵气干涸': game_adaptor.huangfeng_water(),
@@ -56,20 +56,23 @@ async def trigger_garden_check(force_run=False):
             await client.send_game_command_fire_and_forget(command)
             await asyncio.sleep(random.uniform(jitter_config['min'], jitter_config['max']))
 
-    if matured_plots:
-        format_and_log(LogType.TASK, "小药园", {'阶段': '执行采药', '目标地块': str(matured_plots)})
+    if matured_plots_exist:
+        format_and_log(LogType.TASK, "小药园", {'阶段': '执行采药', '原因': '发现已成熟地块'})
         _sent_harvest, reply_harvest = await client.send_game_command_request_response(game_adaptor.huangfeng_harvest())
 
         if "一键采药完成" in reply_harvest.text:
             format_and_log(LogType.TASK, "小药园", {'阶段': '采药成功'})
-            plots_to_sow.update(matured_plots) # 将采药后的地块也加入待播种集合
+            sowing_needed = True # 采药后肯定需要播种
         else:
             format_and_log(LogType.WARNING, "小药园", {'阶段': '采药失败', '返回': reply_harvest.text})
+            # 如果采药失败，可能无法播种，但我们仍然尝试（万一只是部分失败）
+            sowing_needed = True
 
-    if plots_to_sow:
-        await _sow_seeds(client, list(plots_to_sow))
+    if sowing_needed:
+        # [V_逻辑简化] 不再传递地块列表
+        await _sow_seeds(client)
     else:
-        format_and_log(LogType.TASK, "小药园", {'阶段': '播种跳过', '原因': '没有需要播种的地块。'})
+        format_and_log(LogType.TASK, "小药园", {'阶段': '播种跳过', '原因': '没有空闲或刚收获的地块。'})
 
     format_and_log(LogType.TASK, "小药园", {'阶段': '任务完成'})
 
@@ -95,6 +98,7 @@ def initialize(app):
 def _parse_garden_status(message: Message):
     GARDEN_STATUS_KEYWORDS = ['空闲', '已成熟', '灵气干涸', '害虫侵扰', '杂草横生', '生长中']
     status = {}; text = message.text
+    # 只需要判断地块状态是否存在，不需要具体ID了，但保留解析逻辑以备后用
     matches = list(re.finditer(r'(\d+)号灵田', text))
     if not matches: return {}
     for i, match in enumerate(matches):
@@ -104,9 +108,10 @@ def _parse_garden_status(message: Message):
             end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(text)
             chunk = text[start_pos:end_pos]
             plot_status = next((s for s in GARDEN_STATUS_KEYWORDS if s in chunk), '未知')
-            status[plot_id] = plot_status
+            status[plot_id] = plot_status # 仍然保留ID->状态的映射
         except (ValueError, IndexError): continue
-    return status
+    # 返回状态列表，方便检查是否存在某种状态
+    return status # 返回字典 {1: '空闲', 2: '生长中'...}
 
 async def _try_to_buy_seeds(client, seed_name: str, quantity: int) -> bool:
     if quantity <= 0: return True
@@ -128,22 +133,19 @@ async def _try_to_buy_seeds(client, seed_name: str, quantity: int) -> bool:
     except CommandTimeoutError:
         format_and_log(LogType.WARNING, "小药园-补种", {'阶段': '兑换失败', '原因': '指令超时'})
         return False
-    # [V_修复] 添加通用异常捕获
     except Exception as e_buy:
-        format_and_log(LogType.ERROR, "小药园-补种", {'阶段': '兑换异常', '错误': str(e_buy)})
+        format_and_log(LogType.ERROR, "小药园-补种", {'阶段': '兑换异常', '错误': repr(e_buy)})
         return False
 
-
-async def _sow_seeds(client, plots_to_sow: list):
-    if not plots_to_sow: return
-
+# [V_逻辑简化] 不再接收 plots_to_sow 列表
+async def _sow_seeds(client):
     seed_to_sow = settings.HUANGFENG_VALLEY_CONFIG.get('garden_sow_seed')
     if not seed_to_sow:
         format_and_log(LogType.WARNING, "小药园-播种", {'阶段': '中止', '原因': '未配置 garden_sow_seed'})
         return
 
-    needed_seeds_count = len(plots_to_sow)
-    format_and_log(LogType.TASK, "小药园-播种", {'阶段': '任务开始', '空闲地块数': needed_seeds_count, '种子': seed_to_sow})
+    # [V_逻辑简化] 移除旧的 needed_seeds_count 计算
+    format_and_log(LogType.TASK, "小药园-播种", {'阶段': '任务开始', '种子': seed_to_sow})
 
     # --- 第一次尝试播种 ---
     try:
@@ -154,14 +156,29 @@ async def _sow_seeds(client, plots_to_sow: list):
         # 场景1: 第一次播种成功
         if "**播种成功！**" in reply_text:
             format_and_log(LogType.TASK, "小药园-播种", {'阶段': '首次尝试成功'})
-            await inventory_manager.remove_item(seed_to_sow, needed_seeds_count)
+            # [V_新逻辑] 解析成功信息，计算播种数量并更新缓存
+            sown_plots_match = re.search(r"在 \*\*([\d, ]+)\*\* 号灵田上种下了", reply_text)
+            if sown_plots_match:
+                try:
+                    plot_numbers_str = sown_plots_match.group(1)
+                    # 分割字符串并去除可能的空格，然后转换为整数列表
+                    sown_plot_ids = [int(p.strip()) for p in plot_numbers_str.split(',')]
+                    sown_count = len(sown_plot_ids)
+                    if sown_count > 0:
+                        format_and_log(LogType.INFO, "小药园-播种-库存", {'状态': '解析成功', '播种地块数': sown_count, '地块': str(sown_plot_ids)})
+                        await inventory_manager.remove_item(seed_to_sow, sown_count)
+                    else:
+                        format_and_log(LogType.WARNING, "小药园-播种-库存", {'状态': '解析播种数量为0', '原始地块字串': plot_numbers_str})
+                except Exception as parse_e:
+                    format_and_log(LogType.ERROR, "小药园-播种-库存", {'状态': '解析成功地块时出错', '错误': repr(parse_e), '原始回复': reply_text})
+            else:
+                 format_and_log(LogType.WARNING, "小药园-播种-库存", {'状态': '成功但无法解析播种地块', '原始回复': reply_text})
             return # 任务完成
 
         # 场景2: 第一次播种失败 - 种子不足
         elif f"你的【{seed_to_sow}】数量不足！" in reply_text:
             format_and_log(LogType.WARNING, "小药园-播种", {'阶段': '首次尝试失败', '原因': '种子不足'})
 
-            # [V_修复] 使用更健壮的正则表达式解析实际拥有和需要的数量
             needed_match = re.search(r"[需|要|要]:\s*([\d,]+)", reply_text)
             owned_match = re.search(r"[拥|有|有]:\s*([\d,]+)", reply_text)
 
@@ -176,8 +193,8 @@ async def _sow_seeds(client, plots_to_sow: list):
                         '实际拥有': owned_actual
                     })
 
-                    # 用实际拥有的数量校准缓存
                     current_inventory = await inventory_manager.get_inventory()
+                    # [V_修复] 确保即使键不存在也能正确设置
                     current_inventory[seed_to_sow] = owned_actual
                     await inventory_manager.set_inventory(current_inventory)
                     format_and_log(LogType.INFO, "小药园-播种-修正", {'状态': '缓存已校准'})
@@ -189,33 +206,42 @@ async def _sow_seeds(client, plots_to_sow: list):
 
                         if buy_success:
                             format_and_log(LogType.INFO, "小药园-播种", {'阶段': '购买成功，准备再次尝试播种'})
-                            # --- 第二次尝试播种 ---
                             await asyncio.sleep(random.uniform(1.5, 2.5)) # 等待一下
                             command_retry = game_adaptor.huangfeng_sow(seed_to_sow)
                             _sent_retry, reply_retry = await client.send_game_command_request_response(command_retry)
 
                             if "**播种成功！**" in reply_retry.text:
                                 format_and_log(LogType.TASK, "小药园-播种", {'阶段': '二次尝试成功'})
-                                # 确保减去正确的数量
-                                actual_needed = needed_from_reply # 使用从回复中解析出的需要数量
-                                await inventory_manager.remove_item(seed_to_sow, actual_needed)
+                                # [V_新逻辑] 解析成功信息，计算播种数量并更新缓存
+                                sown_plots_match_retry = re.search(r"在 \*\*([\d, ]+)\*\* 号灵田上种下了", reply_retry.text)
+                                if sown_plots_match_retry:
+                                    try:
+                                        plot_numbers_str_retry = sown_plots_match_retry.group(1)
+                                        sown_plot_ids_retry = [int(p.strip()) for p in plot_numbers_str_retry.split(',')]
+                                        sown_count_retry = len(sown_plot_ids_retry)
+                                        if sown_count_retry > 0:
+                                            format_and_log(LogType.INFO, "小药园-播种-库存", {'状态': '二次尝试解析成功', '播种地块数': sown_count_retry, '地块': str(sown_plot_ids_retry)})
+                                            # 注意：这里减去的是第二次尝试实际播种的数量
+                                            await inventory_manager.remove_item(seed_to_sow, sown_count_retry)
+                                        else:
+                                             format_and_log(LogType.WARNING, "小药园-播种-库存", {'状态': '二次尝试解析播种数量为0', '原始地块字串': plot_numbers_str_retry})
+                                    except Exception as parse_e_retry:
+                                        format_and_log(LogType.ERROR, "小药园-播种-库存", {'状态': '二次尝试解析成功地块时出错', '错误': repr(parse_e_retry), '原始回复': reply_retry.text})
+                                else:
+                                    format_and_log(LogType.WARNING, "小药园-播种-库存", {'状态': '二次尝试成功但无法解析播种地块', '原始回复': reply_retry.text})
                                 return # 任务完成
                             else:
                                 format_and_log(LogType.WARNING, "小药园-播种", {'阶段': '二次尝试失败', '返回': reply_retry.text.strip()})
                         else:
                             format_and_log(LogType.WARNING, "小药园-播种", {'阶段': '任务中止', '原因': '购买缺失种子失败'})
                     else:
-                        # 如果计算出不需要购买 (可能是解析错误或特殊情况)，也中止
                         format_and_log(LogType.WARNING, "小药园-播种", {'阶段': '任务中止', '原因': f'计算出无需购买种子(需{needed_from_reply},有{owned_actual})，但首次播种失败'})
                 except (ValueError, TypeError) as parse_err:
-                    # [V_修复] 捕获解析数字时的错误
-                    format_and_log(LogType.ERROR, "小药园-播种-修正", {'状态': '解析数量时出错', '错误': str(parse_err), '原始回复': reply_text}, level=logging.ERROR)
-                    format_and_log(LogType.TASK, "小药园-播种", {'阶段': '任务中止', '原因': '无法解析数量，等待下个周期'})
+                    format_and_log(LogType.ERROR, "小药园-播种-修正", {'状态': '解析数量时出错', '错误': repr(parse_err), '原始回复': reply_text}, level=logging.ERROR) # 使用 repr
+                    format_and_log(LogType.TASK, "小药园-播种", {'阶段': '任务中止', '原因': '无法解析数量，等待下个周期'}, level=logging.WARNING) # 避免触发外层异常
             else:
-                # [V_修复] 如果正则表达式匹配失败
                 format_and_log(LogType.ERROR, "小药园-播种-修正", {'状态': '无法从回复中提取数量', '原始回复': reply_text}, level=logging.ERROR)
-                # 不再打印INFO级别的中止日志，避免触发外层异常
-                format_and_log(LogType.TASK, "小药园-播种", {'阶段': '任务中止', '原因': '无法解析数量，等待下个周期'}, level=logging.WARNING) # 改为WARNING
+                format_and_log(LogType.TASK, "小药园-播种", {'阶段': '任务中止', '原因': '无法解析数量，等待下个周期'}, level=logging.WARNING) # 避免触发外层异常
 
         # 场景3: 其他播种失败原因
         else:
@@ -224,6 +250,5 @@ async def _sow_seeds(client, plots_to_sow: list):
     except CommandTimeoutError:
         format_and_log(LogType.WARNING, "小药园-播种", {'阶段': '异常', '原因': '指令超时'})
     except Exception as e:
-        # [V_修复] 确保打印真实的错误信息，而不是 "INFO"
-        format_and_log(LogType.ERROR, "小药园-播种", {'阶段': '严重异常', '错误': repr(e)}, level=logging.ERROR) # 使用 repr(e) 获取更详细的错误表示
-
+        # [V_修复] 使用 repr(e) 记录更详细的错误
+        format_and_log(LogType.ERROR, "小药园-播种", {'阶段': '严重异常', '错误': repr(e)}, level=logging.ERROR)
